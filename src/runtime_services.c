@@ -5,6 +5,7 @@
  *   - the whole package is installed (PlayGo reports every chunk local).
  * Every entry here is an explicit contract; unknown functions still stop. */
 #define _GNU_SOURCE
+#include <unistd.h>
 #include "runtime.h"
 #include "gpu/bbgpu.h"
 #include <stdio.h>
@@ -114,6 +115,8 @@ static ABI int32_t load_exec(const char *path, char *const *argv) {
     fclose(f);
     fflush(NULL);
     _exit(RUNTIME_LOADEXEC_EXIT);
+   __builtin_unreachable();
+
 }
 static ABI int32_t launch_browser(void) { note("SystemService: web browser request ignored (offline)"); return 0; }
 

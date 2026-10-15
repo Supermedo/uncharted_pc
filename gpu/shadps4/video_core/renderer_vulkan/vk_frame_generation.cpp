@@ -346,7 +346,7 @@ vk::ImageView FrameGenerator::Hudless(vk::Format format, vk::Extent2D& size) {
     if (!hudless_captured || !captured || !hudless_image) {
         return {};
     }
-    size = {hudless_width, hudless_height};
+    size = vk::Extent2D{hudless_width, hudless_height};
     for (const auto& view : hudless_views) {
         if (view.format == format) {
             return *view.view;
