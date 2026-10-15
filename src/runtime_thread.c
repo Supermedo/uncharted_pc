@@ -364,7 +364,7 @@ static ABI int32_t thread_set_prio(GuestThread *t,int prio) {
 /* BB_AFFINITY=1: the guest's core masks are applied, PS4 core i on host logical processor 2*i
  * (one per physical core where SMT pairs neighbour). Off by default: the PS4 scheduler's
  * guarantees (threads on one core never run at once) are not otherwise reproduced. */
-static int affinity_enabled(void) {
+static int __attribute__((unused)) affinity_enabled(void) {
     static int value=-1;
     if (value<0) { const char *env=getenv("BB_AFFINITY"); value=env && env[0]=='1'; }
     return value;

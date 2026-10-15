@@ -11,6 +11,7 @@
  *
  * Fibers without their own context run on the calling thread's stack, below the frame of
  * sceFiberRun; they cannot be suspended and start again from their entry next time. */
+#include <unistd.h>
 #include "runtime.h"
 #include <stdio.h>
 #include <stdlib.h>
