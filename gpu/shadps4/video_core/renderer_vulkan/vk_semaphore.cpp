@@ -31,7 +31,8 @@ namespace Vulkan {
 
 // bbport: the GPU crashed (device lost). The driver's description of the fault is printed and
 // the game ends: every later GPU wait would fail the same way (it used to wait forever).
-[[noreturn]] static void DeviceLost(vk::Device device) {
+// Also called where a submission or present reports the loss (vk_semaphore.h).
+[[noreturn]] void DeviceLost(vk::Device device) {
     std::printf("GPU crash: the graphics device was lost\n");
     if (g_device_fault_ext && VULKAN_HPP_DEFAULT_DISPATCHER.vkGetDeviceFaultInfoEXT) {
         const auto get = VULKAN_HPP_DEFAULT_DISPATCHER.vkGetDeviceFaultInfoEXT;

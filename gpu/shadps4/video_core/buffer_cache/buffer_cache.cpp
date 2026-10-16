@@ -1318,7 +1318,10 @@ void BufferCache::SubmitPendingArenaBinds(Vulkan::SubmitInfo& info) {
         (void)instance.GetGraphicsQueue().waitIdle();
     }
     auto submit_result = instance.GetGraphicsQueue().bindSparse(sparse_info);
-    ASSERT_MSG(submit_result != vk::Result::eErrorDeviceLost, "Device lost during submit");
+    if (submit_result == vk::Result::eErrorDeviceLost) {
+        std::printf("Device lost during a sparse bind\n");
+        Vulkan::DeviceLost(instance.GetDevice());
+    }
     static const bool arena_log = [] {
         const char* env = std::getenv("BB_ARENA_LOG");
         return env && env[0] == '1';
