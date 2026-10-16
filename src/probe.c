@@ -639,13 +639,21 @@ static void patch_eop_tick_wait(uint64_t image_size) {
         if (image[at]!=0x48 || image[at+1]!=0x8d || image[at+2]!=0x3d) continue;
         int32_t rel; memcpy(&rel,image+at+3,4);
         if (image+at+7+rel!=text) continue;
-        /* Up to 64 bytes before: cmp qword [reg+disp32], 0 (48/49 83 /7, mod 10) ; jne past it */
+        /* Up to 64 bytes before: cmp qword [reg+disp32], 0 (48-4b 83 /7, mod 10) ; jne past it.
+         * U3 1.02 (CUSA02320) indexes the ring: cmp qword [rax+rcx+0xa28], 0 has a SIB byte,
+         * and its failure path starts by loading the assert handler (mov reg, [rip+rel32])
+         * instead of calling it. */
         for (uint64_t back=10;back<=64 && back<=at;++back) {
             unsigned char *c=image+at-back;
-            if ((c[0]!=0x48 && c[0]!=0x49) || c[1]!=0x83 || (c[2]&0xf8)!=0xb8 || (c[2]&7)==4 ||
-                c[7]!=0x00 || c[8]!=0x75) continue;
-            unsigned char *jne=c+8, *ok=jne+2+(int8_t)jne[1];
-            if (ok<=image+at || jne[2]!=0xe8) continue;
+            if ((c[0]&0xfc)!=0x48 || c[1]!=0x83 || (c[2]&0xf8)!=0xb8) continue;
+            const int sib=(c[2]&7)==4;
+            if (!sib && c[0]>0x49) continue;
+            unsigned char *jne=c+(sib ? 9 : 8);
+            if (jne[-1]!=0x00 || jne[0]!=0x75) continue;
+            unsigned char *ok=jne+2+(int8_t)jne[1];
+            const int call=jne[2]==0xe8;
+            const int load=(jne[2]==0x48 || jne[2]==0x4c) && jne[3]==0x8b && (jne[4]&0xc7)==0x05;
+            if (ok<=image+at || !(call || load)) continue;
             /* after the jne: pause; jmp back to the cmp */
             jne[2]=0xf3; jne[3]=0x90; jne[4]=0xeb; jne[5]=(unsigned char)(int8_t)(c-(jne+6));
             printf("Frame pacing: the EOP tick check at %#" PRIx64 " waits for the GPU\n",
