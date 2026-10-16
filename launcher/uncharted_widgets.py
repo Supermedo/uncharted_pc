@@ -1,6 +1,7 @@
 """Launcher widgets with a modern look on Tk: rounded cards, toggle switches, a slider and pill
 buttons. Edges are anti-aliased: the shapes are drawn with PIL at four times the size and scaled
 down (Tk's canvas draws them jagged)."""
+import math
 from PIL import Image, ImageDraw, ImageTk
 
 SCALE = 4
@@ -140,18 +141,31 @@ class Toggle:
 
 
 class Slider:
-    """A horizontal slider bound to a StringVar holding a number; shows the value next to it."""
+    """A horizontal slider bound to a StringVar holding a number; shows the value next to it.
+    log=True spaces the range logarithmically (a wide range stays fine to set near its low end);
+    entry=True makes the value a box the number can be typed into (clamped to the range)."""
 
-    def __init__(self, tk, parent, variable, low, high, step, colors, px, font, fmt='{:.2f}', width=320):
-        self.var, self.low, self.high, self.step, self.fmt = variable, low, high, step, fmt
+    def __init__(self, tk, parent, variable, low, high, step, colors, px, font, fmt='{:.2f}', width=320,
+                 log=False, entry=False):
+        self.var, self.low, self.high, self.step, self.fmt, self.log = variable, low, high, step, fmt, log
         self.colors, self.px = colors, px
         self.frame = tk.Frame(parent, bg=colors['card'])
         self.w, self.h = px(width), px(26)
         self.canvas = tk.Canvas(self.frame, width=self.w, height=self.h, bg=colors['card'], highlightthickness=0,
                                 bd=0, cursor='hand2')
         self.canvas.pack(side='left')
-        self.label = tk.Label(self.frame, bg=colors['card'], fg=colors['text'], font=font, width=6, anchor='w')
-        self.label.pack(side='left', padx=(px(12), 0))
+        if entry:
+            box = tk.Entry(self.frame, textvariable=variable, width=6, font=font, bg=colors['card_hi'], fg=colors['text'],
+                           insertbackground=colors['text'], relief='flat', highlightthickness=1,
+                           highlightbackground=colors['card_hi'], highlightcolor=colors['gold'])
+            box.pack(side='left', padx=(px(12), 0), ipady=2)
+            for sequence in ('<Return>', '<FocusOut>'):
+                box.bind(sequence, lambda _e: self.var.set(self.fmt.format(self.value())))
+            self.label = tk.Label(self.frame, bg=colors['card'], fg=colors['muted'], font=font, text='×')
+        else:
+            self.label = tk.Label(self.frame, bg=colors['card'], fg=colors['text'], font=font, width=6, anchor='w')
+        self.label.pack(side='left', padx=(px(12) if not entry else px(4), 0))
+        self.entry = entry
         for sequence in ('<Button-1>', '<B1-Motion>'):
             self.canvas.bind(sequence, self._pick)
         self.var.trace_add('write', lambda *_a: self.draw())
@@ -165,23 +179,28 @@ class Slider:
 
     def _pick(self, event):
         r = self.h // 2
-        f = (event.x - r) / max(1, self.w - 2 * r)
-        v = self.low + min(1.0, max(0.0, f)) * (self.high - self.low)
-        v = round(round(v / self.step) * self.step, 4)
-        self.var.set(self.fmt.format(v))
+        f = min(1.0, max(0.0, (event.x - r) / max(1, self.w - 2 * r)))
+        if self.log:
+            v = self.low * (self.high / self.low) ** f
+            v = round(v, 2) if v < 1 else round(v, 1) if v < 10 else round(v)
+        else:
+            v = self.low + f * (self.high - self.low)
+            v = round(round(v / self.step) * self.step, 4)
+        self.var.set(self.fmt.format(min(self.high, max(self.low, v))))
 
     def draw(self):
         c, colors = self.canvas, self.colors
         c.delete('all')
         r, y = self.h // 2, self.h // 2
         t = max(2, self.px(4))
-        f = (self.value() - self.low) / (self.high - self.low)
+        f = math.log(self.value() / self.low) / math.log(self.high / self.low) if self.log             else (self.value() - self.low) / (self.high - self.low)
         x = r + f * (self.w - 2 * r)
         c.create_line(r, y, self.w - r, y, fill=colors['track'], width=t, capstyle='round')
         c.create_line(r, y, x, y, fill=colors['gold'], width=t, capstyle='round')
         d = self.px(18)
         c.create_image(x, y, image=circle_image(d, colors['knob_on'], colors['card'], colors['gold']))
-        self.label.configure(text=self.fmt.format(self.value()) + '×')
+        if not self.entry:
+            self.label.configure(text=self.fmt.format(self.value()) + '×')
 
     def grid(self, **kw):
         self.frame.grid(**kw)
