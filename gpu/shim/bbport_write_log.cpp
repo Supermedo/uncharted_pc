@@ -15,6 +15,10 @@
 #endif
 #include <x86intrin.h>
 
+namespace VideoCore {
+void PrintFaultHistory(unsigned long long address, unsigned long long size);
+}
+
 namespace BbWriteLog {
 namespace {
 struct Entry {
@@ -93,6 +97,9 @@ extern "C" void bbgpu_dump_guest_writes(void* ucontext) {
     // The loader passes EXCEPTION_POINTERS (see signal_context.cpp).
     const CONTEXT* c = static_cast<const EXCEPTION_POINTERS*>(ucontext)->ContextRecord;
     const std::uint64_t regs[] = {c->Rax, c->Rbx, c->Rcx, c->Rdx, c->Rsi, c->Rdi, c->R14, c->R15};
+    std::fprintf(stderr, "Write log: r8=%#llx r9=%#llx r10=%#llx r11=%#llx r12=%#llx r13=%#llx\n",
+                 (unsigned long long)c->R8, (unsigned long long)c->R9, (unsigned long long)c->R10,
+                 (unsigned long long)c->R11, (unsigned long long)c->R12, (unsigned long long)c->R13);
 #else
     const auto* uc = static_cast<const ucontext_t*>(ucontext);
     const auto* g = uc->uc_mcontext.gregs;
@@ -119,9 +126,42 @@ extern "C" void bbgpu_dump_guest_writes(void* ucontext) {
     for (std::uint64_t i = nh > hits.size() ? nh - hits.size() : 0; i < nh; ++i) {
         print(hits[i % hits.size()], "pattern");
     }
-    // The block the guest read (rax) and all logged writes into it or its neighbours.
-    const std::uint64_t block = regs[0];
-    for (std::uint64_t at = block - 0x30; at < block + 0x60; at += 8) {
+    // BB_WRITE_LOG_HEAP=1: the guest faulted walking a free list of the game's heap allocator
+    // (heap object in r15, head at +0x10, next pointer at node+0x10, magic at node+4). Walk it,
+    // and take the last node with a readable pointer as the block of interest.
+    std::uint64_t block = regs[0];
+    if (std::getenv("BB_WRITE_LOG_HEAP")) {
+        const auto readable = [](std::uint64_t a, std::uint64_t n) {
+#ifdef _WIN32
+            return a < 0x0000800000000000ull && !IsBadReadPtr(reinterpret_cast<const void*>(a), n);
+#else
+            return a < 0x0000800000000000ull && a > 0x1000;
+#endif
+        };
+        std::uint64_t node = 0, prev = 0;
+        if (readable(regs[7] + 0x10, 8)) {
+            std::memcpy(&node, reinterpret_cast<const void*>(regs[7] + 0x10), 8);
+        }
+        for (int i = 0; i < 100000 && readable(node, 0x18); ++i) {
+            std::uint32_t size_or_magic;
+            std::uint64_t next;
+            std::memcpy(&size_or_magic, reinterpret_cast<const void*>(node + 4), 4);
+            std::memcpy(&next, reinterpret_cast<const void*>(node + 0x10), 8);
+            std::fprintf(stderr, "Heap walk: node %#llx +4=%#x next %#llx\n", (unsigned long long)node,
+                         size_or_magic, (unsigned long long)next);
+            prev = node;
+            node = next;
+        }
+        if (prev) {
+            block = prev;
+            std::fprintf(stderr, "Heap walk: last valid node %#llx, then %#llx\n", (unsigned long long)prev,
+                         (unsigned long long)node);
+        }
+    }
+    if (std::getenv("BB_WRITE_LOG_HEAP")) {
+        VideoCore::PrintFaultHistory((block & ~0xfffull) - 0x1000, 0x3000);
+    }
+    for (std::uint64_t at = block - 0x30; at < block + 0x80; at += 8) {
         std::uint64_t value = 0;
         std::memcpy(&value, reinterpret_cast<const void*>(at), 8);
         std::fprintf(stderr, "Write log: [%#llx] = %#llx\n", (unsigned long long)at,

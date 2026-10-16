@@ -427,6 +427,38 @@ void PrintFaultHistory(VAddr address, u64 size) {
     }
 }
 
+namespace {
+// bbport: a shadowed range (ShadowGpuData) holds the guest bytes as a guest write began; a byte
+// that differs from it now was written since. A write of the value a byte already had leaves no
+// trace, though: the heap allocator relinks a free node with the pointer it held (and fills
+// blocks with zeros over zeros), and the GPU's data for those bytes then overwrote the
+// guest's (the pointer of a free node inside a cloth buffer's range: U3 London pub, fault at
+// 0xd9c59b). Guest data lies in 16-byte units (the allocator's alignment), so a change
+// anywhere in an aligned 16-byte unit makes the whole unit (inside the range) the guest's.
+// Calls f(begin, end, changed) for consecutive runs of the range's bytes.
+template <typename F>
+void ForEachShadowRun(VAddr start, const std::vector<u8>& shadow, F&& f) {
+    constexpr VAddr Unit = 16;
+    const auto* guest = reinterpret_cast<const u8*>(start);
+    const size_t count = shadow.size();
+    size_t run_begin = 0;
+    bool run_changed = false;
+    for (size_t i = 0; i < count;) {
+        const size_t end = std::min<size_t>(count, i + (Unit - ((start + i) & (Unit - 1))));
+        const bool changed = std::memcmp(guest + i, shadow.data() + i, end - i) != 0;
+        if (i != 0 && changed != run_changed) {
+            f(run_begin, i, run_changed);
+            run_begin = i;
+        }
+        run_changed = changed;
+        i = end;
+    }
+    if (count) {
+        f(run_begin, count, run_changed);
+    }
+}
+} // namespace
+
 void BufferCache::ShadowGpuData(VAddr page, u64 length) {
     std::scoped_lock lk{shadow_mutex};
     for (VAddr at = page; at < page + length; at += TRACKER_BYTES_PER_PAGE) {
@@ -558,11 +590,11 @@ void BufferCache::DownloadMemory(const Buffer* arena, VAddr device_addr, u64 siz
             }
             for (const auto& shadow : it->second) {
                 const auto* guest = reinterpret_cast<const u8*>(shadow.start);
-                for (size_t i = 0; i < shadow.bytes.size(); ++i) {
-                    if (guest[i] != shadow.bytes[i]) {
+                ForEachShadowRun(shadow.start, shadow.bytes, [&](size_t begin, size_t end, bool changed) {
+                    for (size_t i = begin; changed && i < end; ++i) {
                         guest_bytes.emplace_back(shadow.start + i, guest[i]);
                     }
-                }
+                });
             }
             shadows.erase(it);
             shadow_pages.fetch_sub(1, std::memory_order_relaxed);
@@ -1064,27 +1096,18 @@ bool BufferCache::SynchronizeMemory(const Buffer* arena, VAddr device_addr, u32 
                     continue;
                 }
                 for (const auto& shadow : it->second) {
-                    const auto* guest = reinterpret_cast<const u8*>(shadow.start);
-                    const size_t count = shadow.bytes.size();
-                    for (size_t i = 0; i < count;) {
-                        size_t j = i;
-                        if (guest[i] == shadow.bytes[i]) {
-                            while (j < count && guest[j] == shadow.bytes[j]) {
-                                ++j;
-                            }
+                    ForEachShadowRun(shadow.start, shadow.bytes,
+                                     [&](size_t i, size_t j, bool changed) {
+                        if (!changed) {
                             const VAddr skip = shadow.start + i;
                             if (skip > cursor) {
                                 add_upload(cursor, skip - cursor);
                             }
                             cursor = shadow.start + j;
                         } else {
-                            while (j < count && guest[j] != shadow.bytes[j]) {
-                                ++j;
-                            }
                             gpu_modified_ranges.Subtract(shadow.start + i, j - i);
                         }
-                        i = j;
-                    }
+                    });
                 }
                 shadows.erase(it);
                 shadow_pages.fetch_sub(1, std::memory_order_relaxed);
