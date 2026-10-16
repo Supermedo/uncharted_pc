@@ -563,7 +563,26 @@ static unsigned char *near_image_memory(size_t size) {
                                 size,MEM_RESERVE|MEM_COMMIT,PAGE_EXECUTE_READWRITE);
     }
 #else
-    (void)size;
+    /* bbport (Linux): the same search with mmap (MAP_FIXED_NOREPLACE never moves existing mappings).
+     * Without this every game callback was skipped on Linux: mouse camera hooks and the U2 camera
+     * focus NaN fix (player-base.cpp:1101 assertions). */
+#ifndef MAP_FIXED_NOREPLACE
+#define MAP_FIXED_NOREPLACE 0x100000
+#endif
+    uint64_t end_of_image=round_page(guest_image_size ? guest_image_size : 1);
+    uint64_t base=((uint64_t)(uintptr_t)image+end_of_image+(32u<<20)+0xffff)&~(uint64_t)0xffff;
+    for (uint64_t step=0;!memory && step<(1900ull<<20);step+=1u<<16) {
+        uint64_t candidates[2]={base+step,0};
+        if ((uint64_t)(uintptr_t)image>step+(2u<<20))
+            candidates[1]=((uint64_t)(uintptr_t)image-step-(2u<<20))&~(uint64_t)0xffff;
+        for (int i=0;i<2 && !memory;++i) {
+            if (!candidates[i]) continue;
+            void *p=mmap((void *)(uintptr_t)candidates[i],size,PROT_READ|PROT_WRITE|PROT_EXEC,
+                         MAP_PRIVATE|MAP_ANONYMOUS|MAP_FIXED_NOREPLACE,-1,0);
+            if (p==(void *)(uintptr_t)candidates[i]) memory=p;
+            else if (p!=MAP_FAILED) munmap(p,size); /* an old kernel ignoring the flag */
+        }
+    }
 #endif
     return memory;
 }
@@ -571,6 +590,7 @@ static void install_game_callbacks(Segment *segments, uint64_t ns, uint64_t imag
     size_t count=0;
     const RuntimeGuestCallback *callbacks=runtime_guest_callbacks(&count);
     unsigned char *thunks=NULL;
+    int thunk_failed=0;
     size_t used=0;
     guest_image_size=image_size;
     for (size_t i=0;i<count;++i) {
@@ -582,7 +602,11 @@ static void install_game_callbacks(Segment *segments, uint64_t ns, uint64_t imag
             printf("Callbacks: %s at %#" PRIx64 " (patch)\n",c->name,c->offset);
             continue;
         }
-        if (!thunks && !(thunks=near_image_memory(4096))) { printf("Callbacks: no thunk memory\n"); return; }
+        if (!thunks && !thunk_failed && !(thunks=near_image_memory(4096))) {
+            printf("Callbacks: no thunk memory\n");
+            thunk_failed=1; /* the plain patches below still apply */
+        }
+        if (!thunks) continue;
         if (used+256>4096) break;
         unsigned char *t=thunks+used, *f=image+c->offset;
         size_t k=0;
