@@ -742,6 +742,11 @@ public:
             func(current_cmdbuf);
             return;
         }
+        if (direct_next) {  // data too large for a chunk: recorded here, after the queue drained
+            direct_next = false;
+            func(current_cmdbuf);
+            return;
+        }
         if (BbToggle::Disabled(BbToggle::ThreadedRecording)) {
             SyncRecording();
             direct_mode = true;
@@ -765,10 +770,17 @@ public:
     /// Makes room for `bytes` of RecordData() plus the command that uses them in the current
     /// chunk: data and command must share a chunk, which is recycled once executed.
     void ReserveRecordData(size_t bytes) {
-        if (!IsRecordingDeferred()) {
+        if (!IsRecordingDeferred() || direct_next) {
             return;
         }
-        ASSERT(bytes + 1024 <= RecordChunk::Capacity);
+        if (bytes + 1024 > RecordChunk::Capacity) {
+            // bbport: more data than a chunk holds (thousands of copy regions in Uncharted 2
+            // on the Steam Deck ended the game here). Drain the queue and record the next
+            // command directly; RecordData() then returns the caller's own data.
+            SyncRecording();
+            direct_next = true;
+            return;
+        }
         if (RecordChunk::Capacity - record_chunk->Size() < bytes + 1024) {
             full_chunks.push_back(std::move(record_chunk));
             record_chunk = AcquireChunk();
@@ -785,6 +797,9 @@ public:
         // Room for the data and the command that follows it, so both stay in one chunk.
         const size_t bytes = data.size_bytes();
         ReserveRecordData(bytes + alignof(T));
+        if (direct_next) {
+            return data;
+        }
         auto* dst = static_cast<T*>(record_chunk->Allocate(bytes, alignof(T)));
         std::memcpy(dst, data.data(), bytes);
         return {dst, data.size()};
@@ -796,6 +811,7 @@ public:
 
     /// Waits until every recorded command is in the command buffer.
     void SyncRecording();
+    bool direct_next = false;  ///< bbport: the next Record() runs directly (ReserveRecordData)
 
     /// bbport: guest memory copies on the recording thread (small ones, RecordHostCopy) or the
     /// copy threads (BbCopy::Async) must be done before the guest learns the GPU is past them
