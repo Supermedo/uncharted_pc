@@ -64,6 +64,8 @@ PRESENT_MODES = [('Mailbox', 'Mailbox (low latency, no tearing)'), ('Fifo', 'FIF
 # the prerecorded cutscenes keep 60 frames per second at every setting.
 FRAME_RATES = [('60', '60 FPS (as on PS4)'), ('120', '120 FPS'), ('144', '144 FPS (experimental)'),
                ('165', '165 FPS (experimental)'), ('240', '240 FPS (experimental)')]
+FPS_LIMITS = [('0', 'Default'), ('30', '30 FPS'), ('45', '45 FPS'), ('60', '60 FPS'),
+              ('90', '90 FPS'), ('120', '120 FPS'), ('240', '240 FPS')]
 # The games render 1920x1080; the window (or the screen in fullscreen) gets that image scaled
 # to its size: FSR 1 (EASU) or bilinear, then RCAS sharpening (BB_RCAS_ATTENUATION, lower
 # is sharper).
@@ -133,7 +135,7 @@ RESERVED_KEYS = {'Insert': 'Insert opens the in-game settings menu.',
                  'Alt_L': 'Left Alt frees the mouse cursor while held.'}
 
 APP_DEFAULTS = {'game_dir': '', 'user_dir': '', 'start': 'u1', 'language': '1', 'player_name': '',
-                'fullscreen': False, 'present_mode': 'Mailbox', 'frame_rate': '60', 'show_fps': False,
+                'fullscreen': False, 'present_mode': 'Mailbox', 'frame_rate': '60', 'fps_limit': '0', 'show_fps': False,
                 'window_size': '1920x1080', 'scaler': 'fsr1', 'sharpening': '500',
                 'anti_aliasing': 'off', 'aa_sharpness': '0.2', 'frame_generation': 'off',
                 'frame_gen_multiplier': '2', 'extra_env': '', 'close_on_play': False,
@@ -303,6 +305,8 @@ def game_environment(s, start=None):
     env['BB_FULLSCREEN'] = '1' if s['fullscreen'] else '0'
     env['BB_PRESENT_MODE'] = s['present_mode']
     env['BB_VBLANK_HZ'] = str(s.get('frame_rate') or '60')
+    if str(s.get('fps_limit') or '0') != '0':
+        env['BB_FPS_LIMIT'] = str(s['fps_limit'])
     env['BB_WINDOW_SIZE'] = str(s.get('window_size') or '1920x1080')
     env['BB_FSR1'] = '1' if s.get('scaler', 'fsr1') == 'fsr1' else '0'
     sharpening = str(s.get('sharpening') or 'off')
@@ -966,7 +970,9 @@ class Launcher:
                  '60 FPS. Above your display\'s refresh rate use Mailbox or Immediate.')
         if refresh:
             hint += ' ' + _('Your display runs at {} Hz.').format(refresh)
-        self.row(f, _('Frame rate'), self.choice(f, 'frame_rate', FRAME_RATES, 34), hint)
+        self.row(f, _('Engine frame rate'), self.choice(f, 'frame_rate', FRAME_RATES, 34), hint)
+        self.row(f, _('Frame rate limit'), self.choice(f, 'fps_limit', FPS_LIMITS, 34),
+                 _('The engine frame rate is the highest it can go. Default keeps the port\'s normal behavior.'))
         self.section(f, _('Resolution'))
         self.row(f, _('Window size'), self.choice(f, 'window_size', WINDOW_SIZES, 34),
                  _('The games render at 1920 × 1080. A larger window, or fullscreen on a 1440p or 4K '
