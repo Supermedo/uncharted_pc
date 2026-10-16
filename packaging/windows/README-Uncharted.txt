@@ -13,14 +13,15 @@ Requirements
   Nothing else: Python and the libraries are inside this folder.
 
 Starting
-- Uncharted.exe opens the launcher. On the Game page choose your game folder, pick
-  Drake's Fortune, Among Thieves or Drake's Deception on the Play page and press PLAY.
+- Uncharted.exe opens the launcher, with a frameless window, per-game artwork and animated
+  transitions. On the Game page choose your game folder, pick Drake's Fortune, Among Thieves or
+  Drake's Deception on the Play page and press PLAY.
 - Play Uncharted.exe starts the game straight away with the settings saved in the
   launcher, without opening it (for shortcuts and Steam). Uncharted.exe --play does the same.
 - Play page -> "Add to Steam" adds the collection to your Steam library, with its cover
   from your game folder. "Desktop shortcut" puts it on the desktop.
-- Your own covers: put u1.jpg, u2.jpg and u3.jpg (and a wide collection_banner.jpg for the
-  top of the Play page) in a folder named art next to Uncharted.exe. Updates keep it.
+- Artwork is in the art folder next to Uncharted.exe. Replace hero_u1.jpg, hero_u2.jpg or
+  hero_u3.jpg to customize the wide banner for each game; updates keep this folder.
 - Display page -> Frame rate: 60 FPS as on PS4, or 120 FPS. Gameplay keeps its normal speed
   and the cutscene videos still play at 60. Higher rates are experimental. Above your
   display's refresh rate use the Mailbox or Immediate presentation.
@@ -36,6 +37,9 @@ Starting
   C Circle, F Square, E Triangle, Q/G L1/R1, Left Shift/V L3/R3, arrows and wheel d-pad,
   Escape/Enter Options, Tab touchpad. The cursor stays in the game window; hold Left Alt to
   free it. Insert opens the in-game settings menu. Bindings are saved in input.ini.
+- Saves page -> Export backup (.zip) creates a portable archive of save data and trophies that
+  you can upload to Google Drive. Restore backup (.zip) accepts that archive and backs up the
+  current data before replacing it. Close the game before either action.
 
 Data
 - Saves and shader caches: user\ next to Uncharted.exe (the launcher can pick another folder).

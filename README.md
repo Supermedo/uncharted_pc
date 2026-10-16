@@ -21,6 +21,8 @@ code runs directly on your PC and the graphics are translated to Vulkan. Unpack 
 - Frame generation: AMD FSR 3 (any GPU) or NVIDIA DLSS (RTX 40 2x, RTX 50 up to 4x).
 - Keyboard, mouse and controller together, all remappable. Mouse look in U3.
 - Add to Steam and desktop shortcuts from the launcher, automatic updates.
+- Frameless launcher with a separate banner for each game and a short selection transition.
+- Export save data and trophies to a portable ZIP, then restore it with an automatic backup.
 
 ## Requirements
 
@@ -73,8 +75,8 @@ FSR 4 assets from [FireBurn/Q2RTX](https://github.com/FireBurn/Q2RTX), the
 [MSYS2](https://www.msys2.org) / [LLVM](https://llvm.org), [PyInstaller](https://pyinstaller.org),
 [Pillow](https://python-pillow.org) and the Cinzel font (SIL Open Font License).
 
-NVIDIA, GeForce RTX and DLSS are trademarks of NVIDIA Corporation. The default covers and the
-icon are original artwork; no official art is included.
+NVIDIA, GeForce RTX and DLSS are trademarks of NVIDIA Corporation. Some optional launcher images
+are community artwork from SteamGridDB. No game data is included.
 
 ## License
 
