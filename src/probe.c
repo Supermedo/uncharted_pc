@@ -639,13 +639,18 @@ static void patch_eop_tick_wait(uint64_t image_size) {
         if (image[at]!=0x48 || image[at+1]!=0x8d || image[at+2]!=0x3d) continue;
         int32_t rel; memcpy(&rel,image+at+3,4);
         if (image+at+7+rel!=text) continue;
-        /* Up to 64 bytes before: cmp qword [reg+disp32], 0 (48/49 83 /7, mod 10) ; jne past it */
+        /* Up to 64 bytes before: cmp qword [base(+index*scale)+disp8/32], 0 (REX.W 83 /7, mod
+         * 01/10, with or without SIB: 1.00 has [rax+0xa08], US 1.02 [rax+rcx+0xa08]); jne past
+         * the message, with room for the 4 patched bytes before it */
         for (uint64_t back=10;back<=64 && back<=at;++back) {
             unsigned char *c=image+at-back;
-            if ((c[0]!=0x48 && c[0]!=0x49) || c[1]!=0x83 || (c[2]&0xf8)!=0xb8 || (c[2]&7)==4 ||
-                c[7]!=0x00 || c[8]!=0x75) continue;
-            unsigned char *jne=c+8, *ok=jne+2+(int8_t)jne[1];
-            if (ok<=image+at || jne[2]!=0xe8) continue;
+            if ((c[0]&0xf8)!=0x48 || c[1]!=0x83 || ((c[2]>>3)&7)!=7) continue;
+            const int mod=c[2]>>6, sib=(c[2]&7)==4;
+            if (mod!=1 && mod!=2) continue;
+            const int length=3+sib+(mod==2 ? 4 : 1);
+            if (c[length]!=0x00 || c[length+1]!=0x75) continue;
+            unsigned char *jne=c+length+1, *ok=jne+2+(int8_t)jne[1];
+            if (ok<=image+at || image+at-(jne+2)<4) continue;
             /* after the jne: pause; jmp back to the cmp */
             jne[2]=0xf3; jne[3]=0x90; jne[4]=0xeb; jne[5]=(unsigned char)(int8_t)(c-(jne+6));
             printf("Frame pacing: the EOP tick check at %#" PRIx64 " waits for the GPU\n",
