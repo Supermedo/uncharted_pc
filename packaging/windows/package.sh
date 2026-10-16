@@ -22,11 +22,12 @@ export USERPROFILE=${USERPROFILE:-$(cygpath -w "/c/Users/$(id -un)")}
 if [[ ! -x out/pyenv/Scripts/python.exe ]]; then
     "$python" -m venv out/pyenv
 fi
-out/pyenv/Scripts/python.exe -m pip install -q --disable-pip-version-check pyinstaller pillow
+out/pyenv/Scripts/python.exe -m pip install -q --disable-pip-version-check pyinstaller pillow cryptography
 # The scripts run inside Uncharted.exe (--script): the standard modules they import come along.
 hidden=()
 for module in argparse base64 collections hashlib json re shutil struct tempfile zlib ctypes.wintypes \
-              uncharted_art uncharted_fonts uncharted_widgets bbport_steam PIL.ImageTk; do
+              uncharted_art uncharted_fonts uncharted_widgets bbport_steam PIL.ImageTk \
+              cryptography.hazmat.primitives.ciphers; do
     hidden+=(--hidden-import "$module")
 done
 out/pyenv/Scripts/python.exe -m PyInstaller --noconfirm --clean --log-level WARN --windowed \
@@ -57,6 +58,7 @@ ldd "$dest/bin/bb-probe.exe" "$dest/bin/bb-gpu-capabilities.exe" |
     done
 # Only what run.py runs to prepare a game (Bloodborne's patch and mod tools stay out).
 cp scripts/prepare.py scripts/link_modules.py scripts/link_libc.py scripts/content_profile.py "$dest/scripts/"
+cp scripts/pkg_game.py scripts/pkg_info.py scripts/pkg_extract.py scripts/pkg_keys.py "$dest/scripts/"
 cp run.py LICENSE "$dest/"
 cp packaging/windows/README-Uncharted.txt "$dest/README.txt"
 mkdir -p "$dest/licenses"
@@ -96,7 +98,7 @@ if [[ ${running:-0} != 0 ]]; then
 else
     mkdir -p "$play"
     find "$play" -mindepth 1 -maxdepth 1 ! -name user ! -name out ! -name art ! -name bbport.ini \
-        ! -name input.ini ! -name last_run.log -exec rm -rf {} +
+        ! -name input.ini ! -name last_run.log ! -name game -exec rm -rf {} +
     cp -r "$dest/." "$play/"
 fi
 du -sh "$dest" dist/uncharted-windows.zip
