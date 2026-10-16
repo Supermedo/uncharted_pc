@@ -160,7 +160,11 @@ add_library(bbgpu ${BBGPU_KIND} ${VIDEO_CORE} ${RECOMPILER} ${COMMON} ${SHIM_SOU
 add_dependencies(bbgpu host_shaders)
 # bbport co-op: PS4 network and PSN libraries with the shadNet client, from shadp2p
 # (github.com/Wozzardman/shadp2p, GPL-2.0), for private Bloodborne co-op servers.
-find_package(Protobuf CONFIG REQUIRED)
+find_package(Protobuf CONFIG QUIET)
+if (NOT Protobuf_FOUND)
+    # distributions with protobuf 3.x (Debian) ship no CMake package.
+    find_package(Protobuf REQUIRED)
+endif()
 set(SHADNET_PROTO_OUT "${CMAKE_CURRENT_BINARY_DIR}/shadnet_proto_gen")
 file(MAKE_DIRECTORY "${SHADNET_PROTO_OUT}")
 add_custom_command(
@@ -233,6 +237,8 @@ if (WIN32)
     target_include_directories(bbgpu PRIVATE third_party/xbyak)
     target_link_libraries(bbgpu PUBLIC Vulkan::Vulkan ws2_32 bcrypt ntdll synchronization winmm)
 else()
+    # the xbyak submodule, as on Windows (no system package needed).
+    target_include_directories(bbgpu PRIVATE third_party/xbyak)
     target_link_libraries(bbgpu PUBLIC PkgConfig::X11)
 endif()
 
