@@ -138,7 +138,8 @@ APP_DEFAULTS = {'game_dir': '', 'user_dir': '', 'start': 'u1', 'language': '1', 
                 'anti_aliasing': 'off', 'aa_sharpness': '0.2', 'frame_generation': 'off',
                 'frame_gen_multiplier': '2', 'extra_env': '', 'close_on_play': False,
                 'mouse_look': True, 'mouse_sensitivity': '1.0', 'mouse_invert_y': False,
-                'pad_invert_y': False, 'key_bindings': {}, 'pad_bindings': {}, 'check_updates': True}
+                'pad_invert_y': False, 'key_bindings': {}, 'pad_bindings': {}, 'check_updates': True,
+                'window_maximized': False}
 
 
 def _(text):
@@ -337,6 +338,72 @@ NAV_ICONS = {'play': '\ue768', 'game': '\ue7fc', 'display': '\ue7f4', 'controls'
 RUST, RUST_HI = GOLD, GOLD_HI
 
 
+# The launcher UI follows Windows' scale. The process stays system-DPI aware (main), so Windows does
+# not scale the window itself; the UI scale only drops when the base window would not fit the work area.
+BASE_WINDOW = (1180, 860)
+UI_SCALE_STEP = 0.05
+WORK_AREA_SHARE = 0.96
+SPI_GETWORKAREA = 0x0030
+SM_CYCAPTION, SM_CXSIZEFRAME, SM_CYSIZEFRAME, SM_CXPADDEDBORDER = 4, 32, 33, 92
+
+
+def fit_scale(area, frame):
+    """The largest UI scale at which the base window fits WORK_AREA_SHARE of the work area."""
+    width = (WORK_AREA_SHARE * (area[2] - area[0]) - frame[0]) / BASE_WINDOW[0]
+    height = (WORK_AREA_SHARE * (area[3] - area[1]) - frame[1]) / BASE_WINDOW[1]
+    return min(width, height)
+
+
+def ui_scale_for(monitor_scale, fit):
+    """Windows' scale, or the largest 5% step within the fit scale when that is lower (not below 100%)."""
+    if fit >= monitor_scale:
+        return monitor_scale
+    steps = int(fit / UI_SCALE_STEP + 1e-9)
+    return max(min(monitor_scale, 1.0), round(steps * UI_SCALE_STEP, 2))
+
+
+def work_area():
+    """(left, top, right, bottom) of the primary monitor's work area, in pixels (no taskbar)."""
+    rect = (ctypes.c_long * 4)()
+    ctypes.windll.user32.SystemParametersInfoW(SPI_GETWORKAREA, 0, rect, 0)
+    return tuple(rect)
+
+
+def window_frame():
+    """(width, height) that the window border and title bar add to the client area."""
+    metric = ctypes.windll.user32.GetSystemMetrics
+    border = metric(SM_CXPADDEDBORDER)
+    return 2 * (metric(SM_CXSIZEFRAME) + border), metric(SM_CYCAPTION) + 2 * (metric(SM_CYSIZEFRAME) + border)
+
+
+def work_metrics():
+    """(work area, window frame), or (None, None) where the Windows API is not available."""
+    try:
+        return work_area(), window_frame()
+    except (AttributeError, OSError):
+        return None, None
+
+
+def fit_to_area(size, minimum, area, frame):
+    """The client size and minimum size, clamped to the work area minus the window frame."""
+    max_w = area[2] - area[0] - frame[0]
+    max_h = area[3] - area[1] - frame[1]
+    return ((min(size[0], max_w), min(size[1], max_h)),
+            (min(minimum[0], max_w), min(minimum[1], max_h)))
+
+
+def centered_origin(size, frame, area):
+    """The top-left corner that centers the window (client size plus frame) in the work area."""
+    x = area[0] + (area[2] - area[0] - size[0] - frame[0]) // 2
+    y = area[1] + (area[3] - area[1] - size[1] - frame[1]) // 2
+    return x, y
+
+
+def maximized_after(previous, state):
+    """Whether the window is maximized after a Tk window state; minimized keeps the previous value."""
+    return state == 'zoomed' if state in ('normal', 'zoomed') else previous
+
+
 class Launcher:
     def __init__(self, root, tk, ttk, filedialog, messagebox):
         self.tk, self.ttk, self.filedialog, self.messagebox = tk, ttk, filedialog, messagebox
@@ -353,21 +420,47 @@ class Launcher:
         self.update_box = None
         root.title(f'{NAME} — The Nathan Drake Collection for Windows · by {AUTHOR}')
         root.configure(bg=BG)
-        self.dpi = root.winfo_fpixels('1i') / 96.0
-        root.geometry(f'{self.px(1180)}x{self.px(860)}')
-        root.minsize(self.px(1040), self.px(760))
+        monitor_scale = root.winfo_fpixels('1i') / 96.0
+        self.area, self.frame = work_metrics()
+        self.ui_scale = monitor_scale
+        if self.area:
+            self.ui_scale = ui_scale_for(monitor_scale, fit_scale(self.area, self.frame))
+        root.tk.call('tk', 'scaling', self.ui_scale * 96 / 72)  # fonts are sized in points: follow px()
+        self.size_window()
         self.set_icon()
         self.load_fonts()
         self.style()
         self.build()
         self.show('play')
+        self.content.bind('<Configure>', self.on_content_resize)
+        root.update()
+        for name in self.pages:  # laid out once while hidden, so that showing a page never builds it
+            self.size_page(name)
+        root.update()
         root.protocol('WM_DELETE_WINDOW', self.close)
+        root.bind('<Configure>', self.note_window_state)
         root.after(100, self.drain_output)
         if self.app.get('check_updates', True):
             threading.Thread(target=self.check_update, daemon=True).start()
 
     def px(self, size):
-        return int(size * self.dpi)
+        return int(size * self.ui_scale)
+
+    def size_window(self):
+        size, minimum = (self.px(BASE_WINDOW[0]), self.px(BASE_WINDOW[1])), (self.px(1040), self.px(760))
+        position = ''
+        if self.area:
+            size, minimum = fit_to_area(size, minimum, self.area, self.frame)
+            if not self.app['window_maximized']:
+                position = '+%d+%d' % centered_origin(size, self.frame, self.area)
+        self.root.geometry(f'{size[0]}x{size[1]}{position}')
+        self.root.minsize(*minimum)
+        if self.app['window_maximized']:
+            self.root.state('zoomed')
+
+    def note_window_state(self, event):
+        if event.widget is self.root:
+            self.app['window_maximized'] = maximized_after(self.app['window_maximized'], self.root.state())
 
     def set_icon(self):
         try:
@@ -410,7 +503,7 @@ class Launcher:
     def check_images(self):
         """16 px (DPI-scaled) check box images: the clam theme draws a cross."""
         tk = self.tk
-        n = max(14, int(16 * self.dpi))
+        n = max(14, int(16 * self.ui_scale))
         images = []
         for checked in (False, True):
             image = tk.PhotoImage(width=n + self.px(8), height=n)
@@ -598,7 +691,11 @@ class Launcher:
         self.page_cards[inner] = None
         window = canvas.create_window(0, 0, window=inner, anchor='nw')
 
-        def fit(_event=None):
+        scheduled = False
+
+        def apply():
+            nonlocal scheduled
+            scheduled = False
             canvas.itemconfigure(window, width=canvas.winfo_width())
             canvas.configure(scrollregion=(0, 0, canvas.winfo_width(), inner.winfo_reqheight()))
             if inner.winfo_reqheight() > canvas.winfo_height():
@@ -606,6 +703,13 @@ class Launcher:
             else:
                 bar.pack_forget()
                 canvas.yview_moveto(0)
+
+        def fit(_event=None):
+            # Tk applies a new window width only on a later idle pass.
+            nonlocal scheduled
+            if not scheduled:
+                scheduled = True
+                canvas.after_idle(apply)
         inner.bind('<Configure>', fit)
         canvas.bind('<Configure>', fit)
 
@@ -710,6 +814,13 @@ class Launcher:
         self.build_advanced()
         self.build_log()
         self.refresh()
+        self.page_sizes = {}
+        focus_classes = ('Label', 'Button', 'Entry', 'Text', 'Checkbutton', 'TButton', 'TCheckbutton', 'TCombobox', 'TEntry')
+        self.focus_order = {name: [(w, w.cget('takefocus')) for w in self.widgets_under(page)
+                                   if w.winfo_class() in focus_classes] for name, page in self.pages.items()}
+        for name, page in self.pages.items():
+            page.place(x=0, y=0)
+            self.set_focusable(name, False)
 
     def _nav_style(self, name, active=False, hover=False):
         if active:
@@ -737,14 +848,44 @@ class Launcher:
             self.draw_card(name)
 
     def show(self, name):
-        for page in self.pages.values():
-            page.pack_forget()
-        self.pages[name].pack(fill='both', expand=True)
+        previous = self.current_page
+        if name != previous:
+            if previous:
+                self.set_focusable(previous, False)
+                if str(self.root.tk.call('focus')).startswith(str(self.pages[previous]) + '.'):
+                    self.root.focus_set()
+            self.set_focusable(name, True)
+        if self.size_page(name):
+            self.root.update_idletasks()  # the page is laid out while the current page still covers it
+        self.pages[name].tkraise()
         self.current_page = name
         for n in self.nav:
             self._nav_style(n, active=(n == name))
         if name == 'play':
             self.refresh()
+
+    def size_page(self, name):
+        """Sizes a page to the content area; True when the size changed."""
+        size = (self.content.winfo_width(), self.content.winfo_height())
+        if self.page_sizes.get(name) == size:
+            return False
+        self.page_sizes[name] = size
+        self.pages[name].place_configure(width=size[0], height=size[1])
+        return True
+
+    def on_content_resize(self, _event=None):
+        if self.current_page:
+            self.size_page(self.current_page)
+
+    def set_focusable(self, name, on):
+        """Every page stays mapped, so the hidden ones are kept out of the Tab order."""
+        for widget, takefocus in self.focus_order[name]:
+            widget.configure(takefocus=takefocus if on else 0)
+
+    def widgets_under(self, widget):
+        for child in widget.winfo_children():
+            yield child
+            yield from self.widgets_under(child)
 
     def build_play(self):
         tk, ttk = self.tk, self.ttk
@@ -1250,7 +1391,7 @@ class Launcher:
         self.stop_button.configure(state='normal')
         self.status.configure(text=_('Preparing the game; it opens in its own window…'), fg=GOLD)
         if self.app.get('close_on_play'):
-            self.root.after(5000, self.root.destroy)
+            self.root.after(5000, self.close)
 
     def read_output(self, process):
         """Helper thread: the game's output to the Log page and to <saves folder>/last_run.log."""
