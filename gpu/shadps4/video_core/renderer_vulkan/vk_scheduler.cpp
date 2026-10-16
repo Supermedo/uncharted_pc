@@ -30,6 +30,7 @@ namespace Vulkan {
 std::mutex Scheduler::submit_mutex;
 
 extern void (*g_gpu_stall_report)();
+extern void (*g_gpu_checkpoint_report)();
 bool (*g_draw_pipe_busy)() = nullptr;
 
 namespace {
@@ -50,6 +51,10 @@ std::vector<std::pair<const Scheduler*, const Instance*>> g_schedulers;
 } // namespace
 
 void Scheduler::ReportStall() {
+    // bbport: while the GPU is still stuck, the checkpoints point at the command it is on.
+    if (g_gpu_checkpoint_report) {
+        g_gpu_checkpoint_report();
+    }
     std::scoped_lock lk{g_recent_mutex};
     for (const auto& [scheduler, inst] : g_schedulers) {
         const VkSemaphore timeline = scheduler->work_semaphore.Handle();
@@ -553,6 +558,9 @@ void Scheduler::SubmitExecution(SubmitInfo& info) {
     }
     ImGui::Core::TextureManager::Submit();
     auto submit_result = instance.GetGraphicsQueue().submit(submit_info, info.fence);
+    if (submit_result == vk::Result::eErrorDeviceLost && g_gpu_checkpoint_report) {
+        g_gpu_checkpoint_report(); // bbport: which command was running
+    }
     ASSERT_MSG(submit_result != vk::Result::eErrorDeviceLost, "Device lost during submit");
 
     work_semaphore.Refresh();

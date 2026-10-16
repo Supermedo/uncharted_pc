@@ -53,6 +53,7 @@ u32 ConstCheckHash() {
 
 extern bool (*g_draw_pipe_busy)();
 extern bool g_gpu_checkpoints;
+extern bool g_gpu_markers_amd;
 extern VkQueue g_crash_queue;
 extern void (*g_gpu_checkpoint_report)();
 } // namespace Vulkan
@@ -122,6 +123,17 @@ void PrintCheckpoint(u64 seq) {
         std::printf("GPU crash:     buffer 0x%llx size 0x%x%s\n",
                     static_cast<unsigned long long>(b.address), b.size,
                     b.written ? " (written)" : "");
+        // bbport: the guest copy of small buffers (a hung shader's loop counts and limits).
+        if (b.size && b.size <= 0x400 && b.address) {
+            const auto* words = reinterpret_cast<const u32*>(b.address);
+            for (u32 w = 0; w < b.size / 4; w += 8) {
+                std::printf("GPU crash:       [%3u]", w);
+                for (u32 k = w; k < w + 8 && k < b.size / 4; ++k) {
+                    std::printf(" %08x", words[k]);
+                }
+                std::printf("\n");
+            }
+        }
         VideoCore::PrintFaultHistory(b.address, b.size);
     }
     if (r.args) {
@@ -129,7 +141,50 @@ void PrintCheckpoint(u64 seq) {
     }
 }
 
+// bbport: AMD markers. Word 0: the last command the GPU started (top of pipe), word 1: the
+// last one it finished (bottom of pipe); the low 32 bits of the checkpoint numbers.
+std::unique_ptr<VideoCore::Buffer> marker_buffer;
+
+void BeginCheckpoint(vk::CommandBuffer cmdbuf, const void* checkpoint) {
+    if (!checkpoint) {
+        return;
+    }
+    if (g_gpu_markers_amd) {
+        cmdbuf.writeBufferMarkerAMD(vk::PipelineStageFlagBits::eTopOfPipe, marker_buffer->Handle(),
+                                    0, static_cast<u32>(reinterpret_cast<uintptr_t>(checkpoint)));
+    } else {
+        cmdbuf.setCheckpointNV(checkpoint);
+    }
+}
+
+void EndCheckpoint(vk::CommandBuffer cmdbuf, const void* checkpoint) {
+    if (checkpoint && g_gpu_markers_amd) {
+        cmdbuf.writeBufferMarkerAMD(vk::PipelineStageFlagBits::eBottomOfPipe,
+                                    marker_buffer->Handle(), 4,
+                                    static_cast<u32>(reinterpret_cast<uintptr_t>(checkpoint)));
+    }
+}
+
+void ReportMarkers() {
+    const auto* words = reinterpret_cast<const volatile u32*>(marker_buffer->mapped_data.data());
+    const u64 latest = checkpoint_seq.load();
+    // Back to full checkpoint numbers: the latest recorded one is never far ahead of the GPU.
+    const auto full = [&](u32 low) { return (latest & ~0xffffffffull) | low; };
+    const u64 started = full(words[0]), finished = full(words[1]);
+    std::printf("GPU crash: the GPU started #%llu and finished #%llu (latest recorded #%llu)\n",
+                static_cast<unsigned long long>(started), static_cast<unsigned long long>(finished),
+                static_cast<unsigned long long>(latest));
+    std::printf("GPU crash: commands after the last finished one (the hang is among them):\n");
+    for (u64 s = finished + 1; s && s <= started + 2 && s <= latest && s <= finished + 12; ++s) {
+        PrintCheckpoint(s);
+    }
+}
+
 void ReportCheckpoints() {
+    if (g_gpu_markers_amd) {
+        ReportMarkers();
+        return;
+    }
     const auto get = VULKAN_HPP_DEFAULT_DISPATCHER.vkGetQueueCheckpointDataNV;
     if (!g_crash_queue || !get) {
         return;
@@ -190,6 +245,12 @@ Rasterizer::Rasterizer(const Instance& instance_, Scheduler& scheduler_, Runtime
     if (g_gpu_checkpoints) {
         checkpoint_ring = std::make_unique<CheckpointRecord[]>(CheckpointRingSize);
         g_gpu_checkpoint_report = &ReportCheckpoints;
+        if (g_gpu_markers_amd) {
+            marker_buffer = std::make_unique<VideoCore::Buffer>(
+                instance, 0, 256, VideoCore::MemoryType::HostCached, "bbport GPU markers");
+            std::memset(marker_buffer->mapped_data.data(), 0, 8);
+            std::printf("GPU checkpoints: AMD buffer markers before and after every draw and dispatch\n");
+        }
         VideoCore::EnableFaultHistory();
     }
     if (DrawPipeWanted()) {
@@ -1589,7 +1650,7 @@ void Rasterizer::DrawRecord(const GraphicsPipeline* pipeline, const PreparedDraw
     }
     scheduler.Record([=](vk::CommandBuffer cmdbuf) {
         if (checkpoint) {
-            cmdbuf.setCheckpointNV(checkpoint);
+            BeginCheckpoint(cmdbuf, checkpoint);
         }
         cmdbuf.bindPipeline(vk::PipelineBindPoint::eGraphics, handle);
         if (is_indexed) {
@@ -1597,6 +1658,7 @@ void Rasterizer::DrawRecord(const GraphicsPipeline* pipeline, const PreparedDraw
         } else {
             cmdbuf.draw(num_indices, num_instances, first_vertex, first_instance);
         }
+        EndCheckpoint(cmdbuf, checkpoint);
     });
     if (upscaler->Enabled() && cb_descs[0].first) {
         const auto* ps = pipeline->GetStages()[u32(Shader::SwStage::Fragment)];
@@ -1752,7 +1814,7 @@ void Rasterizer::DrawIndirectRecord(const GraphicsPipeline* pipeline, bool is_in
     }
     scheduler.Record([=](vk::CommandBuffer cmdbuf) {
         if (checkpoint) {
-            cmdbuf.setCheckpointNV(checkpoint);
+            BeginCheckpoint(cmdbuf, checkpoint);
         }
         cmdbuf.bindPipeline(vk::PipelineBindPoint::eGraphics, handle);
         if (is_indexed) {
@@ -1767,6 +1829,7 @@ void Rasterizer::DrawIndirectRecord(const GraphicsPipeline* pipeline, bool is_in
         } else {
             cmdbuf.drawIndirect(args, args_offset, max_count, stride);
         }
+        EndCheckpoint(cmdbuf, checkpoint);
     });
     DebugState.IncDrawCall();
 
@@ -2014,10 +2077,11 @@ void Rasterizer::DispatchRecord(const ComputePipeline* pipeline) {
             cmdbuf.pipelineBarrier2(dependency);
         }
         if (checkpoint) {
-            cmdbuf.setCheckpointNV(checkpoint);
+            BeginCheckpoint(cmdbuf, checkpoint);
         }
         cmdbuf.bindPipeline(vk::PipelineBindPoint::eCompute, handle);
         cmdbuf.dispatch(dim_x, dim_y, dim_z);
+        EndCheckpoint(cmdbuf, checkpoint);
         if (full_barrier >= 1) {
             cmdbuf.pipelineBarrier2(dependency);
         }
@@ -2074,10 +2138,11 @@ void Rasterizer::DispatchIndirectRecord(const ComputePipeline* pipeline, VAddr a
                        0, size, 0, 0, address + offset);
     scheduler.Record([=](vk::CommandBuffer cmdbuf) {
         if (checkpoint) {
-            cmdbuf.setCheckpointNV(checkpoint);
+            BeginCheckpoint(cmdbuf, checkpoint);
         }
         cmdbuf.bindPipeline(vk::PipelineBindPoint::eCompute, handle);
         cmdbuf.dispatchIndirect(args, args_offset);
+        EndCheckpoint(cmdbuf, checkpoint);
     });
     DebugState.IncDispatch();
 
