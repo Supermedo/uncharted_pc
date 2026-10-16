@@ -80,6 +80,10 @@ endif()
 find_package(Zydis REQUIRED)
 find_program(GLSLANG_COMPILER NAMES glslang glslangValidator REQUIRED)
 
+if (WIN32)
+    # Recent MSYS2 libc++ no longer includes common standard headers transitively.
+    add_compile_options($<$<COMPILE_LANGUAGE:CXX>:-include${CMAKE_CURRENT_SOURCE_DIR}/compat/libcxx_transitive.hpp>)
+endif ()
 set(SIRIT_USE_SYSTEM_SPIRV_HEADERS OFF CACHE BOOL "" FORCE)
 add_subdirectory(third_party/sirit EXCLUDE_FROM_ALL)
 
@@ -87,6 +91,18 @@ add_subdirectory(third_party/sirit EXCLUDE_FROM_ALL)
 set(FFX_VK_PORTABLE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(FFX_VK_PORTABLE_BUILD_PROBE OFF CACHE BOOL "" FORCE)
 add_subdirectory(third_party/fsr-vulkan EXCLUDE_FROM_ALL)
+if (WIN32)
+    # The FidelityFX SDK expects MSVC on Windows; recent MSYS2 headers no longer provide its
+    # MSVC-only names transitively (compat/ffx_mingw_compat.hpp).
+    get_property(ffx_targets DIRECTORY third_party/fsr-vulkan PROPERTY BUILDSYSTEM_TARGETS)
+    foreach (ffx_target IN LISTS ffx_targets)
+        get_target_property(ffx_type ${ffx_target} TYPE)
+        if (NOT ffx_type STREQUAL "INTERFACE_LIBRARY" AND NOT ffx_type STREQUAL "UTILITY")
+            target_compile_options(${ffx_target} PRIVATE
+                $<$<COMPILE_LANGUAGE:CXX>:-include${CMAKE_CURRENT_SOURCE_DIR}/compat/ffx_mingw_compat.hpp>)
+        endif ()
+    endforeach ()
+endif ()
 
 # Host shaders -> headers (same scheme as shadPS4's host_shaders/CMakeLists.txt).
 set(SHADER_SRC ${CMAKE_CURRENT_SOURCE_DIR}/shadps4/video_core/host_shaders)
@@ -248,7 +264,7 @@ if (WIN32)
     add_executable(bb-probe ../src/probe.c ${BB_RUNTIME} ../src/compat_win.c ../src/vulkan_smoke.c
         ../packaging/windows/bb-probe.rc)
     set_target_properties(bb-probe PROPERTIES C_STANDARD 11 C_EXTENSIONS OFF)
-    target_compile_options(bb-probe PRIVATE $<$<COMPILE_LANGUAGE:C>:-Wall -Wextra -Werror>)
+    target_compile_options(bb-probe PRIVATE $<$<COMPILE_LANGUAGE:C>:-Wall -Wextra -Werror -Wno-unknown-warning-option -Wno-unused-but-set-global>)
     target_include_directories(bb-probe PRIVATE .. ../src)
     target_link_libraries(bb-probe PRIVATE bbgpu atrac9 onecore bcrypt ws2_32 -pthread)
     # The PS4 range (64 GiB - 1 TiB) must stay free: no high-entropy ASLR for heaps and stacks.
