@@ -23,6 +23,7 @@ import sys
 import tempfile
 import threading
 import time
+import traceback
 import urllib.request
 import webbrowser
 import zipfile
@@ -333,7 +334,7 @@ COLORS = {'surface': SURFACE, 'card': CARD, 'card_hi': CARD_HI, 'line': LINE, 't
           'button': '#25272b', 'button_hi': '#30333a'}
 # Sidebar icons (Segoe Fluent Icons on Windows 11, Segoe MDL2 Assets on Windows 10).
 NAV_ICONS = {'play': '\ue768', 'game': '\ue7fc', 'display': '\ue7f4', 'controls': '\ue765',
-             'advanced': '\ue713', 'log': '\ue8a5'}
+             'saves': '\ue74e', 'advanced': '\ue713', 'log': '\ue8a5'}
 RUST, RUST_HI = GOLD, GOLD_HI
 
 
@@ -348,20 +349,44 @@ class Launcher:
         self.output = queue.Queue()
         self.ui_calls = queue.Queue()
         self.banner_key = self.banner_scaled = self.cover_image = None
+        self.banner_pil = None
+        self.hero_photo = None
+        self.hero_after = None
+        self.hero_image_item = None
+        self.hero_logo_cache = {}
         self.card_hot = None
         self.info = None
         self.update_box = None
         root.title(f'{NAME} — The Nathan Drake Collection for Windows · by {AUTHOR}')
         root.configure(bg=BG)
+        root.overrideredirect(True)
+        self.maximized = False
+        self.restore_geometry = None
+        self.resize_edge = None
+        self.resize_origin = None
+        self.drag_origin = None
+        self.cursor_name = None
+        self.tray_icon = None
+        self.window_style_applied = False
         self.dpi = root.winfo_fpixels('1i') / 96.0
         root.geometry(f'{self.px(1180)}x{self.px(860)}')
         root.minsize(self.px(1040), self.px(760))
         self.set_icon()
         self.load_fonts()
         self.style()
+        self.build_titlebar()
         self.build()
+        root.bind('<Motion>', self._resize_cursor, add='+')
+        root.bind('<ButtonPress-1>', self._resize_start, add='+')
+        root.bind('<B1-Motion>', self._resize_drag, add='+')
+        root.bind('<ButtonRelease-1>', self._resize_end, add='+')
+        root.bind_all('<B1-Motion>', self._drag_move, add='+')
+        root.bind_all('<ButtonRelease-1>', self._clear_drag, add='+')
         self.show('play')
+        root.report_callback_exception = self.report_callback_exception
         root.protocol('WM_DELETE_WINDOW', self.close)
+        # Tk applies the native window styles when its HWND is mapped, so set them after startup.
+        root.after(150, self.enable_taskbar_presence)
         root.after(100, self.drain_output)
         if self.app.get('check_updates', True):
             threading.Thread(target=self.check_update, daemon=True).start()
@@ -374,6 +399,188 @@ class Launcher:
             self.root.iconbitmap(default=str(PORT_DIR / 'launcher' / 'uncharted.ico'))
         except self.tk.TclError:
             pass
+
+    def enable_taskbar_presence(self):
+        """Keep the frameless window visible in Alt+Tab and on the Windows taskbar."""
+        if self.window_style_applied:
+            return
+        try:
+            self.root.overrideredirect(True)
+            from ctypes import wintypes
+            self.window_style_applied = True
+            hwnd = wintypes.HWND(self.root.winfo_id())
+            get_ancestor = ctypes.windll.user32.GetAncestor
+            get_ancestor.argtypes = (wintypes.HWND, wintypes.UINT)
+            get_ancestor.restype = wintypes.HWND
+            hwnd = get_ancestor(hwnd, 2) or hwnd  # GA_ROOT
+            get_style = ctypes.windll.user32.GetWindowLongPtrW
+            get_style.argtypes = (wintypes.HWND, ctypes.c_int)
+            get_style.restype = ctypes.c_ssize_t
+            set_style = ctypes.windll.user32.SetWindowLongPtrW
+            set_style.argtypes = (wintypes.HWND, ctypes.c_int, ctypes.c_ssize_t)
+            set_style.restype = ctypes.c_ssize_t
+            style = get_style(hwnd, -16) & ~0x00C40000  # remove caption and native frame (avoids the white DWM strip)
+            style |= 0x00020000 | 0x00010000 | 0x00080000  # minimize, maximize and system menu support
+            set_style(hwnd, -16, style)
+            ex_style = get_style(hwnd, -20)
+            set_style(hwnd, -20, (ex_style & ~0x80) | 0x40000)  # APPWINDOW, not TOOLWINDOW
+            set_position = ctypes.windll.user32.SetWindowPos
+            set_position.argtypes = (wintypes.HWND, wintypes.HWND, ctypes.c_int, ctypes.c_int,
+                                     ctypes.c_int, ctypes.c_int, wintypes.UINT)
+            set_position.restype = wintypes.BOOL
+            set_position(hwnd, None, 0, 0, 0, 0, 0x27)  # SWP_FRAMECHANGED and preserve geometry
+        except (AttributeError, OSError):
+            pass
+
+    def build_titlebar(self):
+        """Compact custom window controls, styled to blend into the launcher."""
+        tk = self.tk
+        bar = tk.Frame(self.root, bg='#111214', height=self.px(34))
+        bar.pack(fill='x', side='top')
+        bar.pack_propagate(False)
+        bar.bind('<ButtonPress-1>', self._drag_start)
+        bar.bind('<B1-Motion>', self._drag_move)
+        bar.bind('<ButtonRelease-1>', lambda _event: setattr(self, 'drag_origin', None))
+        bar.bind('<Double-Button-1>', lambda _event: self.toggle_maximize())
+        controls = tk.Frame(bar, bg='#111214')
+        controls.pack(side='right', fill='y')
+        self.window_buttons = []
+        for label, command, hover in (
+                ('—', self.minimize, '#292a2c'),
+                ('□', self.toggle_maximize, '#292a2c'),
+                ('×', self.close, '#c42b1c')):
+            button = tk.Label(controls, text=label, bg='#111214', fg='#d8d4cd',
+                              font=('Segoe UI', 11), width=6 if label == '×' else 5,
+                              cursor='hand2')
+            button.pack(side='left', fill='y')
+            button.bind('<Button-1>', lambda _event, fn=command: fn())
+            button.bind('<Enter>', lambda _event, w=button, c=hover: w.configure(bg=c))
+            button.bind('<Leave>', lambda _event, w=button: w.configure(bg='#111214'))
+            self.window_buttons.append(button)
+
+    def minimize(self):
+        try:
+            import pystray
+            from PIL import Image
+            if self.tray_icon is None:
+                icon_path = PORT_DIR / 'launcher' / 'uncharted.ico'
+                tray_image = Image.open(icon_path).convert('RGBA')
+                menu = pystray.Menu(
+                    pystray.MenuItem('Open Uncharted', self._tray_open, default=True),
+                    pystray.MenuItem('Exit', self._tray_quit))
+                self.tray_icon = pystray.Icon('UnchartedLauncher', tray_image,
+                                              'Uncharted — The Nathan Drake Collection', menu)
+                # run_detached's setup callback shows the icon only after its Windows
+                # notification window is ready.
+                self.tray_icon.run_detached()
+            else:
+                self.tray_icon.visible = True
+            self.root.withdraw()
+        except (AttributeError, ImportError, OSError):
+            self.root.iconify()
+
+    def _tray_open(self, _icon=None, _item=None):
+        self.root.after(0, self.restore_from_tray)
+
+    def _tray_quit(self, _icon=None, _item=None):
+        self.root.after(0, self.close)
+
+    def restore_from_tray(self):
+        self.root.deiconify()
+        self.root.state('normal')
+        self.root.lift()
+        self.root.focus_force()
+        if self.tray_icon and self.tray_icon.visible:
+            self.tray_icon.visible = False
+
+    def _drag_start(self, event):
+        if self.maximized:
+            return
+        self.drag_origin = (event.x_root, event.y_root, self.root.winfo_x(), self.root.winfo_y())
+
+    def _drag_move(self, event):
+        if not self.drag_origin or self.maximized:
+            return
+        start_x, start_y, left, top = self.drag_origin
+        x, y = left + event.x_root - start_x, top + event.y_root - start_y
+        self.root.geometry(f'+{x}+{y}')
+
+    def _clear_drag(self, _event):
+        self.drag_origin = None
+
+    def _resize_cursor(self, event):
+        if self.maximized or self.resize_edge:
+            return
+        w, h, x, y = self.root.winfo_width(), self.root.winfo_height(), event.x_root - self.root.winfo_rootx(), event.y_root - self.root.winfo_rooty()
+        edge = 7
+        horizontal = 'w' if x < edge else ('e' if x >= w - edge else '')
+        vertical = 'n' if y < edge else ('s' if y >= h - edge else '')
+        self.resize_edge = (vertical + horizontal) or None
+        cursors = {'nw': 'size_nw_se', 'se': 'size_nw_se', 'ne': 'size_ne_sw', 'sw': 'size_ne_sw',
+                   'e': 'size_we', 'w': 'size_we', 'n': 'size_ns', 's': 'size_ns', None: ''}
+        cursor = cursors[self.resize_edge]
+        if cursor != self.cursor_name:
+            try:
+                self.root.configure(cursor=cursor)
+                self.cursor_name = cursor
+            except self.tk.TclError:
+                pass
+        self.resize_edge = None
+
+    def _resize_start(self, event):
+        if self.maximized:
+            return
+        x, y = event.x_root - self.root.winfo_rootx(), event.y_root - self.root.winfo_rooty()
+        w, h = self.root.winfo_width(), self.root.winfo_height()
+        edge = 7
+        horizontal = 'w' if x < edge else ('e' if x >= w - edge else '')
+        vertical = 'n' if y < edge else ('s' if y >= h - edge else '')
+        self.resize_edge = (vertical + horizontal) or None
+        if self.resize_edge:
+            self.resize_origin = (event.x_root, event.y_root, self.root.winfo_x(), self.root.winfo_y(), w, h)
+
+    def _resize_drag(self, event):
+        if not self.resize_edge or not self.resize_origin:
+            return
+        ox, oy, left, top, width, height = self.resize_origin
+        dx, dy = event.x_root - ox, event.y_root - oy
+        edge = self.resize_edge
+        if 'w' in edge:
+            width -= dx
+            left += dx
+        elif 'e' in edge:
+            width += dx
+        if 'n' in edge:
+            height -= dy
+            top += dy
+        elif 's' in edge:
+            height += dy
+        min_w, min_h = self.root.minsize()
+        if width < min_w:
+            if 'w' in edge:
+                left -= min_w - width
+            width = min_w
+        if height < min_h:
+            if 'n' in edge:
+                top -= min_h - height
+            height = min_h
+        self.root.geometry(f'{width}x{height}+{left}+{top}')
+
+    def _resize_end(self, _event):
+        self.resize_edge = self.resize_origin = None
+
+    def toggle_maximize(self):
+        if self.maximized:
+            self.root.state('normal')
+            if self.restore_geometry:
+                self.root.geometry(self.restore_geometry)
+            self.window_buttons[1].configure(text='□')
+            self.maximized = False
+        else:
+            self.restore_geometry = self.root.geometry()
+            self.root.state('zoomed')
+            self.window_buttons[1].configure(text='❐')
+            self.maximized = True
 
     def load_fonts(self):
         """Cinzel for headings (Uncharted-style capitals); Segoe UI for body text."""
@@ -636,20 +843,31 @@ class Launcher:
         side.pack(side='left', fill='y')
         side.pack_propagate(False)
         brand_wrap = side_w - 36
-        tk.Label(side, text='UNCHARTED', bg=BG, fg=GOLD, font=self.font_brand_lg, anchor='w').pack(
-            anchor='w', padx=18, pady=(28, 0))
-        tk.Label(side, text='NATHAN DRAKE', bg=BG, fg=MUTED, font=self.font_brand_sm, anchor='w').pack(
-            anchor='w', padx=18, pady=(8, 0))
-        tk.Label(side, text='COLLECTION', bg=BG, fg=MUTED, font=self.font_brand_sm, anchor='w').pack(
-            anchor='w', padx=18, pady=(1, 0))
+        # High-resolution SteamGridDB collection wordmark, kept outside the executable.
+        self.sidebar_logo_photo = None
+        try:
+            from PIL import Image, ImageTk
+            sidebar_art = Path(sys.executable).resolve().parent / 'art' / 'logo_collection_gold.png'
+            with Image.open(sidebar_art) as source:
+                art = source.convert('RGBA')
+            art.thumbnail((brand_wrap, self.px(76)), Image.Resampling.LANCZOS)
+            self.sidebar_logo_photo = ImageTk.PhotoImage(art)
+            tk.Label(side, image=self.sidebar_logo_photo, bg=BG, borderwidth=0).pack(
+                anchor='center', padx=18, pady=(28, 0))
+        except (OSError, ImportError):
+            pass
+        if not self.sidebar_logo_photo:
+            tk.Label(side, text='UNCHARTED', bg=BG, fg=GOLD, font=self.font_brand_lg, anchor='w').pack(
+                anchor='w', padx=18, pady=(28, 0))
         tk.Label(side, text=_('by {}').format(AUTHOR), bg=BG, fg=TEXT, font=self.font_ui_md,
-                 anchor='w', wraplength=brand_wrap, justify='left').pack(anchor='w', padx=18, pady=(10, 0))
+                 anchor='w', wraplength=brand_wrap, justify='left').pack(anchor='w', padx=18, pady=(18, 0))
         tk.Label(side, text=_('version {}').format(VERSION), bg=BG, fg='#5c564c', font=self.font_ui_sm,
                  anchor='w').pack(anchor='w', padx=18, pady=(1, 16))
         tk.Frame(side, bg=LINE, height=1).pack(fill='x', padx=18, pady=(0, 14))
         self.nav, self.nav_pills, self.nav_icons, self.nav_marks, self.current_page = {}, {}, {}, {}, None
         for name, title in (('play', _('Play')), ('game', _('Game')), ('display', _('Display')),
-                            ('controls', _('Controls')), ('advanced', _('Advanced')), ('log', _('Log'))):
+                            ('controls', _('Controls')), ('saves', _('Saves')),
+                            ('advanced', _('Advanced')), ('log', _('Log'))):
             row = tk.Frame(side, bg=BG, cursor='hand2')
             row.pack(fill='x', padx=(0, 12), pady=2)
             mark = tk.Frame(row, bg=BG, width=self.px(3))
@@ -707,6 +925,7 @@ class Launcher:
         self.build_game()
         self.build_display()
         self.build_controls()
+        self.build_saves()
         self.build_advanced()
         self.build_log()
         self.refresh()
@@ -800,7 +1019,8 @@ class Launcher:
         if width < 80:
             return
         page = self.pages.get('play')
-        natural = int(round(width * 365 / 273)) + self.px(78)
+        # Landscape SteamGridDB cards (920×430) plus the restrained caption and shadow.
+        natural = int(round(width * 430 / 920)) + self.px(80)
         avail = natural
         if page is not None and page.winfo_height() > 240:
             # Leave the library heading, the fullscreen row, and the status line on screen.
@@ -864,31 +1084,110 @@ class Launcher:
         self.draw_hero()
 
     def draw_hero(self):
-        """Collection banner up top; selected game and folder status along the bottom edge."""
+        """Per-game SteamGridDB hero art with a short cross-fade when the selection changes."""
         c = self.hero
-        c.delete('all')
         w, h = max(c.winfo_width(), 400), int(c['height'])
         start = self.var('start').get()
         title, subtitle = next((t, sub) for k, t, sub, _e in GAMES if k == start)
-        game_dir = self.var('game_dir').get()
-        key = (w, h, start, game_dir)
+        key = (w, h, start)
         if self.banner_key != key:
+            old_key = self.banner_key
             self.banner_key = key
-            # The collection banner when this machine has it (launcher art is not distributed),
-            # otherwise the background art of the player's own dump.
-            self.banner_scaled = self.photo_collection_banner(w, h) or \
-                self.scaled_art(Path(game_dir or '.') / 'sce_sys' / 'pic1.png', w)
-            self.cover_image = None
-        if self.banner_scaled:
-            c.create_image(w // 2, h // 2, image=self.banner_scaled)
-        c.create_rectangle(0, h - 1, w, h, fill=GOLD_DIM, outline='')
+            target = self.load_game_banner(start, w, h)
+            if self.hero_after:
+                try:
+                    self.root.after_cancel(self.hero_after)
+                except self.tk.TclError:
+                    pass
+                self.hero_after = None
+            if (old_key and old_key[2] != start and self.banner_pil is not None
+                    and old_key[:2] == (w, h)):
+                self._hero_from = self.banner_pil.copy()
+                self._hero_to = target
+                self._hero_step = 0
+                self._animate_hero(title, subtitle)
+                return
+            self.banner_pil = target
+        self._paint_hero(self.banner_pil, start, title, subtitle)
+
+    def load_game_banner(self, key, width, height):
+        """Load a local, optimized SteamGridDB hero; keep a game-folder fallback."""
+        try:
+            from PIL import Image, ImageDraw, ImageOps
+            art_dir = Path(sys.executable).resolve().parent / 'art'
+            path = art_dir / f'hero_{key}.jpg'
+            if not path.is_file():
+                game_dir = self.var('game_dir').get()
+                path = Path(game_dir or '.') / 'sce_sys' / 'pic1.png'
+            with Image.open(path) as source:
+                image = ImageOps.fit(source.convert('RGB'), (width, height),
+                                     method=Image.Resampling.LANCZOS, centering=(0.5, 0.5))
+            # Soft dark falloff behind the logo and a deeper fade at the foot of the image.
+            shade = Image.new('RGBA', image.size, (0, 0, 0, 0))
+            pixels = shade.load()
+            for x in range(width):
+                a = int(112 * max(0.0, 1 - x / (width * 0.68)) ** 1.7)
+                for y in range(height):
+                    bottom = max(0.0, (y / max(1, height - 1) - 0.68) / 0.32)
+                    pixels[x, y] = (5, 5, 6, min(185, a + int(bottom * bottom * 95)))
+            return Image.alpha_composite(image.convert('RGBA'), shade).convert('RGB')
+        except Exception:
+            return Image.new('RGB', (width, height), (14, 14, 15))
+
+    def _animate_hero(self, title, subtitle):
+        """Cross-fade only on selection changes; no idle video decoder or frame loop."""
+        from PIL import Image
+        self._hero_step += 1
+        steps = 12
+        t = min(1.0, self._hero_step / steps)
+        t = t * t * (3 - 2 * t)  # smoothstep easing
+        frame = Image.blend(self._hero_from, self._hero_to, t)
+        self.banner_pil = frame if self._hero_step < steps else self._hero_to
+        self._paint_hero(self.banner_pil, self.var('start').get(), title, subtitle)
+        if self._hero_step < steps:
+            self.hero_after = self.root.after(24, lambda: self._animate_hero(title, subtitle))
+        else:
+            self.hero_after = None
+
+    def _paint_hero(self, image, key, title, subtitle):
+        c = self.hero
+        c.delete('all')
+        self.hero_photo = None
+        try:
+            from PIL import ImageTk
+            self.hero_photo = ImageTk.PhotoImage(image)
+            c.create_image(0, 0, image=self.hero_photo, anchor='nw')
+        except Exception:
+            c.configure(bg='#101012')
+        w, h = max(c.winfo_width(), 400), int(c['height'])
+        logo_path = Path(sys.executable).resolve().parent / 'art' / f'logo_{key}.png'
+        logo_photo = self.hero_logo_cache.get(key)
+        if logo_photo is None:
+            try:
+                from PIL import Image, ImageTk
+                with Image.open(logo_path) as source:
+                    logo = source.convert('RGBA')
+                bounds = logo.getchannel('A').getbbox()
+                if bounds:
+                    logo = logo.crop(bounds)
+                logo.thumbnail((self.px(450), self.px(130)), Image.Resampling.LANCZOS)
+                logo_photo = ImageTk.PhotoImage(logo)
+                self.hero_logo_cache[key] = logo_photo
+            except (OSError, ImportError):
+                logo_photo = None
+        if logo_photo:
+            c.create_image(self.px(34), int(h * .47), image=logo_photo, anchor='w')
+        else:
+            c.create_text(self.px(34), int(h * .47), text=_(title).upper(),
+                          anchor='w', fill='#fffaf0', font=self.font_brand_xl)
+        c.create_text(self.px(38), int(h * .69), text=_(subtitle).upper(),
+                      anchor='w', fill='#e6c777', font=self.font_brand_sm)
+        c.create_rectangle(0, h - 2, w, h, fill=GOLD_DIM, outline='')
         info = self.info
-        sub = (f"{info['id']}  ·  {_('version')} {info['version']}" if info
-               else _('Set your game folder on the Game page'))
-        c.create_text(self.px(24), h - self.px(14), text=sub, anchor='sw', fill=GOLD,
+        status = (f"{info['id']}  ·  {_('version')} {info['version']}" if info
+                  else _('Set your game folder on the Game page'))
+        c.create_text(self.px(24), h - self.px(12), text=status, anchor='sw', fill=GOLD,
                       font=self.font_brand_sm)
-        c.create_text(w - self.px(24), h - self.px(14), text=f'{_(title)}  ·  {_(subtitle)}',
-                      anchor='se', fill='#f6f1e6', font=self.font_brand_md)
 
     def photo_collection_banner(self, width, height):
         try:
@@ -1055,6 +1354,122 @@ class Launcher:
         holder = self.tk.Frame(card, bg=CARD)
         holder.grid(row=self.next_row(card), column=0, columnspan=2, sticky='w', pady=(12, 0))
         self.pill(holder, _('Default controller buttons'), self.reset_pad).pack(side='left')
+
+    def build_saves(self):
+        f = self.page('saves', _('Saves'),
+                      _('Export your progress to a ZIP file, keep it in Google Drive and restore it later.'))
+        self.section(f, _('Portable backup'))
+        self.ttk.Label(
+            f, text=_('The backup includes save data and trophies for the selected user. Shader caches '
+                      'are excluded. Close the game before exporting or restoring.'),
+            style='Muted.TLabel', wraplength=self.px(650), justify='left').grid(
+                row=self.next_row(f), column=0, columnspan=2, sticky='w', pady=(4, 12))
+        buttons = self.tk.Frame(self.target(f), bg=SURFACE)
+        buttons.grid(row=self.next_row(f), column=0, columnspan=2, sticky='w', pady=(4, 10))
+        self.pill(buttons, _('Export backup (.zip)'), self.export_saves, kind='primary',
+                  padding=(18, 9)).pack(side='left')
+        self.pill(buttons, _('Restore backup (.zip)'), self.import_saves,
+                  padding=(18, 9)).pack(side='left', padx=(8, 0))
+        self.pill(buttons, _('Open data folder'),
+                  lambda: self.open_path(self.app.get('user_dir') or DATA_DIR / 'user'),
+                  kind='ghost', padding=(16, 9)).pack(side='left', padx=(8, 0))
+        self.ttk.Label(f, text=_('Restoring creates a backup of your current data before replacing the '
+                                 'items in the ZIP.'), style='Muted.TLabel', wraplength=self.px(650),
+                       justify='left').grid(row=self.next_row(f), column=0, columnspan=2, sticky='w', pady=(0, 8))
+
+    def _save_data_roots(self):
+        user = Path(self.app.get('user_dir') or DATA_DIR / 'user').expanduser().resolve()
+        return user, ('savedata', 'trophy')
+
+    def _write_save_archive(self, archive_path):
+        user, names = self._save_data_roots()
+        present = [name for name in names if (user / name).is_dir()]
+        if not present:
+            raise OSError(_('No save data was found yet. Start a game and save once first.'))
+        manifest = {'format': 'uncharted-save-backup-v1', 'created': time.strftime('%Y-%m-%dT%H:%M:%S'),
+                    'folders': present}
+        with zipfile.ZipFile(archive_path, 'w', zipfile.ZIP_DEFLATED, compresslevel=6) as archive:
+            archive.writestr('backup_info.json', json.dumps(manifest, indent=2).encode('utf-8'))
+            for name in present:
+                root = user / name
+                archive.writestr(name.rstrip('/') + '/', b'')
+                for path in root.rglob('*'):
+                    if path.is_file():
+                        archive.write(path, (Path(name) / path.relative_to(root)).as_posix())
+        return manifest
+
+    def export_saves(self):
+        if self.process:
+            self.messagebox.showinfo(NAME, _('Close the game before exporting saves.'))
+            return
+        default = 'Uncharted-saves-' + time.strftime('%Y%m%d-%H%M%S') + '.zip'
+        target = self.filedialog.asksaveasfilename(
+            title=_('Export saves'), initialdir=str(Path(self.app.get('user_dir') or DATA_DIR / 'user')),
+            initialfile=default, defaultextension='.zip', filetypes=[(_('ZIP backup'), '*.zip')])
+        if not target:
+            return
+        try:
+            manifest = self._write_save_archive(target)
+        except (OSError, ValueError, zipfile.BadZipFile) as error:
+            self.messagebox.showerror(NAME, _('Could not create the backup: {}').format(error))
+            return
+        self.messagebox.showinfo(NAME, _('Backup created: {}\nFolders included: {}').format(
+            target, ', '.join(manifest['folders'])))
+
+    def import_saves(self):
+        if self.process:
+            self.messagebox.showinfo(NAME, _('Close the game before restoring saves.'))
+            return
+        source = self.filedialog.askopenfilename(
+            title=_('Restore saves'), filetypes=[(_('Uncharted backup'), '*.zip')])
+        if not source:
+            return
+        try:
+            with zipfile.ZipFile(source) as archive:
+                manifest = json.loads(archive.read('backup_info.json').decode('utf-8'))
+                if manifest.get('format') != 'uncharted-save-backup-v1':
+                    raise ValueError(_('This ZIP is not an Uncharted launcher save backup.'))
+                roots = manifest.get('folders')
+                if not isinstance(roots, list) or not roots or any(n not in ('savedata', 'trophy') for n in roots):
+                    raise ValueError(_('The backup contains no recognized save folders.'))
+                entries = [item for item in archive.infolist() if item.filename != 'backup_info.json']
+                for item in entries:
+                    parts = item.filename.replace('\\', '/').split('/')
+                    if item.filename.startswith('/') or ':' in item.filename or '..' in parts or not parts[0] in roots:
+                        raise ValueError(_('The ZIP contains an invalid path.'))
+                if not any(not item.is_dir() for item in entries):
+                    raise ValueError(_('The backup contains no save files.'))
+                user, _names = self._save_data_roots()
+                if not self.messagebox.askyesno(NAME, _(
+                        'Restore this backup? Your current data will be backed up first.')):
+                    return
+                user.mkdir(parents=True, exist_ok=True)
+                stamp = time.strftime('%Y%m%d-%H%M%S')
+                backups = user / 'backups'
+                backups.mkdir(parents=True, exist_ok=True)
+                current = [n for n in ('savedata', 'trophy') if (user / n).is_dir()]
+                if current:
+                    self._write_save_archive(backups / f'Uncharted-saves-before-restore-{stamp}.zip')
+                with tempfile.TemporaryDirectory(prefix='.uncharted-save-restore-', dir=str(user)) as temp:
+                    stage = Path(temp)
+                    for item in entries:
+                        parts = item.filename.replace('\\', '/').split('/')
+                        if item.is_dir():
+                            (stage.joinpath(*parts)).mkdir(parents=True, exist_ok=True)
+                        else:
+                            output = stage.joinpath(*parts)
+                            output.parent.mkdir(parents=True, exist_ok=True)
+                            with archive.open(item) as src, output.open('wb') as dst:
+                                shutil.copyfileobj(src, dst)
+                    for name in roots:
+                        destination = user / name
+                        shutil.rmtree(destination, ignore_errors=True)
+                        staged = stage / name
+                        if staged.is_dir():
+                            shutil.copytree(staged, destination)
+            self.messagebox.showinfo(NAME, _('Saves restored.'))
+        except (OSError, ValueError, KeyError, json.JSONDecodeError, zipfile.BadZipFile) as error:
+            self.messagebox.showerror(NAME, _('Could not restore the backup: {}').format(error))
 
     def key_list(self, action):
         value = (self.app.get('key_bindings') or {}).get(action, DEFAULT_KEYS[action])
@@ -1306,7 +1721,18 @@ class Launcher:
                     self.append(item)
         except queue.Empty:
             pass
-        self.root.after(100, self.drain_output)
+        interval = 100 if self.process or not self.ui_calls.empty() or not self.output.empty() else 500
+        self.root.after(interval, self.drain_output)
+
+    def report_callback_exception(self, exc_type, exc_value, exc_traceback):
+        """Keep silent Tk callback failures diagnosable on windowed builds."""
+        try:
+            CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+            with open(CONFIG_DIR / 'launcher-errors.log', 'a', encoding='utf-8') as log:
+                log.write(f'\n[{time.strftime("%Y-%m-%d %H:%M:%S")}] Tk callback error\n')
+                traceback.print_exception(exc_type, exc_value, exc_traceback, file=log)
+        except OSError:
+            pass
 
     def stop(self):
         if self.job:
@@ -1417,8 +1843,38 @@ class Launcher:
                 if not new:
                     raise OSError('Uncharted.exe is missing from the download')
                 # The new launcher copies itself over this installation once this one has closed.
-                subprocess.Popen([str(new / 'Uncharted.exe'), '--install-update', str(PORT_DIR), str(os.getpid())],
-                                 cwd=str(new), stdin=subprocess.DEVNULL, creationflags=NO_WINDOW)
+                installer = subprocess.Popen(
+                    [str(new / 'Uncharted.exe'), '--install-update', str(PORT_DIR), str(os.getpid())],
+                    cwd=str(new), stdin=subprocess.DEVNULL, creationflags=NO_WINDOW)
+                # The official updater replaces Uncharted.exe. Keep this customized build under
+                # its own stable name and reopen it after the official installer finishes.
+                helper = PORT_DIR / 'reopen-custom-launcher.ps1'
+                helper.write_text(
+                    "$ErrorActionPreference = 'SilentlyContinue'\n"
+                    "$installerPid = {installer_pid}\n"
+                    "$exe = '{official_exe}'\n"
+                    "$custom = '{custom_exe}'\n"
+                    "$deadline = (Get-Date).AddMinutes(3)\n"
+                    "while ((Get-Process -Id $installerPid) -and (Get-Date) -lt $deadline) {{ Start-Sleep -Milliseconds 400 }}\n"
+                    "while ((Get-Date) -lt $deadline) {{\n"
+                    "  $p = Get-Process | Where-Object {{ $_.Path -ieq $exe -and $_.MainWindowHandle -ne 0 }} | Select-Object -First 1\n"
+                    "  if ($p) {{\n"
+                    "    $id = $p.Id; $p.CloseMainWindow() | Out-Null\n"
+                    "    while ((Get-Process -Id $id) -and (Get-Date) -lt $deadline) {{ Start-Sleep -Milliseconds 400 }}\n"
+                    "    break\n"
+                    "  }}\n"
+                    "  Start-Sleep -Milliseconds 400\n"
+                    "}}\n"
+                    "Copy-Item -LiteralPath $custom -Destination $exe -Force\n"
+                    "Start-Process -FilePath $exe -WorkingDirectory '{port_dir}'\n".format(
+                        installer_pid=installer.pid,
+                        official_exe=str(PORT_DIR / 'Uncharted.exe').replace("'", "''"),
+                        custom_exe=str(PORT_DIR / 'Uncharted Design.exe').replace("'", "''"),
+                        port_dir=str(PORT_DIR).replace("'", "''")),
+                    encoding='utf-8')
+                subprocess.Popen(['powershell', '-NoProfile', '-WindowStyle', 'Hidden', '-ExecutionPolicy',
+                                  'Bypass', '-File', str(helper)], cwd=str(PORT_DIR), stdin=subprocess.DEVNULL,
+                                 creationflags=NO_WINDOW)
                 self.ui_calls.put(self.close)
             except (OSError, zipfile.BadZipFile) as failure:
                 def failed(error=failure):
@@ -1506,6 +1962,11 @@ class Launcher:
             self.collect()
         except Exception:  # never keep the window open over a settings problem
             pass
+        if self.tray_icon:
+            try:
+                self.tray_icon.stop()
+            except Exception:
+                pass
         self.root.destroy()
 
 
