@@ -425,7 +425,12 @@ uint GetMipLevel(inout uint texel) {
 }
 
 void main() {
-    uint texel = gl_GlobalInvocationID.x;
+    const uint linear_texel = gl_GlobalInvocationID.x +
+                              gl_GlobalInvocationID.y * gl_NumWorkGroups.x * gl_WorkGroupSize.x;
+    if (linear_texel >= linear_data.length()) {
+        return;
+    }
+    uint texel = linear_texel;
     uint mip = GetMipLevel(texel);
     uint pitch = info.mips[mip].pitch;
     uint height = info.mips[mip].height;
@@ -441,8 +446,8 @@ void main() {
 #endif
 
     if (IS_TILER != 0) {
-        tiled_data[tiled_offset / BYTES_PER_PIXEL] = linear_data[gl_GlobalInvocationID.x];
+        tiled_data[tiled_offset / BYTES_PER_PIXEL] = linear_data[linear_texel];
     } else {
-        linear_data[gl_GlobalInvocationID.x] = tiled_data[tiled_offset / BYTES_PER_PIXEL];
+        linear_data[linear_texel] = tiled_data[tiled_offset / BYTES_PER_PIXEL];
     }
 }

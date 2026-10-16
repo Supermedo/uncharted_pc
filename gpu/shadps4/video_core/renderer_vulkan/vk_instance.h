@@ -90,6 +90,10 @@ public:
         return graphics_queue;
     }
 
+    vk::Queue GetSparseQueue() const {
+        return sparse_queue;
+    }
+
     /// bbport: a queue beside the graphics queue for read-backs: a transfer-only family's (copy
     /// engine) or the graphics family's second; null when there is neither.
     vk::Queue GetSideQueue() const {
@@ -550,6 +554,8 @@ private:
     vk::Queue side_queue;
     u32 side_queue_family_index{};
     vk::Queue graphics_queue;
+    vk::Queue sparse_queue;
+    u32 sparse_queue_family_index{};
     std::vector<vk::PhysicalDevice> physical_devices;
     std::vector<std::string> available_extensions;
     std::unordered_map<vk::Format, vk::FormatProperties3> format_properties;
