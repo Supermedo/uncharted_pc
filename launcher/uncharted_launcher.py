@@ -31,6 +31,8 @@ FROZEN = getattr(sys, 'frozen', False)
 PORT_DIR = Path(sys.executable).resolve().parent if FROZEN else Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PORT_DIR / 'scripts'))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import uncharted_i18n
+
 DATA_DIR = Path(os.environ.get('BB_DATA_DIR', PORT_DIR))
 CONFIG_DIR = Path(os.environ.get('APPDATA', Path.home())) / 'uncharted-launcher'
 CONFIG_FILE = CONFIG_DIR / 'settings.json'
@@ -132,7 +134,7 @@ TK_KEYS = {'space': 'Space', 'Return': 'Return', 'Escape': 'Escape', 'Tab': 'Tab
 RESERVED_KEYS = {'Insert': 'Insert opens the in-game settings menu.',
                  'Alt_L': 'Left Alt frees the mouse cursor while held.'}
 
-APP_DEFAULTS = {'game_dir': '', 'user_dir': '', 'start': 'u1', 'language': '1', 'player_name': '',
+APP_DEFAULTS = {'game_dir': '', 'user_dir': '', 'start': 'u1', 'language': '1', 'ui_language': '', 'player_name': '',
                 'fullscreen': False, 'present_mode': 'Mailbox', 'frame_rate': '60', 'show_fps': False,
                 'window_size': '1920x1080', 'scaler': 'fsr1', 'sharpening': '500',
                 'anti_aliasing': 'off', 'aa_sharpness': '0.2', 'frame_generation': 'off',
@@ -141,9 +143,12 @@ APP_DEFAULTS = {'game_dir': '', 'user_dir': '', 'start': 'u1', 'language': '1', 
                 'pad_invert_y': False, 'key_bindings': {}, 'pad_bindings': {}, 'check_updates': True}
 
 
+UI_LANGUAGE = 'en'
+
+
 def _(text):
-    """Translations come later; every text goes through here."""
-    return text
+    """Translate launcher text, keeping English as the fallback."""
+    return uncharted_i18n.translate(UI_LANGUAGE, text)
 
 
 # ---------------------------------------------------------------------------------------------
@@ -339,9 +344,11 @@ RUST, RUST_HI = GOLD, GOLD_HI
 
 class Launcher:
     def __init__(self, root, tk, ttk, filedialog, messagebox):
+        global UI_LANGUAGE
         self.tk, self.ttk, self.filedialog, self.messagebox = tk, ttk, filedialog, messagebox
         self.root = root
         self.app = {**APP_DEFAULTS, **load_json(CONFIG_FILE, {})}
+        UI_LANGUAGE = uncharted_i18n.language_code(self.app.get('ui_language', ''))
         self.vars = {}
         self.process = self.job = None
         self.entered, self.last_problem, self.stopping = False, '', False
@@ -482,7 +489,7 @@ class Launcher:
             self.vars[key] = v
         return self.vars[key]
 
-    def choice(self, parent, key, options, width=36):
+    def choice(self, parent, key, options, width=36, on_change=None):
         var = self.var(key)
         values = [v for v, _t in options]
         box = self.ttk.Combobox(parent, values=[_(t) for _v, t in options], state='readonly', width=width)
@@ -492,7 +499,11 @@ class Launcher:
         def show(*_args):
             box.current(values.index(var.get()) if var.get() in values else 0)
         show()
-        box.bind('<<ComboboxSelected>>', lambda _e: var.set(values[box.current()]))
+        def selected(_event):
+            var.set(values[box.current()])
+            if on_change:
+                on_change()
+        box.bind('<<ComboboxSelected>>', selected)
         var.trace_add('write', show)
         return box
 
@@ -645,8 +656,8 @@ class Launcher:
         tk.Label(side, text=_('by {}').format(AUTHOR), bg=BG, fg=TEXT, font=self.font_ui_md,
                  anchor='w', wraplength=brand_wrap, justify='left').pack(anchor='w', padx=18, pady=(10, 0))
         tk.Label(side, text=_('version {}').format(VERSION), bg=BG, fg='#5c564c', font=self.font_ui_sm,
-                 anchor='w').pack(anchor='w', padx=18, pady=(1, 16))
-        tk.Frame(side, bg=LINE, height=1).pack(fill='x', padx=18, pady=(0, 14))
+                 anchor='w').pack(anchor='w', padx=18, pady=(1, 0))
+        tk.Frame(side, bg=LINE, height=1).pack(fill='x', padx=18, pady=(16, 14))
         self.nav, self.nav_pills, self.nav_icons, self.nav_marks, self.current_page = {}, {}, {}, {}, None
         for name, title in (('play', _('Play')), ('game', _('Game')), ('display', _('Display')),
                             ('controls', _('Controls')), ('advanced', _('Advanced')), ('log', _('Log'))):
@@ -1146,6 +1157,10 @@ class Launcher:
 
     def build_advanced(self):
         f = self.page('advanced', _('Advanced'), _('Maintenance and options for testing.'))
+        self.section(f, _('Launcher language'), top=2)
+        self.row(f, _('Interface language'),
+                 self.choice(f, 'ui_language', uncharted_i18n.LANGUAGES, 24, self.change_ui_language),
+                 _('This changes only the launcher. The game language is selected on the Game page.'))
         self.check(f, 'close_on_play', _('Close the launcher when the game starts'))
         extra = self.ttk.Entry(f, textvariable=self.var('extra_env'), width=60)
         self.row(f, _('Environment'), extra, _('Extra variables for the game, NAME=value separated by spaces.'))
@@ -1210,6 +1225,22 @@ class Launcher:
         self.draw_hero()
 
     # ---- actions -----------------------------------------------------------------------------
+    def change_ui_language(self):
+        """Save and rebuild every label as soon as the interface language changes."""
+        global UI_LANGUAGE
+        page = self.current_page or 'advanced'
+        self.collect()
+        UI_LANGUAGE = uncharted_i18n.language_code(self.app['ui_language'])
+        for child in self.root.winfo_children():
+            child.destroy()
+        self.vars = {}
+        self.build()
+        self.show(page)
+        self.refresh()
+        if self.process:
+            self.play_button.configure(state='disabled')
+            self.stop_button.configure(state='normal')
+
     def collect(self):
         for key, v in self.vars.items():
             self.app[key] = v.get()
