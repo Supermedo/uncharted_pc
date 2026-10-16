@@ -10,6 +10,8 @@ last_run.log
 dist/
 packaging/runtime-paths.nix
 fsr4_411/
+# Prepared game folders and their unpacked package layers (tens of GB).
+/game/
 vkd3d-proton.cache
 tools/fsr4cap/*.exe
 perf.data
