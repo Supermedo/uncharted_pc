@@ -1317,7 +1317,7 @@ void BufferCache::SubmitPendingArenaBinds(Vulkan::SubmitInfo& info) {
         // Called inside Scheduler::SubmitExecution (queue lock held), so the queue is ours.
         (void)instance.GetGraphicsQueue().waitIdle();
     }
-    auto submit_result = instance.GetGraphicsQueue().bindSparse(sparse_info);
+    auto submit_result = instance.GetSparseQueue().bindSparse(sparse_info);
     ASSERT_MSG(submit_result != vk::Result::eErrorDeviceLost, "Device lost during submit");
     static const bool arena_log = [] {
         const char* env = std::getenv("BB_ARENA_LOG");

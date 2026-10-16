@@ -430,20 +430,47 @@ bool Instance::CreateDevice() {
         }
     }
     const bool side_family = side_queue_family_index != queue_family_index;
+    sparse_queue_family_index = queue_family_index;
+    if (!(family_properties[sparse_queue_family_index].queueFlags &
+          vk::QueueFlagBits::eSparseBinding)) {
+        bool found = false;
+        for (u32 i = 0; i < family_properties.size(); ++i) {
+            if (family_properties[i].queueCount &&
+                (family_properties[i].queueFlags & vk::QueueFlagBits::eSparseBinding)) {
+                sparse_queue_family_index = i;
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            LOG_CRITICAL(Render_Vulkan, "No queue supports sparse binding.");
+            return false;
+        }
+    }
     const u32 graphics_queues =
         side_family ? 1u : std::min<u32>(2u, family_properties[queue_family_index].queueCount);
-    const std::array queue_infos = {
+    std::vector<vk::DeviceQueueCreateInfo> queue_infos = {
         vk::DeviceQueueCreateInfo{
             .queueFamilyIndex = queue_family_index,
             .queueCount = graphics_queues,
             .pQueuePriorities = queue_priorities.data(),
         },
-        vk::DeviceQueueCreateInfo{
+    };
+    if (side_family) {
+        queue_infos.push_back(vk::DeviceQueueCreateInfo{
             .queueFamilyIndex = side_queue_family_index,
             .queueCount = 1,
             .pQueuePriorities = queue_priorities.data(),
-        },
-    };
+        });
+    }
+    if (sparse_queue_family_index != queue_family_index &&
+        sparse_queue_family_index != side_queue_family_index) {
+        queue_infos.push_back(vk::DeviceQueueCreateInfo{
+            .queueFamilyIndex = sparse_queue_family_index,
+            .queueCount = 1,
+            .pQueuePriorities = queue_priorities.data(),
+        });
+    }
 
     const auto vk11_features = feature_chain.get<vk::PhysicalDeviceVulkan11Features>();
     vk12_features = feature_chain.get<vk::PhysicalDeviceVulkan12Features>();
@@ -462,7 +489,7 @@ bool Instance::CreateDevice() {
     }
     vk::StructureChain device_chain = {
         vk::DeviceCreateInfo{
-            .queueCreateInfoCount = side_family ? 2u : 1u,
+            .queueCreateInfoCount = static_cast<u32>(queue_infos.size()),
             .pQueueCreateInfos = queue_infos.data(),
             .enabledExtensionCount = static_cast<u32>(enabled_extensions.size()),
             .ppEnabledExtensionNames = enabled_extensions.data(),
@@ -696,6 +723,7 @@ bool Instance::CreateDevice() {
     }
 
     graphics_queue = device->getQueue(queue_family_index, 0);
+    sparse_queue = device->getQueue(sparse_queue_family_index, 0);
     present_queue = device->getQueue(queue_family_index, 0);
     g_crash_queue = graphics_queue;
     if (side_queue_family_index != queue_family_index) {
