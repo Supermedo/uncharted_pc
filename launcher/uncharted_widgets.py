@@ -1,9 +1,13 @@
 """Launcher widgets with a modern look on Tk: rounded cards, toggle switches, a slider and pill
 buttons. Edges are anti-aliased: the shapes are drawn with PIL at four times the size and scaled
 down (Tk's canvas draws them jagged)."""
+import time
+
 from PIL import Image, ImageDraw, ImageTk
 
 SCALE = 4
+TOGGLE_SLIDE_MS = 160
+TOGGLE_FRAME_MS = 16
 _cache = {}
 
 
@@ -110,27 +114,75 @@ class Card:
         c.tag_lower('bg')
 
 
+def _smoothstep(t):
+    return t * t * (3 - 2 * t)
+
+
 class Toggle:
-    """An on/off switch bound to a BooleanVar."""
+    """An on/off switch bound to a BooleanVar; the knob slides to the other end on each change."""
 
     def __init__(self, tk, parent, variable, colors, px, background=None):
         self.var, self.colors = variable, colors
         self.w, self.h = px(40), px(22)
+        self.margin = px(3)
+        self.knob = self.h - 2 * self.margin
         self.bg = background or colors['card']
         self.canvas = tk.Canvas(parent, width=self.w, height=self.h, bg=self.bg, highlightthickness=0, bd=0,
                                 cursor='hand2')
+        self.on = bool(self.var.get())
+        self._from = self._to = self._rest(self.on)
+        self._started, self._job = 0.0, None
+        self._photo = ImageTk.PhotoImage(self._frame(self._to))
+        self.canvas.create_image(0, 0, anchor='nw', image=self._photo)
         self.canvas.bind('<Button-1>', lambda _e: self.var.set(not self.var.get()))
-        self.var.trace_add('write', lambda *_a: self.draw())
-        self.draw()
+        self.canvas.bind('<Destroy>', lambda _e: self._stop())
+        self.var.trace_add('write', lambda *_a: self._switch())
 
-    def draw(self):
-        c, colors, on = self.canvas, self.colors, bool(self.var.get())
-        c.delete('all')
-        track = colors['gold'] if on else colors['track']
-        c.create_image(0, 0, anchor='nw', image=rounded_image(self.w, self.h, self.h // 2, track, self.bg))
-        d = self.h - 6
-        knob = circle_image(d, '#14110a' if on else colors['knob'], track)
-        c.create_image(self.w - 3 - d if on else 3, 3, anchor='nw', image=knob)
+    def _rest(self, on):
+        return self.w - self.margin - self.knob if on else self.margin
+
+    def _position(self, now):
+        t = min(1.0, max(0.0, (now - self._started) / (TOGGLE_SLIDE_MS / 1000.0)))
+        if t >= 1.0:
+            return self._to
+        return self._from + (self._to - self._from) * _smoothstep(t)
+
+    def _frame(self, x):
+        """Pill and knob in one image: a separate knob image would show square corners past the ends."""
+        colors, s = self.colors, SCALE
+        track = colors['gold'] if self.on else colors['track']
+        knob = '#14110a' if self.on else colors['knob']
+        image = Image.new('RGB', (self.w * s, self.h * s), _rgb(self.bg))
+        draw = ImageDraw.Draw(image)
+        draw.rounded_rectangle((0, 0, self.w * s - 1, self.h * s - 1), self.h * s // 2, fill=_rgb(track))
+        left, top, d = round(x * s), self.margin * s, self.knob * s
+        draw.ellipse((left, top, left + d - 1, top + d - 1), fill=_rgb(knob))
+        return image.resize((self.w, self.h), Image.LANCZOS)
+
+    def _show(self, x):
+        self._photo.paste(self._frame(x))
+
+    def _switch(self):
+        now = time.monotonic()
+        self._from = self._position(now)
+        self.on = bool(self.var.get())
+        self._to = self._rest(self.on)
+        self._started = now
+        self._show(self._from)
+        if self._job is None:
+            self._job = self.canvas.after(TOGGLE_FRAME_MS, self._step)
+
+    def _step(self):
+        self._job = None
+        now = time.monotonic()
+        self._show(self._position(now))
+        if now - self._started < TOGGLE_SLIDE_MS / 1000.0:
+            self._job = self.canvas.after(TOGGLE_FRAME_MS, self._step)
+
+    def _stop(self):
+        if self._job is not None:
+            self.canvas.after_cancel(self._job)
+            self._job = None
 
     def grid(self, **kw):
         self.canvas.grid(**kw)
