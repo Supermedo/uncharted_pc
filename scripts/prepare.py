@@ -247,6 +247,9 @@ def prepare(game, out, exe='eboot.bin'):
 
 
 if __name__ == '__main__':
+    import sys
+    for _s in (sys.stdout, sys.stderr):  # console may be GBK etc.: titles carry a trademark sign
+        if _s: _s.reconfigure(encoding='utf-8', errors='replace')
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('game', type=Path)
     parser.add_argument('--out', type=Path, default=Path(__file__).resolve().parent.parent / 'out')
