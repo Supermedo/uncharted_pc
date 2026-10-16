@@ -138,7 +138,8 @@ APP_DEFAULTS = {'game_dir': '', 'user_dir': '', 'start': 'u1', 'language': '1', 
                 'anti_aliasing': 'off', 'aa_sharpness': '0.2', 'frame_generation': 'off',
                 'frame_gen_multiplier': '2', 'extra_env': '', 'close_on_play': False,
                 'mouse_look': True, 'mouse_sensitivity': '1.0', 'mouse_invert_y': False,
-                'pad_invert_y': False, 'key_bindings': {}, 'pad_bindings': {}, 'check_updates': True}
+                'pad_invert_y': False, 'key_bindings': {}, 'pad_bindings': {}, 'check_updates': True,
+                **{f'{game}_infinite_{cheat}': False for game, _t, _s, _e in GAMES for cheat in ('health', 'ammo')}}
 
 
 def _(text):
@@ -313,6 +314,8 @@ def game_environment(s, start=None):
     env['BB_FSR_SHARPNESS'] = str(s.get('aa_sharpness') or '0')
     env['BB_FRAME_GEN'] = str(s.get('frame_generation') or 'off')
     env['BB_FRAME_GEN_MULTIPLIER'] = str(s.get('frame_gen_multiplier') or '2')
+    env['BB_CHEATS'] = ','.join(f'{game}:{cheat}' for game, _t, _s, _e in GAMES for cheat in ('health', 'ammo')
+                                if s.get(f'{game}_infinite_{cheat}'))
     for item in str(s['extra_env']).split():
         if '=' in item:
             key, value = item.split('=', 1)
@@ -333,7 +336,7 @@ COLORS = {'surface': SURFACE, 'card': CARD, 'card_hi': CARD_HI, 'line': LINE, 't
           'button': '#25272b', 'button_hi': '#30333a'}
 # Sidebar icons (Segoe Fluent Icons on Windows 11, Segoe MDL2 Assets on Windows 10).
 NAV_ICONS = {'play': '\ue768', 'game': '\ue7fc', 'display': '\ue7f4', 'controls': '\ue765',
-             'advanced': '\ue713', 'log': '\ue8a5'}
+             'cheats': '\ue734', 'advanced': '\ue713', 'log': '\ue8a5'}
 RUST, RUST_HI = GOLD, GOLD_HI
 
 
@@ -648,8 +651,9 @@ class Launcher:
                  anchor='w').pack(anchor='w', padx=18, pady=(1, 16))
         tk.Frame(side, bg=LINE, height=1).pack(fill='x', padx=18, pady=(0, 14))
         self.nav, self.nav_pills, self.nav_icons, self.nav_marks, self.current_page = {}, {}, {}, {}, None
-        for name, title in (('play', _('Play')), ('game', _('Game')), ('display', _('Display')),
-                            ('controls', _('Controls')), ('advanced', _('Advanced')), ('log', _('Log'))):
+        for name, title in (('play', _('Play')), ('game', _('Game')), ('cheats', _('Cheats')),
+                            ('display', _('Display')), ('controls', _('Controls')), ('advanced', _('Advanced')),
+                            ('log', _('Log'))):
             row = tk.Frame(side, bg=BG, cursor='hand2')
             row.pack(fill='x', padx=(0, 12), pady=2)
             mark = tk.Frame(row, bg=BG, width=self.px(3))
@@ -707,6 +711,7 @@ class Launcher:
         self.build_game()
         self.build_display()
         self.build_controls()
+        self.build_cheats()
         self.build_advanced()
         self.build_log()
         self.refresh()
@@ -1143,6 +1148,13 @@ class Launcher:
     def reset_pad(self):
         for action, var in self.pad_vars.items():
             var.set(DEFAULT_PAD[action])
+
+    def build_cheats(self):
+        f = self.page('cheats', _('Cheats'), _('Each cheat only affects its own game; changes apply when the game starts.'))
+        for game, title, subtitle, _exe in GAMES:
+            self.section(f, f'{title} · {subtitle}')
+            self.check(f, f'{game}_infinite_health', _('Infinite Health'))
+            self.check(f, f'{game}_infinite_ammo', _('Infinite Ammo'))
 
     def build_advanced(self):
         f = self.page('advanced', _('Advanced'), _('Maintenance and options for testing.'))
