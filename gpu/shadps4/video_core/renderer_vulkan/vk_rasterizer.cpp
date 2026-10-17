@@ -3951,7 +3951,11 @@ void Rasterizer::CopyBuffer(VAddr dst, VAddr src, u32 num_bytes, bool dst_gds, b
             return;
         }
     }
-    texture_cache.InvalidateMemoryFromGPU(dst, num_bytes);
+    if (!dst_gds) {
+        // bbport: the copy writes exactly this range; textures the game moves this way can sit
+        // anywhere in it (#38: blue/white textures until re-uploaded).
+        texture_cache.InvalidateMemoryFromGPU(dst, num_bytes, true);
+    }
     const auto* gds_buffer = buffer_cache.GetGdsBuffer();
     const auto [src_buffer, src_offset] = [&] -> std::pair<const VideoCore::Buffer*, u64> {
         if (src_gds) {

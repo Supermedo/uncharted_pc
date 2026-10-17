@@ -154,12 +154,13 @@ void TextureCache::InvalidateMemory(VAddr addr, size_t size) {
     });
 }
 
-void TextureCache::InvalidateMemoryFromGPU(VAddr address, size_t max_size) {
+void TextureCache::InvalidateMemoryFromGPU(VAddr address, size_t max_size, bool whole_range) {
     std::scoped_lock lock{mutex};
     ForEachImageInRegion(address, max_size, [&](ImageId image_id, Image& image) {
-        // Only consider images that match base address.
+        // Only consider images that match base address, or with whole_range every image
+        // overlapping the written range.
         // TODO: Maybe also consider subresources
-        if (image.info.guest_address != address) {
+        if (whole_range ? !image.Overlaps(address, max_size) : image.info.guest_address != address) {
             return;
         }
         // Ensure image is reuploaded when accessed again.
