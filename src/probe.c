@@ -985,7 +985,10 @@ int main(int argc, char **argv) {
     if (getenv("BB_WATCH")) CloseHandle(CreateThread(NULL,0,watch_thread,getenv("BB_WATCH"),0,NULL));
 #endif
     /* argv: the executable and, after sceSystemServiceLoadExec, the arguments it was given
-     * (--guest-argv: one per line, the guest path first). */
+     * (--guest-argv: one per line, the guest path first). The caller's list is argv as is, its
+     * first element argv[0] (execve): the collection menu passes "eboot.bin"
+     * "ispartofuccollection", and U2 took an "eboot.bin" in argv[1] for an option and stayed
+     * on a grey screen. The path is argv[0] only when no arguments were given. */
     struct { uint64_t argc; const char *argv[34]; } params = {1, {"/app0/eboot.bin", NULL}};
     if (guest_argv_file) {
         FILE *list=fopen(guest_argv_file,"rb");
@@ -996,7 +999,10 @@ int main(int argc, char **argv) {
             params.argv[n]=lines[n]; ++n;
         }
         if (list) fclose(list);
-        if (n) { params.argc=n; params.argv[n]=NULL; }
+        if (n>1) {
+            for (uint64_t i=1;i<n;++i) params.argv[i-1]=lines[i];
+            params.argc=n-1; params.argv[n-1]=NULL;
+        } else if (n) { params.argc=1; params.argv[1]=NULL; }
         printf("Guest argv: %s (+%" PRIu64 " arguments)\n",params.argv[0],params.argc-1);
     }
 #ifdef _WIN32
