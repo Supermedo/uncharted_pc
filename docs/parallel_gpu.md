@@ -461,7 +461,7 @@ draw reuses the previous render state when the scheduler still has that exact pa
 broke it: barriers, copies and dispatches end passes), the inputs match (target ids and views,
 pipeline attachment key, scene/raster scaling and upscaler redirect state, image registry
 generation, depth control), no clear is requested, and no target is also sampled by the draw.
-States with clears are not remembered (the next draw's differs). 90% hits; 122.1 vs 111.8 FPS
+States with clears are not remembered (the next draw's state differs). 90% hits; 122.1 vs 111.8 FPS
 (+9%); screenshots on/off differ no more than two taken in the same mode (animated scene).
 
 ### Texture set memo (toggle 1 << 45)
