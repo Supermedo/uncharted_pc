@@ -1427,9 +1427,15 @@ void Rasterizer::DrawRecord(const GraphicsPipeline* pipeline, const PreparedDraw
     }
     const auto& regs = Regs();
     // bbport: the pass copying a finished frame to a display buffer; the previous draw's
-    // target is that frame.
+    // target is that frame. Uncharted draws twice into the same display buffer per frame
+    // (484cdbf5, then 749bbec9): only the first starts a frame. The second start reset the
+    // upscaler's history every frame (DLSS/FSR/TAA showed the raw jittered scene: shimmer on
+    // every edge) and skipped every other jitter phase. Toggle 1 << 59 brings it back.
     if (camera_motion->Enabled() && regs.color_buffers[0] &&
-        FrameCapture::IsDisplayBuffer(regs.color_buffers[0].Address())) {
+        FrameCapture::IsDisplayBuffer(regs.color_buffers[0].Address()) &&
+        (scene_started || regs.color_buffers[0].Address() != frame_display_address ||
+         BbToggle::Disabled(BbToggle::OneFrameStart))) {
+        frame_display_address = regs.color_buffers[0].Address();
         scene_started = false;
         camera_motion->OnDisplayPass(cb_descs[0].first);
         if (upscaler->OnFrameStart()) {
@@ -2961,6 +2967,11 @@ void Rasterizer::BindBuffers(const Shader::Info& stage, const PreparedStage* pre
                 if (ring->size == 864 && gbuffer_draw &&
                     memory->IsValidGpuMapping(ring->address, 0)) {
                     camera_motion->OnConstants(reinterpret_cast<const float*>(ring->address));
+                }
+                // Frame captures: constants copied into the ring (most per-pass constants).
+                if (FrameCapture::Active() && ring->size <= 1024) {
+                    FrameCapture::Buffer(stage.pgm_hash, binding.buffer, ring->address,
+                                         constant_ring->Data(ring->offset), ring->size);
                 }
                 push_data.AddOffset(binding.buffer, 0);
             }
