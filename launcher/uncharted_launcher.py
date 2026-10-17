@@ -51,6 +51,9 @@ GAMES = [
     ('u2', 'Among Thieves', 'Uncharted 2 · 2009', 'big2-ps4_Shipping.elf'),
     ('u3', "Drake's Deception", 'Uncharted 3 · 2011', 'big3-ps4_Shipping.elf'),
 ]
+# Each game's accent, from its world: Drake's Fortune's jungle, Among Thieves' Himalayan ice,
+# Drake's Deception's Rub' al Khali sand.
+GAME_ACCENTS = {'u1': '#a9cb86', 'u2': '#a6cbe2', 'u3': '#e8b06a'}
 # Console language (system parameter 1), as the PS4 numbers them.
 LANGUAGES = [('1', 'English (United States)'), ('18', 'English (United Kingdom)'), ('2', 'French'),
              ('22', 'French (Canada)'), ('4', 'German'), ('5', 'Italian'), ('3', 'Spanish'),
@@ -348,7 +351,15 @@ class Launcher:
         self.output = queue.Queue()
         self.ui_calls = queue.Queue()
         self.banner_key = self.banner_scaled = self.cover_image = None
-        self.card_hot = None
+        self.card_hot = self.backdrop_key = None
+        self.hero_video = self.video_photo = None
+        self.tile_clip = self.tile_clip_key = self.tile_photo = None
+        self.video_masks, self.clip_masks = {}, {}
+        try:
+            from uncharted_media import HoverMusic
+            self.music = HoverMusic(root, CONFIG_DIR / 'media-cache')
+        except Exception:
+            self.music = None
         self.info = None
         self.update_box = None
         root.title(f'{NAME} — The Nathan Drake Collection for Windows · by {AUTHOR}')
@@ -376,11 +387,13 @@ class Launcher:
             pass
 
     def load_fonts(self):
-        """Cinzel for headings (Uncharted-style capitals); Segoe UI for body text."""
+        """Cinzel for the brand (Uncharted-style capitals); M PLUS 1p (close to the PS3 system
+        font) for game names and headings; Segoe UI for body text."""
         from uncharted_fonts import font_path
 
         self.brand_family = 'Cinzel'
-        for name in ('Cinzel-Regular.ttf', 'Cinzel-SemiBold.ttf', 'Cinzel-Bold.ttf'):
+        for name in ('Cinzel-Regular.ttf', 'Cinzel-SemiBold.ttf', 'Cinzel-Bold.ttf',
+                     'MPLUS1p-Regular.ttf', 'MPLUS1p-Medium.ttf'):
             path = font_path(name)
             if path:
                 try:
@@ -389,10 +402,18 @@ class Launcher:
                     pass
         if not font_path('Cinzel-Bold.ttf'):
             self.brand_family = 'Georgia'
+        # GDI lists the medium weight as a family of its own.
+        self.ps_family = 'M PLUS 1p' if font_path('MPLUS1p-Regular.ttf') else 'Segoe UI'
+        self.ps_medium = 'M PLUS 1p Medium' if font_path('MPLUS1p-Medium.ttf') else 'Segoe UI Semibold'
         self.font_brand_xl = (self.brand_family, 24, 'bold')
         self.font_brand_lg = (self.brand_family, 18, 'bold')
         self.font_brand_md = (self.brand_family, 13, 'bold')
         self.font_brand_sm = (self.brand_family, 10)
+        self.font_game = (self.ps_medium, 13)
+        self.font_game_sub = (self.ps_family, 9)
+        self.font_hero = (self.ps_medium, 21)
+        self.font_hero_sub = (self.ps_family, 10)
+        self.font_eyebrow = (self.ps_medium, 9)
         self.font_ui = ('Segoe UI', 10)
         self.font_ui_sm = ('Segoe UI', 9)
         self.font_ui_md = ('Segoe UI Semibold', 10)
@@ -449,8 +470,7 @@ class Launcher:
         s.configure('Shell.TLabel', background=SURFACE, foreground=TEXT)
         s.configure('Muted.TLabel', background=CARD, foreground=MUTED, font=('Segoe UI', 9))
         s.configure('ShellMuted.TLabel', background=SURFACE, foreground=MUTED, font=('Segoe UI', 9))
-        s.configure('Section.TLabel', background=SURFACE, foreground=GOLD_DIM,
-                    font=(self.brand_family, 10, 'bold'))
+        s.configure('Section.TLabel', background=SURFACE, foreground=GOLD_DIM, font=(self.ps_medium, 11))
         s.configure('TCheckbutton', background=SURFACE, foreground=TEXT, padding=(0, 3))
         s.map('TCheckbutton', background=[('active', SURFACE)], foreground=[('disabled', MUTED)])
         s.configure('Ghost.TButton', background=CARD, foreground=MUTED, padding=(16, 8), borderwidth=0)
@@ -636,14 +656,19 @@ class Launcher:
         side.pack(side='left', fill='y')
         side.pack_propagate(False)
         brand_wrap = side_w - 36
-        tk.Label(side, text='UNCHARTED', bg=BG, fg=GOLD, font=self.font_brand_lg, anchor='w').pack(
-            anchor='w', padx=18, pady=(28, 0))
-        tk.Label(side, text='NATHAN DRAKE', bg=BG, fg=MUTED, font=self.font_brand_sm, anchor='w').pack(
-            anchor='w', padx=18, pady=(8, 0))
-        tk.Label(side, text='COLLECTION', bg=BG, fg=MUTED, font=self.font_brand_sm, anchor='w').pack(
-            anchor='w', padx=18, pady=(1, 0))
+        try:
+            # The logo-style heading: spaced gold capitals over the collection's name.
+            from PIL import ImageTk
+            import uncharted_art
+            self.brand_image = ImageTk.PhotoImage(uncharted_art.brand_heading(brand_wrap, self.dpi))
+            tk.Label(side, image=self.brand_image, bg=BG, bd=0).pack(anchor='w', padx=18, pady=(28, 0))
+        except Exception:
+            tk.Label(side, text='UNCHARTED', bg=BG, fg=GOLD, font=self.font_brand_lg, anchor='w').pack(
+                anchor='w', padx=18, pady=(28, 0))
+            tk.Label(side, text='NATHAN DRAKE COLLECTION', bg=BG, fg=MUTED, font=self.font_brand_sm,
+                     anchor='w').pack(anchor='w', padx=18, pady=(8, 0))
         tk.Label(side, text=_('by {}').format(AUTHOR), bg=BG, fg=TEXT, font=self.font_ui_md,
-                 anchor='w', wraplength=brand_wrap, justify='left').pack(anchor='w', padx=18, pady=(10, 0))
+                 anchor='w', wraplength=brand_wrap, justify='left').pack(anchor='w', padx=18, pady=(14, 0))
         tk.Label(side, text=_('version {}').format(VERSION), bg=BG, fg='#5c564c', font=self.font_ui_sm,
                  anchor='w').pack(anchor='w', padx=18, pady=(1, 16))
         tk.Frame(side, bg=LINE, height=1).pack(fill='x', padx=18, pady=(0, 14))
@@ -733,8 +758,14 @@ class Launcher:
         if self.card_hot == key:
             return
         self.card_hot = key
-        for name in self.cards:
-            self.draw_card(name)
+        if key:
+            self.backdrop_key = key  # the background stays until another game is hovered
+        if self.tile_clip and self.tile_clip_key != key:
+            self.stop_tile_clip()
+        self.stage.configure(cursor='hand2' if key else '')
+        self.draw_stage()
+        if self.music:
+            self.music.hover(None if self.process else key)
 
     def show(self, name):
         for page in self.pages.values():
@@ -745,39 +776,33 @@ class Launcher:
             self._nav_style(n, active=(n == name))
         if name == 'play':
             self.refresh()
+        else:
+            self.quiet_media()
+
+    def quiet_media(self):
+        """No music or cover video, and the header video paused, away from the Play page or while
+        a game runs."""
+        if self.music:
+            self.music.stop()
+        if self.hero_video:
+            self.hero_video.pause(True)
+        self.stop_tile_clip()
+
+    def stop_tile_clip(self):
+        if self.tile_clip:
+            self.tile_clip.stop()
+        self.tile_clip = self.tile_clip_key = self.tile_photo = None
 
     def build_play(self):
-        tk, ttk = self.tk, self.ttk
+        tk = self.tk
         page = tk.Frame(self.content, bg=SURFACE)
         self.pages['play'] = page
-        self.hero = tk.Canvas(page, height=self.px(260), bg=SURFACE, highlightthickness=0, bd=0)
-        self.hero.pack(fill='x')
-        self.hero.bind('<Configure>', self._sync_hero_height)
-        shell = tk.Frame(page, bg=SURFACE)
-        shell.pack(fill='both', expand=True, padx=self.px(22), pady=(self.px(6), self.px(10)))
-        head = tk.Frame(shell, bg=SURFACE)
-        head.pack(fill='x', padx=self.px(22), pady=(self.px(14), self.px(8)))
-        tk.Label(head, text=_('Library'), bg=SURFACE, fg=TEXT,
-                 font=('Segoe UI Semibold', 14)).pack(side='left')
-        tk.Label(head, text=_('Double-click a cover to launch'), bg=SURFACE, fg=MUTED,
-                 font=self.font_ui_sm).pack(side='right')
-        cards = tk.Frame(shell, bg=SURFACE)
-        cards.pack(fill='x', padx=self.px(14), pady=(0, self.px(6)))
-        self.cards, self.card_images = {}, {}
-        for column, (key, _title, _subtitle, _exe) in enumerate(GAMES):
-            cards.columnconfigure(column, weight=1, uniform='games')
-            card = tk.Canvas(cards, height=self.px(460), bg=SURFACE, highlightthickness=0, bd=0, cursor='hand2')
-            card.grid(row=0, column=column, sticky='nsew', padx=(0 if column == 0 else 18, 0))
-            card.bind('<Configure>', lambda _e, k=key: self.draw_card(k))
-            card.bind('<Button-1>', lambda _e, k=key: self.var('start').set(k))
-            card.bind('<Double-Button-1>', lambda _e, k=key: (self.var('start').set(k), self.play()))
-            card.bind('<Enter>', lambda _e, k=key: self._card_hover(k))
-            card.bind('<Leave>', lambda _e, k=key: self._card_hover(None))
-            self.cards[key] = card
-        cards.bind('<Configure>', self.fit_posters)
-        tk.Frame(shell, bg=SURFACE, height=1).pack(fill='x', padx=self.px(22), pady=(self.px(4), self.px(8)))
-        row = tk.Frame(shell, bg=SURFACE)
-        row.pack(fill='x', padx=self.px(22), pady=(0, self.px(8)))
+        # Under the covers: ordinary widgets on the page colour (the backdrop has faded out there).
+        self.ready = tk.Label(page, text='', bg=SURFACE, fg=MUTED, font=self.font_ui_sm,
+                              wraplength=self.px(820), justify='left')
+        self.ready.pack(side='bottom', anchor='w', padx=self.px(44), pady=(0, self.px(16)))
+        row = tk.Frame(page, bg=SURFACE)
+        row.pack(side='bottom', fill='x', padx=self.px(44), pady=(self.px(4), self.px(8)))
         self.toggle(row, self.var('fullscreen'), SURFACE).pack(side='left')
         fullscreen = tk.Label(row, text=_('Fullscreen'), bg=SURFACE, fg=TEXT, font=self.font_ui, cursor='hand2')
         fullscreen.pack(side='left', padx=(self.px(10), 0))
@@ -786,29 +811,29 @@ class Launcher:
             side='left', padx=(self.px(24), 0))
         self.pill(row, _('Desktop shortcut'), self.shortcut, background=SURFACE, padding=(14, 6)).pack(
             side='left', padx=(self.px(8), 0))
-        self.ready = tk.Label(shell, text='', bg=SURFACE, fg=MUTED, font=self.font_ui_sm,
-                              wraplength=self.px(820), justify='left')
-        self.ready.pack(anchor='w', padx=self.px(22), pady=(0, self.px(16)))
+        # The header, the library heading and the covers share one canvas, so the game's
+        # background picture runs behind all of them.
+        self.stage = tk.Canvas(page, bg=SURFACE, highlightthickness=0, bd=0)
+        self.stage.pack(fill='both', expand=True)
+        self.stage.bind('<Configure>', lambda _e: self.draw_stage())
+        self.stage.bind('<Motion>', lambda e: self._card_hover(self.card_at(e.x, e.y)))
+        self.stage.bind('<Leave>', lambda _e: self._card_hover(None))
+        self.stage.bind('<Button-1>', lambda e: self.pick_card(e.x, e.y))
+        self.stage.bind('<Double-Button-1>', lambda e: self.pick_card(e.x, e.y, play=True))
+        self.cards = {key: None for key, _t, _s, _e in GAMES}  # stage area of each cover
+        self.card_images, self.backdrops = {}, {}
         self.var('start').trace_add('write', lambda *_a: self.refresh())
 
-    def fit_posters(self, _event=None):
-        """Poster tiles keep the cover shape, but stay short enough that the caption is on screen."""
-        sample = self.cards.get('u1')
-        if sample is None:
-            return
-        width = sample.winfo_width()
-        if width < 80:
-            return
-        page = self.pages.get('play')
-        natural = int(round(width * 365 / 273)) + self.px(78)
-        avail = natural
-        if page is not None and page.winfo_height() > 240:
-            # Leave the library heading, the fullscreen row, and the status line on screen.
-            avail = page.winfo_height() - self.hero.winfo_height() - self.px(196)
-        total = max(self.px(168), min(natural, avail))
-        for card in self.cards.values():
-            if int(card['height']) != total:
-                card.configure(height=total)
+    def card_at(self, x, y):
+        return next((key for key, box in self.cards.items()
+                     if box and box[0] <= x < box[2] and box[1] <= y < box[3]), None)
+
+    def pick_card(self, x, y, play=False):
+        key = self.card_at(x, y)
+        if key:
+            self.var('start').set(key)
+            if play:
+                self.play()
 
     def _tile_content_size(self, canvas_w, canvas_h):
         """Size passed to poster_tile so the bitmap, including its shadow pad, stays inside the card."""
@@ -821,74 +846,259 @@ class Launcher:
             inner_h -= 2
         return inner_w, inner_h
 
-    def draw_card(self, key):
-        """Rounded cover tile with shadow; gold ring when selected."""
-        card = self.cards[key]
-        w, h = card.winfo_width(), card.winfo_height()
-        if w < 48 or h < 48:
+    def draw_stage(self):
+        """The Play page above the controls: the plain banner until a cover is hovered, then that
+        game's background over its top part (it stays until another game is hovered); the header
+        names; the library heading; the covers."""
+        c = self.stage
+        w, h = c.winfo_width(), c.winfo_height()
+        if w < 200 or h < 200:
             return
+        c.delete('all')
+        start = self.var('start').get()
+        shown = self.card_hot or self.backdrop_key or start
+        title, subtitle = next((t, sub) for k, t, sub, _e in GAMES if k == shown)
+        hero_h = max(self.px(180), min(self.px(280), int(w * 576 / 1024)))
+        # A little more than half of the page, fading out over its lower part.
+        backdrop = self.backdrop_key and self.photo_backdrop(
+            self.backdrop_key, w, min(h, int(self.pages['play'].winfo_height() * 0.62)))
+        if backdrop:
+            c.create_image(0, 0, image=backdrop, anchor='nw')
+            self.sync_hero_video(w, hero_h, start, hidden=True)
+        else:
+            self.draw_banner(w, hero_h, start)
+        info = self.info
+        meta = (f"{info['id']}  ·  {_('version')} {info['version']}" if info
+                else _('Set your game folder on the Game page'))
+        # The game's block, store-page style, on the same left edge as the library below: a short
+        # rule and the series line in the game's accent, the title, then the folder status.
+        accent, x0 = GAME_ACCENTS.get(shown, GOLD), self.px(44)
+        meta_y = hero_h - self.px(18)
+        title_y = meta_y - self.px(24)
+        eyebrow_y = title_y - self.px(38)
+        self.shadow_text(x0, meta_y, meta, 'sw', '#b3ab9d', self.font_hero_sub)
+        self.shadow_text(x0, title_y, _(title), 'sw', '#f6f1e6', self.font_hero)
+        self.shadow_text(x0, eyebrow_y, _(subtitle).upper(), 'sw', accent, self.font_eyebrow)
+        rule_y = eyebrow_y - self.px(22)
+        c.create_rectangle(x0, rule_y, x0 + self.px(28), rule_y + max(2, self.px(2)), fill=accent, outline='')
+        heading_y = hero_h + self.px(36)
+        self.shadow_text(self.px(44), heading_y, _('Library'), 'w', TEXT, (self.ps_medium, 14))
+        self.shadow_text(w - self.px(44), heading_y, _('Double-click a cover to launch'), 'e', '#aaa49a',
+                         self.font_ui_sm)
+        # Three columns as the old card grid had them; tiles keep the cover shape but stay short
+        # enough that their names are on screen.
+        top, left, gap = hero_h + self.px(58), self.px(36), self.px(18)
+        col_w = (w - 2 * left - 2 * gap) // 3
+        natural = int(round(col_w * 365 / 273)) + self.px(78)
+        tile_h = max(self.px(168), min(natural, h - top - self.px(6)))
+        for column, (key, _t, _s, _e) in enumerate(GAMES):
+            x = left + column * (col_w + gap)
+            self.cards[key] = (x, top, x + col_w, top + tile_h)
+            self.draw_card(key, x, top, col_w, tile_h)
+
+    def shadow_text(self, x, y, text, anchor, fill, font):
+        """Text that stays readable over a bright background: a soft dark copy one pixel below."""
+        offset = max(1, self.px(1))
+        self.stage.create_text(x + offset, y + offset, text=text, anchor=anchor, fill='#000000', font=font)
+        self.stage.create_text(x, y, text=text, anchor=anchor, fill=fill, font=font)
+
+    def draw_card(self, key, x, y, w, h):
+        """Rounded cover tile with shadow (see-through around it); gold ring when selected."""
+        c = self.stage
         title, subtitle = next((t, sub) for k, t, sub, _e in GAMES if k == key)
         info = self.info
         present = (not info) or key in info['games']
         chosen = key == self.var('start').get()
         hot = key == self.card_hot
         inner_w, inner_h = self._tile_content_size(w, h)
+        try:
+            import uncharted_art
+            aspect = uncharted_art.poster_aspect(key)
+        except ImportError:
+            aspect = None
+        if aspect:
+            # The tile takes the cover's own shape, so the picture fills it whole: no strips.
+            inner_w = min(inner_w, max(48, round((inner_h - self.px(62)) * aspect)))
         page = tuple(int(SURFACE[i:i + 2], 16) for i in (1, 3, 5))
         wanted = (inner_w, inner_h, present, chosen, hot)
         if self.card_images.get(key, (None,))[0] != wanted:
-            image = None
+            image = strip = None
             try:
                 from PIL import ImageTk
                 import uncharted_art
                 scene = uncharted_art.poster_tile(key, inner_w, inner_h, title, subtitle, selected=chosen,
-                                                  hover=hot and not chosen, dimmed=not present, page=page)
-                image = ImageTk.PhotoImage(scene)
+                                                  hover=hot and not chosen, dimmed=not present, page=page,
+                                                  caption=self.px(62), transparent=True)
+                image, strip, poster = ImageTk.PhotoImage(scene), scene.info.get('caption'), scene.info.get('poster')
             except Exception:
-                image = None
-            self.card_images[key] = (wanted, image)
-        card.delete('all')
-        image = self.card_images[key][1]
-        if image:
-            x = max(0, (w - image.width()) // 2)
-            card.create_image(x, 0, image=image, anchor='nw')
-        else:
-            card.create_rectangle(0, 0, w, h, fill=CARD, outline=LINE)
+                image = strip = poster = None
+            self.card_images[key] = (wanted, image, strip, poster)
+        _wanted, image, strip, poster = self.card_images[key]
+        if not image:
+            c.create_rectangle(x, y, x + w, y + h, fill=CARD, outline=LINE)
+            return
+        x += max(0, (w - image.width()) // 2)
+        c.create_image(x, y, image=image, anchor='nw')
+        if hot and poster and not self.process:
+            self.draw_tile_clip(key, x + poster[0], y + poster[1], poster[2], poster[3])
+        if strip:
+            # The names as system text: sharp at every size, unlike text drawn into the picture.
+            left, top, width, height = strip
+            middle = x + left + width // 2
+            fg = GOLD if chosen else (GAME_ACCENTS.get(key, TEXT) if hot else '#e4ded2') if present else MUTED
+            c.create_text(middle, y + top + height * 0.40, text=_(title), fill=fg, font=self.font_game,
+                          anchor='center', width=width - self.px(16))
+            c.create_text(middle, y + top + height * 0.76, text=_(subtitle), fill=GOLD_DIM if chosen else MUTED,
+                          font=self.font_game_sub, anchor='center')
 
-    def _sync_hero_height(self, _event=None):
-        """Keep the header at the banner's 16:9 aspect ratio."""
-        c = self.hero
-        w = max(c.winfo_width(), 400)
-        h = max(self.px(180), min(self.px(280), int(w * 576 / 1024)))
-        if int(c['height']) != h:
-            c.configure(height=h)
-        self.draw_hero()
+    def draw_tile_clip(self, key, x, y, w, h):
+        """The hovered game's video (art folder: u1_video.mp4 …) over its cover picture, like the
+        PS3 menu's: in its own wide shape across the middle, the dimmed cover above and below,
+        within the cover's rounded corners. The cover shows until the first frame arrives (the
+        picture starts see-through)."""
+        try:
+            from PIL import ImageTk
+            import uncharted_media
+        except ImportError:
+            return
+        clip = self.tile_clip
+        if not clip or self.tile_clip_key != key:
+            path = uncharted_media.clip_for(key)
+            if not path:
+                return
+            self.stop_tile_clip()
+            self.tile_clip_key = key
+            self.tile_clip = clip = uncharted_media.VideoClip(path, (w, h), self.round_clip,
+                                                              CONFIG_DIR / 'media-cache', cover=False,
+                                                              fill=self.dimmed_cover(key))
+            self.root.after(15, lambda: self.pump_tile_clip(clip))
+        if clip.failed:
+            return
+        clip.resize((w, h))
+        if not self.tile_photo or (self.tile_photo.width(), self.tile_photo.height()) != (w, h):
+            self.tile_photo = ImageTk.PhotoImage('RGBA', (w, h))
+        self.stage.create_image(x, y, image=self.tile_photo, anchor='nw')
 
-    def draw_hero(self):
-        """Collection banner up top; selected game and folder status along the bottom edge."""
-        c = self.hero
-        c.delete('all')
-        w, h = max(c.winfo_width(), 400), int(c['height'])
-        start = self.var('start').get()
-        title, subtitle = next((t, sub) for k, t, sub, _e in GAMES if k == start)
+    def pump_tile_clip(self, clip):
+        """Show the newest frame of the cover's video; runs while that video is the current one."""
+        if clip is not self.tile_clip:
+            return
+        frame = clip.latest()
+        photo = self.tile_photo
+        if frame is not None and photo and frame.size == (photo.width(), photo.height()):
+            photo.paste(frame)
+        self.root.after(15, lambda: self.pump_tile_clip(clip))
+
+    @staticmethod
+    def dimmed_cover(key):
+        """What shows above and below the wide video in a cover (helper thread): the cover
+        itself, darkened so the video stands out."""
+        cache = {}
+
+        def fill(size):
+            if cache.get('size') != size:
+                from PIL import Image
+                import uncharted_art
+                cover = uncharted_art.card_scene(key, *size)
+                cache.update(size=size, image=Image.blend(cover, Image.new('RGB', size, (6, 5, 4)), 0.6))
+            return cache['image']
+        return fill
+
+    def round_clip(self, image):
+        """Cover video frames (helper thread): the cover's rounded corners."""
+        from uncharted_art import rounded_mask
+        if self.clip_masks.get('size') != image.size:
+            self.clip_masks = {'size': image.size, 'mask': rounded_mask(image.size, 16)}
+        image = image.convert('RGBA')
+        image.putalpha(self.clip_masks['mask'])
+        return image
+
+    def photo_backdrop(self, key, width, height):
+        """The game's background picture (art folder: u1_background.jpg …), faded into the page;
+        None when there is none. Kept per game, so moving between covers is instant."""
+        wanted = (key, width, height)
+        if wanted not in self.backdrops:
+            if any(k[1:] != wanted[1:] for k in self.backdrops):
+                self.backdrops.clear()  # the window changed size
+            photo = None
+            try:
+                from PIL import ImageTk
+                import uncharted_art
+                page = tuple(int(SURFACE[i:i + 2], 16) for i in (1, 3, 5))
+                scene = uncharted_art.game_backdrop(key, width, height, page)
+                photo = ImageTk.PhotoImage(scene) if scene is not None else None
+            except Exception:
+                photo = None
+            self.backdrops[wanted] = photo
+        return self.backdrops[wanted]
+
+    def draw_banner(self, w, h, start):
+        """No game background: the collection banner (or the dump's pic1.png) and the header video
+        in the top band, with the gold rule under it."""
+        c = self.stage
         game_dir = self.var('game_dir').get()
-        key = (w, h, start, game_dir)
+        key = (w, h, game_dir)
         if self.banner_key != key:
             self.banner_key = key
             # The collection banner when this machine has it (launcher art is not distributed),
             # otherwise the background art of the player's own dump.
             self.banner_scaled = self.photo_collection_banner(w, h) or \
-                self.scaled_art(Path(game_dir or '.') / 'sce_sys' / 'pic1.png', w)
-            self.cover_image = None
+                self.scaled_art(Path(game_dir or '.') / 'sce_sys' / 'pic1.png', w, h)
         if self.banner_scaled:
             c.create_image(w // 2, h // 2, image=self.banner_scaled)
+        if self.sync_hero_video(w, h, start):
+            c.create_image(w // 2, h // 2, image=self.video_photo)  # blank (see-through) until a frame
         c.create_rectangle(0, h - 1, w, h, fill=GOLD_DIM, outline='')
-        info = self.info
-        sub = (f"{info['id']}  ·  {_('version')} {info['version']}" if info
-               else _('Set your game folder on the Game page'))
-        c.create_text(self.px(24), h - self.px(14), text=sub, anchor='sw', fill=GOLD,
-                      font=self.font_brand_sm)
-        c.create_text(w - self.px(24), h - self.px(14), text=f'{_(title)}  ·  {_(subtitle)}',
-                      anchor='se', fill='#f6f1e6', font=self.font_brand_md)
+
+    def sync_hero_video(self, w, h, start, hidden=False):
+        """The selected game's video (else the background video) of the art folder, playing in the
+        header; paused while `hidden` (a game background covers the header). Returns the player,
+        or None when there is no video or PyAV is missing."""
+        try:
+            import uncharted_media
+            path = uncharted_media.header_video()
+        except Exception:
+            uncharted_media, path = None, None
+        video = self.hero_video
+        if video and (video.path != path or video.failed):
+            video.stop()
+            self.hero_video = video = None
+        if path and not video:
+            self.hero_video = video = uncharted_media.VideoClip(path, (w, h), self.shade_video,
+                                                                  CONFIG_DIR / 'media-cache')
+            self.root.after(15, lambda: self.pump_video(video))
+        if not video:
+            return None
+        video.resize((w, h))
+        video.pause(hidden or self.current_page not in (None, 'play') or bool(self.process))
+        if not self.video_photo or (self.video_photo.width(), self.video_photo.height()) != (w, h):
+            from PIL import ImageTk
+            self.video_photo = ImageTk.PhotoImage('RGB', (w, h))
+        return video
+
+    def pump_video(self, video):
+        """Show the newest decoded frame; runs while this player is the header's."""
+        if video is not self.hero_video:
+            return
+        frame = video.latest()
+        photo = self.video_photo
+        if frame is not None and photo and frame.size == (photo.width(), photo.height()):
+            photo.paste(frame)
+        self.root.after(15, lambda: self.pump_video(video))
+
+    def shade_video(self, image):
+        """Video frames (helper thread): a little darker, faded into the page along the bottom so
+        the names stay readable, like the still banner."""
+        from PIL import Image
+        masks = self.video_masks
+        if masks.get('size') != image.size:
+            page = tuple(int(BG[i:i + 2], 16) for i in (1, 3, 5))
+            fade = Image.linear_gradient('L').resize(image.size)
+            masks.update(size=image.size, page=Image.new('RGB', image.size, page),
+                         dark=Image.new('RGB', image.size, (6, 5, 4)),
+                         fade=fade.point(lambda v: 0 if v < 110 else min(255, (v - 110) * 255 // 140)))
+        image = Image.blend(image, masks['dark'], 0.22)
+        return Image.composite(masks['page'], image, masks['fade'])
 
     def photo_collection_banner(self, width, height):
         try:
@@ -899,9 +1109,6 @@ class Launcher:
             return ImageTk.PhotoImage(scene) if scene is not None else None
         except Exception:
             return None
-
-    def draw_banner(self):
-        self.draw_hero()
 
     def photo_hero(self, key, width, height):
         """Blurred cover backdrop when the dump has no pic1.png."""
@@ -926,11 +1133,10 @@ class Launcher:
         except Exception:
             return None
 
-    def scaled_art(self, path, width):
+    def scaled_art(self, path, width, height):
         """The art cut to the banner, darkened (the parchment is light) and faded into the page."""
         try:
             from PIL import Image, ImageTk
-            height = int(self.hero['height'])
             with Image.open(path) as image:
                 scaled = image.convert('RGB').resize((width, round(image.height * width / image.width)), Image.LANCZOS)
             top = max(0, (scaled.height - height) // 10)  # pic1's figure has its face near the top
@@ -1193,8 +1399,6 @@ class Launcher:
         self.info = game_info(self.var('game_dir').get())
         info = self.info
         start = self.var('start').get()
-        for key in self.cards:
-            self.draw_card(key)
         if not info:
             ready = _('Choose the game folder (the one with eboot.bin) on the Game page.')
         else:
@@ -1207,7 +1411,7 @@ class Launcher:
             title = next(t for k, t, _s, _e in GAMES if k == start)
             self.status.configure(text=_('Ready: {}').format(title) if info else _('No game folder yet.'),
                                   fg=MUTED)
-        self.draw_hero()
+        self.draw_stage()
 
     # ---- actions -----------------------------------------------------------------------------
     def collect(self):
@@ -1244,6 +1448,7 @@ class Launcher:
             self.process = None
             return
         self.job = GameJob(self.process)
+        self.quiet_media()
         self.entered, self.last_problem, self.stopping = False, '', False
         threading.Thread(target=self.read_output, args=(self.process,), daemon=True).start()
         self.play_button.configure(state='disabled')
@@ -1506,6 +1711,11 @@ class Launcher:
             self.collect()
         except Exception:  # never keep the window open over a settings problem
             pass
+        if self.music:
+            self.music.stop()
+        if self.hero_video:
+            self.hero_video.stop()
+        self.stop_tile_clip()
         self.root.destroy()
 
 
