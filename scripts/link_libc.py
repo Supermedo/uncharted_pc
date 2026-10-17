@@ -199,12 +199,15 @@ def link(game, out):
                   tls_template_bytes=tls['filesz'],tls_memory_bytes=tls['memsz'],
                   imports=names,relocation_counts=dict(collections.Counter(r[1] for r in libc['relocs'])),
                   symbol_bindings=[dict(import_name=names[i],address=hex(a),kind=k) for i,a,k in bindings])
-    (out/'libc-link.json').write_text(json.dumps(report,indent=2)+'\n')
+    (out/'libc-link.json').write_text(json.dumps(report,indent=2)+'\n',encoding='utf-8')
     print(f'Linked native libc: base={base:#x}, {len(bindings)} fallback exports, TLS={tls["memsz"]} bytes; '
           f'eboot TLS={main_tls_values[2]} bytes, fs->gs patched={patched}')
 
 
 if __name__=='__main__':
+    import sys
+    for _s in (sys.stdout, sys.stderr):  # console may be GBK etc.: titles carry a trademark sign
+        if _s: _s.reconfigure(encoding='utf-8', errors='replace')
     import argparse
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('game',type=Path);p.add_argument('--out',type=Path,default=Path(__file__).resolve().parent.parent/'out')

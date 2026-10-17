@@ -97,8 +97,9 @@ static SDL_Gamepad *current_gamepad(void) {
     }
     return gamepad;
 }
-/* Degrees of camera turn per mouse pixel at sensitivity 1. */
-#define MOUSE_DEGREES_PER_PIXEL 0.08f
+/* Degrees of camera turn per mouse pixel at sensitivity 1 (0.08 felt "very slow", issue #18; the
+ * launcher's slider and box go from 0.1 to 10 times this). */
+#define MOUSE_DEGREES_PER_PIXEL 0.15f
 
 /* ---- bindings (input.ini) ---------------------------------------------------------------- */
 enum { BIND_KEY=1, BIND_MOUSE, BIND_WHEEL };

@@ -100,7 +100,7 @@ UI_HEIGHT=0x0235855D-EBOOT_BASE
 def read_settings(path):
     settings={}
     if path.exists():
-        for line in path.read_text().splitlines():
+        for line in path.read_text(encoding='utf-8', errors='replace').splitlines():
             key,sep,value=line.partition('=')
             if sep and not line.startswith('#'): settings[key.strip()]=value.strip()
     return settings
@@ -236,7 +236,7 @@ def external_selection(found, config):
     each file's isEnabled."""
     settings={}
     if config and Path(config).is_file():
-        settings=json.loads(Path(config).read_text())
+        settings=json.loads(Path(config).read_text(encoding='utf-8-sig'))
     enabled,disabled=set(settings.get('enabled',[])),set(settings.get('disabled',[]))
     return [(key,path,meta) for key,path,meta in found
             if key in enabled or (key not in disabled and meta.get('isEnabled','false').lower()=='true')]
@@ -331,4 +331,6 @@ def main():
 
 
 if __name__=='__main__':
+    for _s in (sys.stdout, sys.stderr):  # console may be GBK etc.: titles carry a trademark sign
+        if _s: _s.reconfigure(encoding='utf-8', errors='replace')
     main()
