@@ -147,6 +147,24 @@ def _(text):
     return text
 
 
+def _run_problem_priority(line):
+    if line.startswith(('STOP:', 'GPU crash:')):
+        return 3
+    if line.startswith(('ERROR', 'Fault:', 'No eboot.bin', 'No big', 'Set BB_GAME_DIR',
+                        'bb-probe.exe not found')):
+        return 2
+    if 'failed' in line and not line.startswith('GPU ['):
+        return 1
+    return 0
+
+
+def select_run_problem(current, output):
+    """Keep the most useful diagnostic emitted before the game exits."""
+    line = output.strip()
+    line_priority = _run_problem_priority(line)
+    return line if line_priority and line_priority >= _run_problem_priority(current) else current
+
+
 # ---------------------------------------------------------------------------------------------
 # Command line roles of the frozen executable.
 
@@ -1366,11 +1384,7 @@ class Launcher:
                         self.show('log')
                 else:
                     stripped = item.strip()
-                    if stripped.startswith(('STOP:', 'ERROR', 'GPU crash: the', 'Fault:')) or \
-                            ('failed' in stripped and not stripped.startswith('GPU [')) or \
-                            stripped.startswith(('No eboot.bin', 'No big', 'Set BB_GAME_DIR', 'bb-probe.exe not found')):
-                        if not self.last_problem or stripped.startswith(('STOP:', 'GPU crash')):
-                            self.last_problem = stripped
+                    self.last_problem = select_run_problem(self.last_problem, stripped)
                     if 'Entering original x86-64 code' in item:
                         self.entered = True
                         self.status.configure(text=_('The game is running.'), fg=GOLD)
