@@ -123,6 +123,9 @@ def main():
     env.setdefault('BB_VELOCITY_PS', 'f4b18264')
     env.setdefault('BB_UPSCALE_BEFORE_CS', 'aec539f0')
     env.setdefault('BB_HUDLESS_PS', '484cdbf5')
+    # Full-screen passes that rebuild positions from the jittered scene depth get the upscaler's
+    # jitter too: the sun shadow pass (without it its shadows flickered under FSR and TAA).
+    env.setdefault('BB_JITTER_PS', 'f614041e')
     if not env.get('BB_FSR411_DIR') and not (PORT / 'fsr4_411').is_dir() and (data / 'fsr4_411').is_dir():
         env['BB_FSR411_DIR'] = str(data / 'fsr4_411')
 

@@ -1,7 +1,12 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <array>
+#include <atomic>
+#include <chrono>
+#include <cstring>
 #include <map>
+#include <mutex>
 #include "core/libraries/videoout/driver.h"
 #include <xxhash.h>
 #include "video_core/renderer_vulkan/ui_composition.h"
@@ -1255,9 +1260,140 @@ static u32 ForceUploadVs(bool index) {
     return (setting.second & (index ? 1 : 2)) ? setting.first : 0;
 }
 
+// bbport diagnosis: BB_SHADER_DEBUG_FILE=<file>, re-read every 250 ms while the game runs, so a
+// visual problem can be bisected without restarting: "skip <hash>,..." works like
+// BB_SKIP_SHADERS, "trace <hash>" like BB_TRACE_SHADER (the next 8 draws after each change).
+namespace {
+struct LiveShaderDebug {
+    static constexpr u32 MaxSkipped = 256;
+    std::array<std::atomic<u64>, MaxSkipped> skipped{};
+    std::atomic<u32> num_skipped{0};
+    std::atomic<u64> trace{0};
+    std::atomic<u32> trace_generation{0};
+    // "jitter <hash>,...": full-screen passes of these pixel shaders get the upscaler's jitter.
+    static constexpr u32 MaxJittered = 16;
+    std::array<std::atomic<u64>, MaxJittered> jittered{};
+    std::atomic<u32> num_jittered{0};
+    std::atomic<s64> next_read_ns{0};
+    std::mutex read_mutex;
+};
+
+const char* LiveShaderDebugFile() {
+    static const char* path = std::getenv("BB_SHADER_DEBUG_FILE");
+    return path;
+}
+
+LiveShaderDebug& LiveDebug() {
+    static LiveShaderDebug state;
+    const char* path = LiveShaderDebugFile();
+    const s64 now = std::chrono::steady_clock::now().time_since_epoch().count();
+    if (!path || now < state.next_read_ns.load(std::memory_order_relaxed) ||
+        !state.read_mutex.try_lock()) {
+        return state;
+    }
+    std::scoped_lock lk{std::adopt_lock, state.read_mutex};
+    state.next_read_ns.store(now + 250'000'000, std::memory_order_relaxed);
+    std::vector<u64> skip, jitter;
+    u64 trace = 0;
+    if (FILE* f = std::fopen(path, "r")) {
+        char line[4096];
+        while (std::fgets(line, sizeof(line), f)) {
+            const bool is_skip = std::strncmp(line, "skip ", 5) == 0;
+            const bool is_jitter = std::strncmp(line, "jitter ", 7) == 0;
+            if (!is_skip && !is_jitter && std::strncmp(line, "trace ", 6) != 0) {
+                continue;
+            }
+            for (const char* p = line + (is_skip ? 5 : is_jitter ? 7 : 6); *p;) {
+                char* end;
+                const u64 value = std::strtoull(p, &end, 16);
+                if (end == p) {
+                    break;
+                }
+                if (is_skip) {
+                    skip.push_back(value);
+                } else if (is_jitter) {
+                    jitter.push_back(value);
+                } else {
+                    trace = value;
+                }
+                p = *end == ',' ? end + 1 : end;
+            }
+        }
+        std::fclose(f);
+    }
+    const u32 count = std::min<u32>(u32(skip.size()), LiveShaderDebug::MaxSkipped);
+    state.num_skipped.store(0, std::memory_order_release);
+    for (u32 i = 0; i < count; ++i) {
+        state.skipped[i].store(skip[i], std::memory_order_relaxed);
+    }
+    state.num_skipped.store(count, std::memory_order_release);
+    const u32 jitter_count = std::min<u32>(u32(jitter.size()), LiveShaderDebug::MaxJittered);
+    if (jitter_count != state.num_jittered.load(std::memory_order_relaxed)) {
+        std::printf("Shader debug: jittering %u full-screen shaders\n", jitter_count);
+    }
+    state.num_jittered.store(0, std::memory_order_release);
+    for (u32 i = 0; i < jitter_count; ++i) {
+        state.jittered[i].store(jitter[i], std::memory_order_relaxed);
+    }
+    state.num_jittered.store(jitter_count, std::memory_order_release);
+    if (state.trace.exchange(trace, std::memory_order_relaxed) != trace) {
+        state.trace_generation.fetch_add(1, std::memory_order_relaxed);
+        std::printf("Shader debug: skipping %u shaders, tracing %08x\n", count, u32(trace));
+    }
+    return state;
+}
+} // namespace
+
+// bbport: BB_JITTER_PS=<pixel shader hash>,... (run.py, Uncharted): full-screen passes that
+// rebuild positions from the scene depth through an interpolated texture coordinate, jittered
+// like the scene geometry. Unjittered, they reconstructed each pixel from depth that was
+// rendered half a pixel away: the sun shadow pass (f614041e) moved against the geometry with
+// every jitter step and flickered under FSR and TAA, worst on the largest steps (every 4th
+// frame). The live "jitter" line of BB_SHADER_DEBUG_FILE adds shaders for tests.
+static bool JitterFullScreenPass(u64 hash) {
+    static const std::vector<u64> listed = [] {
+        std::vector<u64> list;
+        if (const char* env = std::getenv("BB_JITTER_PS")) {
+            for (const char* p = env; *p;) {
+                char* end;
+                const u64 value = std::strtoull(p, &end, 16);
+                if (end == p) {
+                    break;
+                }
+                list.push_back(u64(u32(value)));
+                p = *end == ',' ? end + 1 : end;
+            }
+        }
+        return list;
+    }();
+    if (std::find(listed.begin(), listed.end(), u64(u32(hash))) != listed.end()) {
+        return true;
+    }
+    if (!LiveShaderDebugFile()) {
+        return false;
+    }
+    auto& live = LiveDebug();
+    const u32 count = live.num_jittered.load(std::memory_order_acquire);
+    for (u32 i = 0; i < count; ++i) {
+        if (u32(live.jittered[i].load(std::memory_order_relaxed)) == u32(hash)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 // bbport: BB_SKIP_SHADERS=<hash>,...: draws and dispatches of these pixel/compute shaders
 // are not recorded (diagnostic: which pass of a frame causes a visual problem).
 static bool SkipShader(u64 hash) {
+    if (hash && LiveShaderDebugFile()) {
+        auto& live = LiveDebug();
+        const u32 count = live.num_skipped.load(std::memory_order_acquire);
+        for (u32 i = 0; i < count; ++i) {
+            if (u32(live.skipped[i].load(std::memory_order_relaxed)) == u32(hash)) {
+                return true;
+            }
+        }
+    }
     static const std::vector<u64> skipped = [] {
         std::vector<u64> list;
         if (const char* env = std::getenv("BB_SKIP_SHADERS")) {
@@ -1566,6 +1702,9 @@ void Rasterizer::DrawRecord(const GraphicsPipeline* pipeline, const PreparedDraw
     draw_jitter = {};
     if (upscaler->Enabled() && db_desc.first && db_desc.first == camera_motion->Depth() &&
         (regs.num_indices > 6 || regs.num_instances.NumInstances() > 1)) {
+        draw_jitter = upscaler->Jitter();
+    } else if (const auto* ps = pipeline->GetStages()[u32(Shader::SwStage::Fragment)];
+               ps && upscaler->Enabled() && JitterFullScreenPass(ps->pgm_hash)) {
         draw_jitter = upscaler->Jitter();
     }
     UpdateDynamicState(pipeline, is_indexed);
@@ -3007,10 +3146,19 @@ void Rasterizer::BindTextures(const Shader::Info& stage, const PreparedStage* pr
     const u32 first_image_idx = image_infos.size();
     // bbport diagnosis: BB_TRACE_SHADER=<hash> prints the T# of every texture binding of that
     // shader (first 8 draws).
-    static const u64 trace_hash = [] {
+    static const u64 env_trace_hash = [] {
         const char* env = std::getenv("BB_TRACE_SHADER");
         return env ? std::strtoull(env, nullptr, 16) : 0ull;
     }();
+    u64 trace_hash = env_trace_hash;
+    u32 trace_generation = 0;
+    if (LiveShaderDebugFile()) {
+        auto& live = LiveDebug();
+        if (const u64 live_hash = live.trace.load(std::memory_order_relaxed)) {
+            trace_hash = live_hash;
+            trace_generation = live.trace_generation.load(std::memory_order_relaxed);
+        }
+    }
     if (trace_hash && u32(stage.pgm_hash) == u32(trace_hash)) {
         // The frame with the draw is dumped too (BB_FRAME_DUMP_TRIGGER, at most every 300 ms).
         static auto last_dump = std::chrono::steady_clock::time_point{};
@@ -3023,7 +3171,11 @@ void Rasterizer::BindTextures(const Shader::Info& stage, const PreparedStage* pr
                 std::fclose(f);
             }
         }
-        static std::atomic<u32> traced{0};
+        static std::atomic<u32> traced{0}, traced_generation{0};
+        if (traced_generation.exchange(trace_generation, std::memory_order_relaxed) !=
+            trace_generation) {
+            traced.store(0, std::memory_order_relaxed);
+        }
         if (traced.fetch_add(1, std::memory_order_relaxed) < 8) {
             for (u32 i = 0; i < stage.images.size(); ++i) {
                 const auto t = prepared ? prepared->image_sharps[i] : stage.images[i].GetSharp(stage);
