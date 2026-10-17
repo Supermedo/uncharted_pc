@@ -162,6 +162,7 @@ SCENES = {'u1': _jungle, 'u2': _mountains, 'u3': _desert}
 POSTERS = {'u1': 'u1.jpg', 'u2': 'u2.jpg', 'u3': 'u3.jpg'}
 COLLECTION_BANNER = 'collection_banner.jpg'
 _LOADED = {}
+_BACKGROUNDS = {}
 _BANNER = None
 
 
@@ -204,13 +205,24 @@ def _cover(image, size, focus=(0.5, 0.42)):
 
 
 def _fit(image, width, height, background=(9, 9, 9)):
-    """The whole picture inside width×height, centred. Nothing is cropped."""
+    """The whole picture inside width×height, centred. Nothing is cropped; the strips left beside
+    or above it show a darkened, blurred copy of the picture instead of a flat colour."""
     scale = min(width / image.width, height / image.height)
     resized = image.resize((max(1, round(image.width * scale)), max(1, round(image.height * scale))),
                            Image.LANCZOS)
-    canvas = Image.new('RGB', (width, height), background)
+    if resized.size == (width, height):
+        return resized
+    canvas = _cover(image.resize((max(1, image.width // 8), max(1, image.height // 8)), Image.BILINEAR),
+                    (width, height), (0.5, 0.5)).filter(ImageFilter.GaussianBlur(max(6, width // 24)))
+    canvas = Image.blend(canvas, Image.new('RGB', canvas.size, background), 0.45)
     canvas.paste(resized, ((width - resized.width) // 2, (height - resized.height) // 2))
     return canvas
+
+
+def poster_aspect(key):
+    """Width / height of the game's cover picture, or None when the painted scene stands in."""
+    image = _load_scene(key)
+    return image.width / image.height if image is not None else None
 
 
 def card_scene(key, width, height):
@@ -222,10 +234,73 @@ def card_scene(key, width, height):
     return _fit(image, width, height)
 
 
-def _rounded_mask(size, radius):
-    mask = Image.new('L', size, 0)
-    ImageDraw.Draw(mask).rounded_rectangle((0, 0, size[0] - 1, size[1] - 1), radius=radius, fill=255)
-    return mask
+def _tracked(draw, xy, text, font, fill, tracking):
+    """Text with extra space between the letters (`tracking` pixels); returns its width."""
+    x, y = xy
+    for char in text:
+        draw.text((x, y), char, font=font, fill=fill)
+        x += font.getlength(char) + tracking
+    return x - xy[0] - tracking
+
+
+def _tracked_width(text, font, tracking):
+    return sum(font.getlength(char) for char in text) + tracking * (len(text) - 1)
+
+
+def brand_heading(width, dpi=1.0):
+    """The sidebar heading, logo-style: UNCHARTED in spaced Cinzel capitals with a gold gradient,
+    a short gold rule, THE NATHAN DRAKE COLLECTION in small spaced capitals. RGBA, `width` wide
+    at most."""
+    from uncharted_fonts import font_path
+    cinzel = font_path('Cinzel-Bold.ttf')
+    small = font_path('MPLUS1p-Medium.ttf') or font_path('Cinzel-Regular.ttf')
+    title, line = 'UNCHARTED', 'THE NATHAN DRAKE COLLECTION'
+    size = round(30 * dpi)
+    while True:
+        big = ImageFont.truetype(str(cinzel), size) if cinzel else ImageFont.load_default()
+        tracking = size * 0.10
+        if _tracked_width(title, big, tracking) <= width or size <= 12:
+            break
+        size -= 1
+    title_w = _tracked_width(title, big, tracking)
+    sub_size = max(8, round(8.5 * dpi * 96 / 72))
+    while True:
+        sub = ImageFont.truetype(str(small), sub_size) if small else ImageFont.load_default()
+        sub_tracking = sub_size * 0.16
+        if _tracked_width(line, sub, sub_tracking) <= title_w or sub_size <= 7:
+            break
+        sub_size -= 1
+    ascent, descent = big.getmetrics()
+    sub_ascent, sub_descent = sub.getmetrics()
+    rule_y = ascent + descent + round(6 * dpi)
+    height = rule_y + round(10 * dpi) + sub_ascent + sub_descent
+    image = Image.new('RGBA', (math.ceil(title_w) + 2, height), (0, 0, 0, 0))
+    # The capitals as a mask, filled with a vertical gold gradient.
+    mask = Image.new('L', image.size, 0)
+    _tracked(ImageDraw.Draw(mask), (0, 0), title, big, 255, tracking)
+    gold = _gradient(image.size, [(0.0, (250, 226, 160)), (0.55, (231, 195, 106)), (1.0, (176, 138, 62))])
+    image.paste(gold, (0, 0), mask)
+    draw = ImageDraw.Draw(image)
+    rule_w = round(28 * dpi)
+    draw.rectangle((0, rule_y, rule_w, rule_y + max(1, round(dpi))), fill=(168, 137, 66, 255))
+    _tracked(draw, (0, rule_y + round(8 * dpi)), line, sub, (154, 146, 132, 255), sub_tracking)
+    return image
+
+
+def rounded_mask(size, radius, scale=4):
+    """Rounded-rectangle mask with smooth (anti-aliased) corners: drawn larger, then reduced."""
+    w, h = size
+    big = Image.new('L', (w * scale, h * scale), 0)
+    ImageDraw.Draw(big).rounded_rectangle((0, 0, w * scale - 1, h * scale - 1), radius=radius * scale, fill=255)
+    return big.resize(size, Image.LANCZOS)
+
+
+def _ring(size, box, radius, color, width, scale=4):
+    """A smooth rounded outline as an RGBA layer of `size` (drawn larger, then reduced)."""
+    layer = Image.new('RGBA', (size[0] * scale, size[1] * scale), (0, 0, 0, 0))
+    ImageDraw.Draw(layer).rounded_rectangle(tuple(v * scale for v in box), radius=radius * scale,
+                                            outline=color, width=max(1, round(width * scale)))
+    return layer.resize(size, Image.LANCZOS)
 
 
 def _fit_font(path, text, max_width, size, minimum=8):
@@ -246,14 +321,19 @@ def _ink(font, text):
 
 
 def poster_tile(key, width, height, title, subtitle, *, selected=False, hover=False, dimmed=False,
-                radius=16, page=(18, 17, 15)):
-    """A launcher tile: drop shadow, rounded cover, caption strip, gold ring when selected."""
+                radius=16, page=(18, 17, 15), caption=None, transparent=False):
+    """A launcher tile: drop shadow, rounded cover, caption strip, gold ring when selected.
+
+    With `caption` (pixels) the strip is left empty for the caller to write the names in as
+    system text (ClearType, sharper than text drawn into the picture). The picture's
+    info['caption'] is the strip's (left, top, width, height). `transparent` keeps it RGBA, so a
+    background behind the tile shows around it; `page` then only colours the caption strip."""
     width, height = max(width, 48), max(height, 80)
     text_w = max(24, width - 28)
     try:
         from uncharted_fonts import font_path
-        bold = font_path('Cinzel-SemiBold.ttf') or font_path('Cinzel-Bold.ttf')
-        regular = font_path('Cinzel-Regular.ttf')
+        bold = font_path('MPLUS1p-Medium.ttf') or font_path('Cinzel-SemiBold.ttf')
+        regular = font_path('MPLUS1p-Regular.ttf') or font_path('Cinzel-Regular.ttf')
     except OSError:
         bold = regular = None
     title_font = _fit_font(bold, title, text_w, max(12, min(18, width // 16)))
@@ -261,9 +341,11 @@ def poster_tile(key, width, height, title, subtitle, *, selected=False, hover=Fa
     _tw, title_h = _ink(title_font, title)
     _sw, sub_h = _ink(sub_font, subtitle)
     gap = max(8, width // 36)
-    caption = title_h + gap + sub_h + 18
-    if caption > height // 3:
-        caption = max(title_h + gap + sub_h + 12, height // 3)
+    draw_text = caption is None
+    if draw_text:
+        caption = title_h + gap + sub_h + 18
+        if caption > height // 3:
+            caption = max(title_h + gap + sub_h + 12, height // 3)
     poster_h = height - caption
     pad = max(10, width // 28)
     canvas = Image.new('RGBA', (width + pad * 2, height + pad * 2), (0, 0, 0, 0))
@@ -272,40 +354,71 @@ def poster_tile(key, width, height, title, subtitle, *, selected=False, hover=Fa
         poster = Image.blend(poster, Image.new('RGB', poster.size, (12, 12, 12)), 0.52)
     if selected:
         poster = Image.blend(poster, Image.new('RGB', poster.size, (255, 220, 150)), 0.06)
-    clip = _rounded_mask((width, poster_h), radius)
+    clip = rounded_mask((width, poster_h), radius)
     framed = Image.new('RGBA', (width, poster_h), (0, 0, 0, 255))
     framed.paste(poster, (0, 0))
     framed.putalpha(clip)
-    shadow = Image.new('RGBA', (width + 8, poster_h + 8), (0, 0, 0, 0))
-    ImageDraw.Draw(shadow).rounded_rectangle((0, 0, width + 7, poster_h + 7), radius=radius + 2, fill=(0, 0, 0, 110))
-    shadow = shadow.filter(ImageFilter.GaussianBlur(max(6, width // 40)))
-    canvas.alpha_composite(shadow, (pad + 4, pad + 6))
+    # A soft shadow straight under the cover (no offset block showing beside its corners).
+    shadow = Image.new('RGBA', canvas.size, (0, 0, 0, 0))
+    ImageDraw.Draw(shadow).rounded_rectangle((pad + 2, pad + 5, pad + width - 3, pad + poster_h + 2),
+                                             radius=radius, fill=(0, 0, 0, 120))
+    canvas.alpha_composite(shadow.filter(ImageFilter.GaussianBlur(max(5, pad * 0.7))))
     canvas.alpha_composite(framed, (pad, pad))
     if selected:
-        ring = ImageDraw.Draw(canvas)
-        for offset, alpha in ((0, 255), (1, 140)):
-            ring.rounded_rectangle((pad - 2 + offset, pad - 2 + offset, pad + width + 1 - offset,
-                                    pad + poster_h + 1 - offset), radius=radius + 1,
-                                   outline=(231, 195, 106, alpha), width=2)
+        canvas.alpha_composite(_ring(canvas.size, (pad - 2, pad - 2, pad + width + 1, pad + poster_h + 1),
+                                     radius + 2, (231, 195, 106, 255), 2.2))
     elif hover:
-        ImageDraw.Draw(canvas).rounded_rectangle((pad, pad, pad + width - 1, pad + poster_h - 1),
-                                                 radius=radius, outline=(120, 105, 72, 200), width=2)
-    foot = Image.new('RGBA', (width, caption), (0, 0, 0, 0))
-    ImageDraw.Draw(foot).rounded_rectangle((0, 0, width - 1, caption - 1), radius=max(8, radius - 4),
-                                           fill=(page[0], page[1], page[2], 245))
-    canvas.alpha_composite(foot, (pad, pad + poster_h))
-    draw = ImageDraw.Draw(canvas)
-    title_color = (231, 195, 106) if selected else (246, 241, 230)
-    sub_color = (231, 195, 106) if selected else (154, 145, 127)
-    title_x = pad + max(8, (width - title_font.getlength(title)) / 2)
-    sub_x = pad + max(8, (width - sub_font.getlength(subtitle)) / 2)
-    title_y = pad + poster_h + 8
-    sub_y = title_y + title_h + gap
-    draw.text((title_x, title_y), title, fill=title_color, font=title_font, anchor='lt')
-    draw.text((sub_x, sub_y), subtitle, fill=sub_color, font=sub_font, anchor='lt')
+        canvas.alpha_composite(_ring(canvas.size, (pad, pad, pad + width - 1, pad + poster_h - 1),
+                                     radius, (150, 132, 92, 220), 2))
+    if not transparent:  # the names sit on the page itself when the tile is see-through
+        foot = Image.new('RGBA', (width, caption), (0, 0, 0, 0))
+        ImageDraw.Draw(foot).rounded_rectangle((0, 0, width - 1, caption - 1), radius=max(8, radius - 4),
+                                               fill=(page[0], page[1], page[2], 245))
+        canvas.alpha_composite(foot, (pad, pad + poster_h))
+    if draw_text:
+        draw = ImageDraw.Draw(canvas)
+        title_color = (231, 195, 106) if selected else (246, 241, 230)
+        sub_color = (231, 195, 106) if selected else (154, 145, 127)
+        title_x = pad + max(8, (width - title_font.getlength(title)) / 2)
+        sub_x = pad + max(8, (width - sub_font.getlength(subtitle)) / 2)
+        title_y = pad + poster_h + 8
+        sub_y = title_y + title_h + gap
+        draw.text((title_x, title_y), title, fill=title_color, font=title_font, anchor='lt')
+        draw.text((sub_x, sub_y), subtitle, fill=sub_color, font=sub_font, anchor='lt')
+    if transparent:
+        canvas.info.update(caption=(pad, pad + poster_h, width, caption), poster=(pad, pad, width, poster_h))
+        return canvas
     flat = Image.new('RGB', canvas.size, page)
     flat.paste(canvas, mask=canvas.split()[3])
+    flat.info.update(caption=(pad, pad + poster_h, width, caption), poster=(pad, pad, width, poster_h))
     return flat
+
+
+def _game_background(key):
+    """The player's background picture for a game: u1_background.jpg (.jpeg, .png, .webp) in an
+    art folder, else a PS3 disc's PIC1.PNG copied into the art folder's u1/."""
+    if key not in _BACKGROUNDS:
+        names = [f'{key}_background{ext}' for ext in ('.jpg', '.jpeg', '.png', '.webp')]
+        names += [f'{key}/PIC1.PNG', f'{key}/pic1.png']
+        _BACKGROUNDS[key] = next((image for image in map(load_art, names) if image is not None), None)
+    return _BACKGROUNDS[key]
+
+
+def game_backdrop(key, width, height, page):
+    """The game's background picture over the top of the Play page: scaled to the page width,
+    a little darker, and faded into the page colour over its lower part. None without one."""
+    image = _game_background(key)
+    if image is None:
+        return None
+    width, height = max(width, 8), max(height, 8)
+    image = _cover(image, (width, height), (0.5, 0.3))
+    image = Image.blend(image, Image.new('RGB', image.size, (6, 5, 4)), 0.22)
+    fade = Image.new('L', (1, height))
+    pixels = fade.load()
+    for y in range(height):
+        t = min(1.0, max(0.0, (y / max(height - 1, 1) - 0.42) / 0.58))
+        pixels[0, y] = int(255 * t * t * (3 - 2 * t))  # smooth from 42 % of the height to the end
+    return Image.composite(Image.new('RGB', image.size, page), image, fade.resize((width, height)))
 
 
 def collection_banner(width, height, page=(5, 5, 5)):
