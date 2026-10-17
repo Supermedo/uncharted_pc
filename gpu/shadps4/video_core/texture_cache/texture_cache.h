@@ -108,7 +108,9 @@ public:
     void InvalidateMemory(VAddr addr, size_t size);
 
     /// Marks an image as dirty if it exists at the provided address.
-    void InvalidateMemoryFromGPU(VAddr address, size_t max_size);
+    /// whole_range (bbport): the GPU wrote exactly [address, address + max_size), so every image
+    /// overlapping it is dirty, not only one starting at the address (copies moving textures).
+    void InvalidateMemoryFromGPU(VAddr address, size_t max_size, bool whole_range = false);
 
     /// Evicts any images that overlap the unmapped range.
     void UnmapMemory(VAddr cpu_addr, size_t size);
