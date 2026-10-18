@@ -239,4 +239,12 @@ const char* FrameGenName(int frame_gen) {
     return names[std::clamp(frame_gen, 0, FrameGenCount - 1)];
 }
 
+bool FsrDriverValidated(unsigned driver_id) {
+    static constexpr unsigned validated[] = {0}; // VkDriverId values; 0 is no driver
+    for (const unsigned id : validated) {
+        if (id != 0 && id == driver_id) return true;
+    }
+    return false;
+}
+
 } // namespace BbSettings

@@ -9,6 +9,8 @@
 
 int main() {
     using namespace BbSettings;
+    // No driver is validated for FSR 3.1 yet (RADV = 3, NVIDIA proprietary = 4, none = 0).
+    for (unsigned id : {0u, 1u, 3u, 4u, 27u}) assert(!FsrDriverValidated(id));
     char path[] = "/tmp/bbport-upscaler-test-XXXXXX";
     const int fd = mkstemp(path);
     assert(fd >= 0);

@@ -219,6 +219,19 @@ TemporalUpscaler::TemporalUpscaler(const Instance& instance_, Scheduler& schedul
                     "%016llx\n",
                     BbSettings::Get().upscaler != BbSettings::UpscalerOff ? "on" : "off",
                     static_cast<unsigned long long>(trigger_hash));
+        // The driver FSR runs on, at its start: a fault in the FSR pass leaves no other trace
+        // in the log (gameplay as noise on RADV PHOENIX, 2026-10-18).
+        const auto driver_id = static_cast<unsigned>(instance.GetDriverID());
+        std::printf("Upscaler: FSR 3.1 on %s, driver %s (id %u)\n",
+                    std::string(instance.GetModelName()).c_str(),
+                    // GetDriverVersionName only reads the properties; it is just not const.
+                    const_cast<Instance&>(instance).GetDriverVersionName().c_str(), driver_id);
+        if (BbSettings::Get().upscaler == BbSettings::UpscalerFsr3 &&
+            !BbSettings::FsrDriverValidated(driver_id)) {
+            std::printf("Upscaler: WARNING: FSR 3.1 has not been checked on this driver; if the "
+                        "scene shows noise or garbage, set anti-aliasing to Off\n");
+        }
+        std::fflush(stdout);
     }
 }
 

@@ -124,4 +124,10 @@ const char* PresetName(int preset);
 const char* UpscalerName(int upscaler);
 const char* FrameGenName(int frame_gen);
 
+/// Whether FSR 3.1 has been seen rendering correctly on this driver (a VkDriverId value).
+/// Nothing is on the list yet, so every driver gets the warning: on RADV PHOENIX (Mesa
+/// 26.2.0-devel, Legion Go, 2026-10-18) FSR 3.1 turned gameplay into noise with nothing in
+/// the log. Add a driver here once a play test on it has been looked at.
+bool FsrDriverValidated(unsigned driver_id);
+
 } // namespace BbSettings
