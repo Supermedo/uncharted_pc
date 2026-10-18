@@ -262,6 +262,14 @@ def main():
         env['BB_RESTART_COMMAND'] = subprocess.list2cmdline([sys.executable, *this, '--after', str(os.getpid()), *args])
         command = [str(probe), str(out / 'boot-linked.bin'), '--content-profile', str(out / 'content.bin'),
                    '--app0', str(game), '--user', str(user_dir), '--timeout', env.get('BB_TIMEOUT', '0')]
+        # Third-party patches (shadPS4/GoldHEN XML) for this executable, only when a folder is set:
+        # BB_PATCHES_DIR, selection in BB_PATCHES_CONFIG (patches.json) or each patch's isEnabled.
+        patches_dir = env.get('BB_PATCHES_DIR', '')
+        if patches_dir and Path(patches_dir).is_dir():
+            run_script('patches.py', '--external-only', '--app-elf', file, '--game-dir', game, '--out', out,
+                       '--patches-dir', patches_dir,
+                       '--patches-config', env.get('BB_PATCHES_CONFIG', str(Path(patches_dir) / 'patches.json')))
+            env['BB_PATCHES_FILE'] = str(out / 'patches.bin')
         # The code patches compiled for this game version (FPS, effects, startup
         # resolution). Only passed when patches.py actually produced a file.
         if env.get('BB_PATCHES_FILE'):
