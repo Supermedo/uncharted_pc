@@ -223,7 +223,7 @@ extern "C" int bbgpu_init(const BbGpuConfig* config) {
     if (config->user_dir) setenv("BB_GPU_USER_DIR", config->user_dir, 0);
 #endif
     Core::Emulator::FillElfInfo(*config);
-    const std::string title = config->title ? config->title : "Bloodborne";
+    const std::string title = config->title ? config->title : "Uncharted";
     s32 width = config->width, height = config->height;
     // bbport: BB_WINDOW_SIZE=WxH: the window's size (the game's frame is scaled to it, with
     // FSR 1 when BB_FSR1=1). Fullscreen uses the desktop's size.

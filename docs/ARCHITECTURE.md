@@ -2,7 +2,7 @@
 
 How the port works, for people reading or changing the code. For players, see
 [README.md](../README.md). For build steps, see
-[packaging/windows/README.md](windows/README.md).
+[packaging/windows/README.md](../packaging/windows/README.md).
 
 ## The short version
 
@@ -159,7 +159,7 @@ Both `run.sh` and `run.py` compile the patches and pass `--patches` to the loade
 The C runtime is built for both Linux and MSYS2/CLANG64 (MinGW + winpthreads),
 with `_WIN32` branches throughout and `src/compat_win.c` covering the POSIX
 calls that MinGW lacks. The differences are documented in a table in
-[packaging/windows/README.md](windows/README.md). Notable ones:
+[packaging/windows/README.md](../packaging/windows/README.md). Notable ones:
 
 - `libbbgpu.so` on Linux, but a **static** library on Windows, so the loader can
   resolve the `runtime_*` symbols the renderer calls.
@@ -172,7 +172,8 @@ The Linux tree retains the Bloodborne originals (`launcher/bbport_*.py`,
 
 ## Tests
 
-None of them run in CI; they are run by hand.
+The Python suite and the C tests run in CI (`.github/workflows/ci.yml`); the C++
+renderer targets do not, so those are run by hand.
 
 - **Python** (`tests/test_*.py`) — preparation, linking, patches, mods and
   launcher settings. `python -m unittest discover -s tests`.

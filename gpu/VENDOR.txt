@@ -4,6 +4,11 @@ Also: src/core/libraries/kernel/{orbis_error,posix_error,time,process,equeue}.h,
 Also: src/core/libraries/avplayer (without the handle streamer), src/core/libraries/videodec/video_utils.{h,cpp}.
 Also: src/core/libraries/videodec/{videodec2,videodec2_impl}.{h,cpp} and videodec_error.h (Uncharted cutscenes),
   taken from the shadPS4-based tree of IFreemz/shadPS4-Bloodborne-DLSS-FSR (2026-10-07).
+Also: src/core/libraries/{network,np} and src/shadnet (the shadNet co-op client; files carry
+  rpcs3 and shadPS4 copyright), taken from shadp2p (github.com/Wozzardman/shadp2p, GPL-2.0).
+Also: the port's shim keeps these shadPS4 files (SPDX headers retained):
+  gpu/shim/core/libraries/rtc/rtc.h,
+  gpu/shim/imgui/invitation_prompt_layer.h, gpu/shim/imgui/shadnet_notifications_layer.h.
 Local changes are marked with "bbport:" comments.
 Backported from upstream after b4e7ae7 (2026-10-02), recompiler correctness fixes only:
   233562929 V_INTERP_MOV_F32 P10/P20 selectors (#5087), d96278e1e compute shader floating-point

@@ -1,10 +1,11 @@
 # Continuous integration.
 #
-# Three jobs:
+# Four jobs:
 #   python-tests  the scripts and launcher settings tests (fastest, no build)
 #   licenses      every vendored third-party license must resolve to a real file
 #   c-tests-win   the HLE runtime tests under the MSYS2 CLANG64 toolchain that
-#                 builds the shipped Windows package, and the full build
+#                 builds the shipped Windows package
+#   build-windows the full build and packaging (slow); see the notes on the job
 #
 # None of this needs a GPU or game files.
 name: CI
@@ -89,6 +90,9 @@ jobs:
           while IFS='|' read -r name source kind; do
             [[ -z ${name// } || $name == \#* ]] && continue
             [[ $kind == pkg ]] && continue   # resolved from MSYS2 at package time
+            # Optional components (the DLSS bridge) ship only once built, so a
+            # missing source is reported by check_licenses.sh, not fatal here.
+            [[ $kind == optional ]] && continue
             [[ -z ${source// } ]] && continue
             if [[ ! -f $source ]]; then
               echo "missing: $name <- $source"
@@ -103,7 +107,7 @@ jobs:
   # requests, and on demand; not on every branch push.
   build-windows:
     name: Full build (Windows)
-    if: github.event_name == 'workflow_dispatch' || github.event_name == 'pull_request'
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'pull_request' || github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
     runs-on: windows-latest
     defaults:
       run:

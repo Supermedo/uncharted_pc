@@ -46,6 +46,11 @@ int main(void) {
     assert(found && !do_close(dir));
     int save=(int)do_open("/data/test-save",0x202,0644); assert(save>=3);
     assert(do_write(save,"save",4)==4 && !do_close(save));
+    /* ".." hidden behind Windows separators must not escape a mount ... */
+    assert(do_open("/data/..\\..\\escape",0,0)==-EACCES);
+    assert(do_open("..\\..\\escape",0,0)==-EACCES);
+    /* ... while ".." inside a single name is a normal, allowed component. */
+    assert(do_open("/data/a..b",0,0)==-ENOENT);
     assert(!path_op("/data/test-save",2,0));
     assert(!unlink(link) && !unlink(source) && !rmdir(game));
     const char *dirs[]={"temp0","download0","data"};

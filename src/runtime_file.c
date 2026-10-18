@@ -2,7 +2,7 @@
  *   /app0, /hostapp  -> game package root (read-only by convention)
  *   /temp0, /download0, /data, and mounts added by SaveData -> user directory
  * Guest descriptors are small integers in our own table; stdio 0-2 pass through.
- * Paths containing ".." components are rejected rather than normalized. */
+ * Paths containing ".." components (with either separator) are rejected rather than normalized. */
 #define _GNU_SOURCE
 #include "runtime.h"
 #include <stdio.h>
@@ -97,8 +97,13 @@ static int translate(const char *guest,char *out,size_t size) {
     char buffer[1024];
     if (guest[0]!='/') snprintf(buffer,sizeof(buffer),"/app0/%s",guest);
     else snprintf(buffer,sizeof(buffer),"%s",guest);
-    for (const char *p=buffer;(p=strstr(p,".."));p+=2)
-        if ((p==buffer || p[-1]=='/') && (p[2]==0 || p[2]=='/')) return EACCES;
+    /* Reject ".." as a whole path component. Windows also treats '\' as a separator, so a
+     * guest path such as "/data/..\..\x" must not slip past on the '/' test alone. */
+    for (const char *p=buffer;(p=strstr(p,".."));p+=2) {
+        int start=(p==buffer || p[-1]=='/' || p[-1]=='\\');
+        int end=(p[2]==0 || p[2]=='/' || p[2]=='\\');
+        if (start && end) return EACCES;
+    }
     pthread_mutex_lock(&lock);
     size_t best=0; const Mount *m=NULL;
     for (size_t i=0;i<mount_count;++i) {
