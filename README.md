@@ -25,8 +25,8 @@ code runs directly on your PC and the graphics are translated to Vulkan. Unpack 
 ## Requirements
 
 - Windows 10 (1903 or later) or Windows 11, 64-bit.
-- An Intel Core 4th generation (Haswell) or newer, an AMD Ryzen, or an AMD FX. Older Intel CPUs
-  with AVX (Core 2nd and 3rd generation, Xeon E3 v1/v2): experimental, see Known problems.
+- An Intel Core 4th generation (Haswell) or newer, an AMD Ryzen, or an AMD FX. Intel Core 3rd
+  generation (Ivy Bridge, Xeon E3 v2): experimental, see Known problems.
 - A graphics card with Vulkan 1.3 and a current driver, with **6 GB of video memory or more**.
   4 GB cards (GTX 1650, RX 570) run out of video memory and crash after a while; on those, keep
   Anti-aliasing and Frame generation off.
@@ -53,10 +53,11 @@ code runs directly on your PC and the graphics are translated to Vulkan. Unpack 
   `iSubMesh < m_numSubMeshInstances`): file reads could come back cut short. Fixed in 0.3.5.
 - **Older CPUs:** the games use instructions of the PS4's processor (AVX, BMI1, MOVBE, LZCNT).
   AMD FX runs since 0.3.6 (its missing MOVBE is emulated, a bit slower). **Experimental:** on Intel
-  Core 3rd generation and older (Ivy Bridge, Sandy Bridge, Xeon E3 v2) the loader rewrites BMI1,
-  LZCNT and MOVBE when the game starts (`CPU: ...` in `user\last_run.log`); `BB_CPU_PATCH=0`
+  Core 3rd generation (Ivy Bridge, Xeon E3 v2) the loader rewrites BMI1, LZCNT and MOVBE when the
+  game starts (`CPU: ...` in `user\last_run.log`); `BB_CPU_PATCH=0`
   turns that off and the game stops with the CPU message again. AVX is still required. Tested on
   a Xeon E3-1240 v2 (Ivy Bridge) with a GTX 1050 Ti: all three games start and play.
+  2nd generation (Sandy Bridge) also lacks F16C, which is not rewritten (untested).
 - **Uncharted 2, train wreck:** `IsFinite(deltaTransform)` in character-leg-ik.cpp, fixed in 0.3.6
   for the EU 1.00 version.
 - Frame rates above 120 are experimental.
