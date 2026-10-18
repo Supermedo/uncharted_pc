@@ -10,6 +10,8 @@
 #include "bbport_copy.h"
 #include "bbport_toggles.h"
 #include <cstdio>
+#include <cstdlib>
+#include <string_view>
 #include <boost/preprocessor/stringize.hpp>
 
 #include "common/assert.h"
@@ -1401,6 +1403,34 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
     FIBER_EXIT;
 }
 
+namespace {
+/// Linux fork: compute queue packets that must not run before the draw pipe ran dry. The others
+/// hand their work to the pipe (dispatches), drain it themselves (DMA: CopyBuffer, FillBuffer),
+/// or only write registers.
+bool AscPacketNeedsDrain(PM4ItOpcode opcode) {
+    static const bool all = [] {
+        const char* env = std::getenv("BB_ASC_DRAIN");
+        return env && std::string_view{env} == "all";
+    }();
+    if (all) {
+        return true;
+    }
+    switch (opcode) {
+    case PM4ItOpcode::Nop:
+    case PM4ItOpcode::SetShReg:
+    case PM4ItOpcode::SetQueueReg:
+    case PM4ItOpcode::AcquireMem:
+    case PM4ItOpcode::DispatchDirect:
+    case PM4ItOpcode::DispatchIndirect:
+    case PM4ItOpcode::DmaData:
+    case PM4ItOpcode::IndirectBuffer: // its own packets decide
+        return false;
+    default:
+        return true;
+    }
+}
+} // namespace
+
 template <bool is_indirect>
 Liverpool::Task Liverpool::ProcessCompute(std::span<const u32> acb, u32 vqid) {
     FIBER_ENTER(acb_task_name[vqid]);
@@ -1416,9 +1446,6 @@ Liverpool::Task Liverpool::ProcessCompute(std::span<const u32> acb, u32 vqid) {
     size_t acb_size = acb.size_bytes();
     while (!acb.empty()) {
         ProcessCommands();
-        if (rasterizer) {
-            rasterizer->DrainDrawPipe(Vulkan::DrawPipe::ReasonCompute); // bbport: compute work uses the caches
-        }
 
         auto* header = reinterpret_cast<const PM4Header*>(acb.data());
         u32 next_dw_off = header->type3.NumWords() + 1;
@@ -1460,6 +1487,14 @@ Liverpool::Task Liverpool::ProcessCompute(std::span<const u32> acb, u32 vqid) {
         }
 
         const PM4ItOpcode opcode = header->type3.opcode;
+        // bbport: compute work uses the caches the draw recording thread owns, so the pipe is
+        // drained first. Linux fork: not for packets that are pipelined or drain themselves
+        // (dispatches, DMA, register writes): Uncharted 1 drained ~10000 times a second here,
+        // 20% of the GPU thread at 60 FPS on the Steam Deck. BB_ASC_DRAIN=all: every packet.
+        if (rasterizer && AscPacketNeedsDrain(opcode)) {
+            // The opcode as the reason: the frame stats name what the compute queue drains for.
+            rasterizer->DrainDrawPipe(static_cast<u32>(opcode));
+        }
 
         const auto* it_body = reinterpret_cast<const u32*>(header) + 1;
         switch (opcode) {
