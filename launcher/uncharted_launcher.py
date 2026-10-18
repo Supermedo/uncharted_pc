@@ -1382,9 +1382,18 @@ class Launcher:
         self.root.after(100, self.drain_output)
 
     def stop(self):
-        if self.job:
-            self.stopping = True
-            self.job.terminate()
+        if not self.process:
+            return
+        self.stop_button.configure(state='disabled')
+        try:
+            if not self.job or not self.job.terminate():
+                terminate_process_tree(self.process)
+        except (OSError, subprocess.SubprocessError) as error:
+            self.stop_button.configure(state='normal')
+            self.messagebox.showerror(NAME, _('Could not stop the game: {}').format(error))
+            return
+        self.stopping = True
+        self.status.configure(text=_('Stopping the game…'), fg=GOLD)
 
     def append(self, text):
         self.log.configure(state='normal')
@@ -1587,20 +1596,36 @@ class GameJob:
     collection, an in-game restart), so Stop ends all of them."""
 
     def __init__(self, process):
-        kernel32 = ctypes.windll.kernel32
-        kernel32.CreateJobObjectW.restype = ctypes.c_void_p
-        self.handle = kernel32.CreateJobObjectW(None, None)
+        self.kernel32 = ctypes.windll.kernel32
+        self.kernel32.CreateJobObjectW.restype = ctypes.c_void_p
+        self.handle = self.kernel32.CreateJobObjectW(None, None)
         if self.handle:
-            kernel32.AssignProcessToJobObject(ctypes.c_void_p(self.handle), ctypes.c_void_p(int(process._handle)))
+            assigned = self.kernel32.AssignProcessToJobObject(
+                ctypes.c_void_p(self.handle), ctypes.c_void_p(int(process._handle)))
+            if not assigned:
+                self.kernel32.CloseHandle(ctypes.c_void_p(self.handle))
+                self.handle = None
 
     def terminate(self):
-        if self.handle:
-            ctypes.windll.kernel32.TerminateJobObject(ctypes.c_void_p(self.handle), 1)
+        return bool(self.handle and self.kernel32.TerminateJobObject(ctypes.c_void_p(self.handle), 1))
 
     def close(self):
         if self.handle:
-            ctypes.windll.kernel32.CloseHandle(ctypes.c_void_p(self.handle))
+            self.kernel32.CloseHandle(ctypes.c_void_p(self.handle))
             self.handle = None
+
+
+def terminate_process_tree(process):
+    """Stop a launcher process and every child when its Windows job is unavailable."""
+    if process.poll() is not None:
+        return
+    taskkill = Path(os.environ.get('SystemRoot', r'C:\Windows')) / 'System32/taskkill.exe'
+    result = subprocess.run([str(taskkill), '/PID', str(process.pid), '/T', '/F'],
+                            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                            stderr=subprocess.STDOUT, creationflags=NO_WINDOW, timeout=10)
+    if result.returncode and process.poll() is None:
+        detail = result.stdout.decode(errors='replace').strip()
+        raise OSError(detail or _('taskkill exited with code {}').format(result.returncode))
 
 
 def version_tuple(text):
