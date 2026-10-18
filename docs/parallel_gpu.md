@@ -63,7 +63,7 @@ Step 1 (draw preparation, 4 workers, toggle 8192), Hunter's Nightmare, same view
 The GPU thread is still ~90% busy: texture/buffer binding is the next target (step 2).
 
 Guest write faults (same view, toggle 65536): the game fills its per-frame buffers
-sequentially and each 4 KiB page cost a protection fault — ~115k faults/s, ~20% of every
+sequentially and each 4 KiB page costs a protection fault — ~115k faults/s, ~20% of every
 GXWorker and of the main thread spent in the kernel. Unprotecting the aligned 64 KiB window
 around a fault: 16k faults/s, kernel time ~8%, **81.0 FPS vs 66.4** (+22%), identical frames.
 The GPU command thread is back at ~100%: it is the limit again.
@@ -461,7 +461,7 @@ draw reuses the previous render state when the scheduler still has that exact pa
 broke it: barriers, copies and dispatches end passes), the inputs match (target ids and views,
 pipeline attachment key, scene/raster scaling and upscaler redirect state, image registry
 generation, depth control), no clear is requested, and no target is also sampled by the draw.
-States with clears are not remembered (the next draw's differs). 90% hits; 122.1 vs 111.8 FPS
+States with clears are not remembered (the next draw's state differs). 90% hits; 122.1 vs 111.8 FPS
 (+9%); screenshots on/off differ no more than two taken in the same mode (animated scene).
 
 ### Texture set memo (toggle 1 << 45)

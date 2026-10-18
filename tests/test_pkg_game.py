@@ -310,6 +310,38 @@ class LauncherSettingsTests(unittest.TestCase):
     def test_package_paths_drop_blank_update(self):
         self.assertEqual(uncharted_launcher.package_paths({"base_pkg": " a.pkg ", "update_pkg": "  "}), ("a.pkg", None))
 
+    def test_separate_game_folder_overrides_collection_and_clears_stale_environment(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            collection = root / "collection"
+            game_two = root / "game-two"
+            collection.mkdir()
+            game_two.mkdir()
+            (game_two / "eboot.bin").write_bytes(b"standalone game")
+            settings = {**uncharted_launcher.APP_DEFAULTS, "game_dir": str(collection),
+                        "game_dir_u2": str(game_two)}
+
+            self.assertEqual(uncharted_launcher.game_folder(settings, "u1"), str(collection))
+            self.assertEqual(uncharted_launcher.game_folder(settings, "u2"), str(game_two))
+            self.assertTrue(uncharted_launcher.game_available(settings, "u2"))
+
+            with mock.patch.dict(os.environ, {"BB_INPUT_CONFIG": str(root / "input.ini"),
+                                              "BB_GAME_DIR_U1": "stale", "BB_GAME_DIR_U2": "stale",
+                                              "BB_GAME_DIR_U3": "stale"}):
+                env = uncharted_launcher.game_environment(settings, "u2")
+            self.assertEqual(env["BB_GAME_DIR"], str(collection))
+            self.assertEqual(env["BB_GAME_DIR_U1"], "")
+            self.assertEqual(env["BB_GAME_DIR_U2"], str(game_two))
+            self.assertEqual(env["BB_GAME_DIR_U3"], "")
+
+    def test_package_folder_is_fallback_behind_a_separate_game_folder(self):
+        with tempfile.TemporaryDirectory() as directory:
+            settings = {**uncharted_launcher.APP_DEFAULTS, "game_source": "pkg",
+                        "game_dir_u2": directory}
+            self.assertEqual(uncharted_launcher.game_folder(settings, "u1"),
+                             str(g.view_dir(uncharted_launcher.DATA_DIR)))
+            self.assertEqual(uncharted_launcher.game_folder(settings, "u2"), directory)
+
 
 REAL_BASE = os.environ.get("UNCHARTED_BASE_PKG", "")
 REAL_UPDATE = os.environ.get("UNCHARTED_UPDATE_PKG", "")
