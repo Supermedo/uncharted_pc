@@ -1504,7 +1504,14 @@ class Launcher:
     def clear_cache(self):
         if self.process:
             return
-        shutil.rmtree(Path(self.app['user_dir'] or DATA_DIR / 'user') / 'cache', ignore_errors=True)
+        cache = Path(self.app['user_dir'] or DATA_DIR / 'user') / 'cache'
+        try:
+            shutil.rmtree(cache)
+        except FileNotFoundError:
+            pass
+        except OSError as error:
+            self.messagebox.showerror(NAME, _('Could not clear the shader cache: {}').format(error))
+            return
         self.messagebox.showinfo(NAME, _('Shader cache cleared. The next start stutters for a while as it is rebuilt.'))
 
     def shortcut(self):
