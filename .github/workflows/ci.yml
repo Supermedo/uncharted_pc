@@ -78,7 +78,9 @@ jobs:
             ninja
             pkgconf
             git
-            SDL3
+            # mingw-w64-sdl3, not SDL3: the short name only resolves via a local
+            # symlink and pacman cannot find it on a fresh runner.
+            mingw-w64-sdl3
             ffmpeg
 
       - name: Build and run
@@ -137,7 +139,7 @@ jobs:
             pkgconf
             git
             patch
-            SDL3
+            mingw-w64-sdl3
             ffmpeg
             vulkan-headers
             vulkan-loader
