@@ -9,6 +9,7 @@
 #include <cpuid.h>
 #include "runtime.h"
 #include "gpu/bbgpu.h"
+#include "cpu_patch.h"
 #if !defined(__x86_64__) || !defined(__GNUC__)
 #error This prototype requires x86-64 GCC or Clang (including MinGW).
 #endif
@@ -148,7 +149,8 @@ static ABI void guest_exit(void) { puts("Runtime: process finalizer callback rea
  * tzcnt), MOVBE, LZCNT and POPCNT in thousands of places, its libc's string functions among them.
  * Without them it stopped at the first one with an illegal instruction (0xc000001d in libc.prx
  * while module 0 initialized), except LZCNT, which older Intel CPUs run as BSR (other results).
- * Exit code 24 with a message instead; BB_SKIP_CPU_CHECK=1 starts anyway. */
+ * Exit code 24 with a message instead; BB_SKIP_CPU_CHECK=1 starts anyway. BMI1, LZCNT and MOVBE
+ * are rewritten before the game starts (cpu_patch.c) unless BB_CPU_PATCH=0. */
 static void check_cpu(void) {
     if (getenv("BB_SKIP_CPU_CHECK")) return;
     unsigned a=0, b=0, c=0, d=0, basic=0, leaf7=0, extended=0;
@@ -165,9 +167,13 @@ static void check_cpu(void) {
         {(basic>>23)&1,"POPCNT"}, {(basic>>20)&1,"SSE4.2"},
     };
     char missing[64]="";
+    const char *patch=getenv("BB_CPU_PATCH");
+    const int rewrite=!patch || strcmp(patch,"0");
     int no_movbe=0;
     for (size_t i=0;i<sizeof(features)/sizeof(*features);++i) {
         if (features[i].present) continue;
+        if (rewrite && (!strcmp(features[i].name,"BMI1") || !strcmp(features[i].name,"LZCNT") ||
+                        !strcmp(features[i].name,"MOVBE"))) continue;
 #ifdef _WIN32
         /* MOVBE alone (AMD FX): the fault handler does it (emulate_movbe). */
         if (!strcmp(features[i].name,"MOVBE")) { no_movbe=1; continue; }
@@ -307,6 +313,15 @@ static int emulate_movbe(CONTEXT *c) {
 static LONG CALLBACK vectored_fault(EXCEPTION_POINTERS *info) {
     const EXCEPTION_RECORD *record=info->ExceptionRecord;
     DWORD code=record->ExceptionCode;
+    /* Instructions this CPU lacks (cpu_patch.c): a rewritten breakpoint (Rip at the int3) or one
+     * the scan missed continue in a thunk. */
+    if (code==EXCEPTION_BREAKPOINT || code==EXCEPTION_ILLEGAL_INSTRUCTION) {
+        uint64_t rip=info->ContextRecord->Rip;
+        if (code==EXCEPTION_BREAKPOINT ? cpu_patch_breakpoint(&rip,rip) : cpu_patch_illegal(&rip)) {
+            info->ContextRecord->Rip=rip;
+            return EXCEPTION_CONTINUE_EXECUTION;
+        }
+    }
     if (code==EXCEPTION_ACCESS_VIOLATION && record->NumberParameters>=2) {
         /* GPU page tracking (write-protected guest pages) is resolved first. */
         if (gpu_enabled && bbgpu_handle_fault(info,(void *)record->ExceptionInformation[1])) return EXCEPTION_CONTINUE_EXECUTION;
@@ -360,6 +375,13 @@ static uint64_t patch_tcb_loads(const Segment *segments, uint64_t count) {
 #endif
 #ifndef _WIN32
 static void fault(int sig, siginfo_t *info, void *context) {
+    /* Instructions this CPU lacks (cpu_patch.c): a rewritten breakpoint (rip after the int3) or
+     * one the scan missed continue in a thunk. */
+    if (sig == SIGTRAP || sig == SIGILL) {
+        greg_t *rip = &((ucontext_t *)context)->uc_mcontext.gregs[REG_RIP];
+        uint64_t to = (uint64_t)*rip;
+        if (sig == SIGTRAP ? cpu_patch_breakpoint(&to, to - 1) : cpu_patch_illegal(&to)) { *rip = (greg_t)to; return; }
+    }
     /* GPU page tracking (write-protected guest pages) is resolved first. */
     if (gpu_enabled && sig == SIGSEGV && bbgpu_handle_fault(context, info->si_addr)) return;
     /* A speculative guest memory read (runtime_memory.c) failed: resume its recovery point. */
@@ -890,7 +912,7 @@ int main(int argc, char **argv) {
     page_size = (size_t)sysconf(_SC_PAGESIZE);
     struct sigaction sa = {0}; sa.sa_sigaction = fault; sa.sa_flags = SA_SIGINFO;
     sigemptyset(&sa.sa_mask);
-    sigaction(SIGSEGV, &sa, NULL); sigaction(SIGILL, &sa, NULL); sigaction(SIGBUS, &sa, NULL);
+    sigaction(SIGSEGV, &sa, NULL); sigaction(SIGILL, &sa, NULL); sigaction(SIGBUS, &sa, NULL); sigaction(SIGTRAP, &sa, NULL);
     Dl_info self_info;
     if (dladdr((void *)main,&self_info)) exe_base=(uintptr_t)self_info.dli_fbase;
     struct sigaction dump = {0}; dump.sa_sigaction = thread_dump; dump.sa_flags = SA_SIGINFO|SA_RESTART;
@@ -1068,6 +1090,13 @@ int main(int argc, char **argv) {
 #ifdef _WIN32
     printf("Guest TCB loads redirected to the TEB TLS slot: %" PRIu64 "\n", patch_tcb_loads(segments, ns));
 #endif
+    {
+        uint64_t code[64][2];
+        size_t n=0;
+        for (uint64_t s=0;s<ns;++s)
+            if (segments[s].flags&1) { code[n][0]=segments[s].address; code[n][1]=segments[s].size; ++n; }
+        cpu_patch_image(image, size, (const uint64_t (*)[2])code, n);
+    }
     protect(traps, round_page((import_count + 1) * 32), 5);
     protect(image, round_page(size), 0);
     int executable_entry = 0;
