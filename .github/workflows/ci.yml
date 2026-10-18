@@ -1,14 +1,12 @@
 # Continuous integration.
 #
-# Three jobs, matching the three test layers:
-#   python-tests   the scripts and launcher settings tests (fastest, no build)
-#   c-tests-linux  the HLE runtime tests, built natively
-#   c-tests-win    the same tests under the MSYS2 CLANG64 toolchain that builds
-#                  the shipped Windows package
+# Three jobs:
+#   python-tests  the scripts and launcher settings tests (fastest, no build)
+#   licenses      every vendored third-party license must resolve to a real file
+#   c-tests-win   the HLE runtime tests under the MSYS2 CLANG64 toolchain that
+#                 builds the shipped Windows package, and the full build
 #
-# None of this needs a GPU or game files: the C++ renderer tests are built
-# separately (see build-renderer-tests, opt-in) because they need the whole GPU
-# library, which takes far longer than this workflow's budget.
+# None of this needs a GPU or game files.
 name: CI
 
 on:
@@ -33,30 +31,11 @@ jobs:
       - name: Run the suite
         run: python -m unittest discover -s tests -v
 
-  c-tests-linux:
-    name: C tests (Linux)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: recursive
-
-      # SDL3 is not packaged for Ubuntu (no libsdl3-dev), and miniz is not
-      # packaged at all. tests/build.sh drops the modules that need them and
-      # still runs the rest, so install only what Ubuntu actually has and let
-      # test_pad be skipped rather than failing the whole job.
-      - name: Install build dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            build-essential cmake ninja-build pkg-config \
-            libavcodec-dev libavformat-dev libavutil-dev \
-            nlohmann-json3-dev
-
-      # The tests link the HLE runtime but not the GPU library, so the Vulkan,
-      # SDL3 and FFmpeg packages below are all that is needed here.
-      - name: Build and run
-        run: bash tests/build.sh
+  # The Linux C tests and the C++ renderer tests were dropped from this first
+  # cut: their dependency lists were never verified against a real runner, and
+  # upstream `main` does not currently link on Linux anyway (#293). The same
+  # C tests run under MSYS2 CLANG64 in c-tests-win, which is what this PR is
+  # about. Both jobs should come back once verified rather than land as red Xs.
 
   c-tests-win:
     name: C tests (Windows / MSYS2 CLANG64)
@@ -173,44 +152,3 @@ jobs:
 
       - name: Package
         run: bash packaging/windows/package.sh
-
-  # The renderer tests are eight C++ targets in gpu/CMakeLists.txt. They need
-  # the full shadPS4 build (long) and no GPU, so they are opt-in rather than
-  # blocking every push.
-  build-renderer-tests:
-    name: Renderer tests (C++)
-    if: github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: recursive
-      # miniz and SDL3 are not packaged for Ubuntu. The GPU build vendors miniz
-      # under gpu/third_party/miniz, and the renderer test targets do not link
-      # SDL3, so neither belongs in this package list.
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            build-essential cmake ninja-build pkg-config git \
-            libvulkan-dev libavcodec-dev libavformat-dev libavutil-dev \
-            libavfilter-dev libswscale-dev libswresample-dev libxxhash-dev \
-            libboost-dev libfmt-dev nlohmann-json3-dev \
-            glslang-tools spirv-cross libzydis-dev
-      - name: Configure
-        run: cmake -S gpu -B out/gpu -G Ninja -DCMAKE_BUILD_TYPE=Release -DBB_PGO=off -DBB_LTO=OFF
-      - name: Build the test targets
-        run: |
-          ninja -C out/gpu \
-            motion-history-test ui-composition-test scene-resolution-test \
-            motion-shader-test taa-shader-test camera-motion-test \
-            upscaler-support-test
-      - name: Run
-        run: |
-          for t in motion-history-test ui-composition-test scene-resolution-test \
-                   motion-shader-test taa-shader-test camera-motion-test \
-                   upscaler-support-test; do
-            echo "::group::$t"
-            ./out/gpu/$t
-            echo "::endgroup::"
-          done
