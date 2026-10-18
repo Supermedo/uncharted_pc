@@ -3,6 +3,8 @@
 """Prepares an Uncharted executable of the Nathan Drake Collection and starts bb-probe.exe.
 
 BB_GAME_DIR   the game folder (CUSA02343, CUSA02320, ...; the one with eboot.bin)
+BB_GAME_DIR_U1 / _U2 / _U3   optional: the folder of a game that was dumped on its own; used for
+              that game instead of BB_GAME_DIR (its executable may be that folder's eboot.bin)
 BB_EXE        u1 / u2 / u3 or an executable name (default u1: eboot.bin, the collection menu)
 BB_USER_DIR   saves and shader caches (default user/ beside this script)
 Extra arguments go to bb-probe. When the game starts another executable of the collection
@@ -70,16 +72,36 @@ def game_cheats(enabled, exe):
     return ','.join(c.split(':', 1)[1] for c in enabled.split(',') if key and c.startswith(f'{key}:'))
 
 
+def locate(env, name):
+    """(folder, executable file) for one of the collection's executables. A game dumped on its own
+    (BB_GAME_DIR_U1/U2/U3) comes from its folder, where the game may be that folder's eboot.bin."""
+    key = next((k for k, v in EXECUTABLES.items() if v == name), '')
+    own = env.get(f'BB_GAME_DIR_{key.upper()}', '') if key else ''
+    folder = own or env.get('BB_GAME_DIR', '')
+    if not folder:
+        return None, name
+    folder = Path(folder)
+    if own and not (folder / name).is_file() and (folder / 'eboot.bin').is_file():
+        name = 'eboot.bin'
+    return folder, name
+
+
 def prepare(game, exe, out):
     """boot-linked.bin for one executable, kept until the executable or the scripts change."""
     out.mkdir(parents=True, exist_ok=True)
     linked = out / 'boot-linked.bin'
+    # Which executable the files in out/ were made from: another folder (a per-game one) needs a new run.
+    stamp, source = out / 'source.txt', str(game / exe)
     sources = [game / exe, *(PORT / 'scripts').glob('*.py'), *(game / 'sce_module').glob('*.prx')]
     if linked.is_file() and all(linked.stat().st_mtime >= s.stat().st_mtime for s in sources):
-        return
+        if not stamp.is_file():
+            stamp.write_text(source, encoding='utf-8')
+        if stamp.read_text(encoding='utf-8', errors='replace') == source:
+            return
     print(f'Preparing {exe} ...')
     run_script('prepare.py', game, '--out', out, '--exe', exe)
     run_script('link_modules.py', game, '--out', out, '--exe', exe)
+    stamp.write_text(source, encoding='utf-8')
 
 
 def main():
@@ -88,6 +110,11 @@ def main():
         wait_for(int(args[1]))
         args = args[2:]
     os.chdir(PORT)
+    # Paths and titles can hold characters the console code page (GBK, ...) lacks: never fail on a print.
+    # Pipes (the launcher reads them as UTF-8) get UTF-8; a real console keeps its own encoding.
+    for stream in (sys.stdout, sys.stderr):
+        if stream:
+            stream.reconfigure(errors='replace', **({} if stream.isatty() else {'encoding': 'utf-8'}))
     env = os.environ
     # Game titles carry "™": the scripts must not fall back to the Windows code page.
     env['PYTHONUTF8'] = '1'
@@ -116,11 +143,6 @@ def main():
         if clang64.is_dir():
             env['PATH'] = f'{clang64}{os.pathsep}{env.get("PATH", "")}'
 
-    if not env.get('BB_GAME_DIR'):
-        fail('Set BB_GAME_DIR to the game folder (the one with eboot.bin).')
-    game = Path(env['BB_GAME_DIR'])
-    if not (game / 'eboot.bin').is_file():
-        fail(f'No eboot.bin in {game}.')
     exe = executable_name(env.get('BB_EXE', ''))
     user_dir = Path(env.get('BB_USER_DIR', data / 'user')).resolve()
     user_dir.mkdir(parents=True, exist_ok=True)
@@ -132,15 +154,18 @@ def main():
     guest_argv = None
     all_cheats = env.setdefault('BB_CHEATS_ALL', env.get('BB_CHEATS', ''))
     while True:
-        if not (game / exe).is_file():
-            fail(f'No {exe} in {game}.')
+        game, file = locate(env, exe)
+        if not game:
+            fail('Set BB_GAME_DIR to the game folder (the one with eboot.bin).')
+        if not (game / file).is_file():
+            fail(f'No {file} in {game}.')
         out = out_root / Path(exe).stem.split('-')[0]
-        prepare(game, exe, out)
+        prepare(game, file, out)
         run_script('content_profile.py', game, '--out', out, '--sku', env.get('BB_CONTENT_SKU', 'full'))
         this = ['--run'] if getattr(sys, 'frozen', False) else [str(Path(__file__).resolve())]
         env['BB_EXE'] = exe
         env['BB_CHEATS'] = game_cheats(all_cheats, exe)
-        patches = cheats.build(game / exe, out, [c for c in env['BB_CHEATS'].split(',') if c])
+        patches = cheats.build(game / file, out, [c for c in env['BB_CHEATS'].split(',') if c])
         env['BB_RESTART_COMMAND'] = subprocess.list2cmdline([sys.executable, *this, '--after', str(os.getpid()), *args])
         command = [str(probe), str(out / 'boot-linked.bin'), '--content-profile', str(out / 'content.bin'),
                    '--app0', str(game), '--user', str(user_dir), '--timeout', env.get('BB_TIMEOUT', '0')]

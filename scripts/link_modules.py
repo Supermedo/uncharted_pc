@@ -261,13 +261,16 @@ def link(game, out, module_names=DEFAULT_MODULES, exe='eboot.bin'):
                   bindings=len(bindings), imports=len(names), fs_loads_patched=fs_patched,
                   main_tls=dict(zip(('vaddr', 'filesz', 'memsz', 'align'), main_tls_values)),
                   unresolved_imports=unresolved)
-    (out / 'link.json').write_text(json.dumps(report, indent=2) + '\n')
+    (out / 'link.json').write_text(json.dumps(report, indent=2) + '\n', encoding='utf-8')
     summary = ', '.join(f"{t['file']}@{t['base']:#x}" for t in table)
     print(f'Linked modules: {summary}; {len(bindings)} native bindings, {len(unresolved)} imports left to the host runtime, '
           f'fs->gs patched={fs_patched}')
 
 
 if __name__ == '__main__':
+    import sys
+    for _s in (sys.stdout, sys.stderr):  # console may be GBK etc.: titles carry a trademark sign
+        if _s: _s.reconfigure(encoding='utf-8', errors='replace')
     import argparse
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('game', type=Path)

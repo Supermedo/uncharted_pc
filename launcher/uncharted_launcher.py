@@ -37,7 +37,7 @@ CONFIG_FILE = CONFIG_DIR / 'settings.json'
 NAME = 'Uncharted'
 AUTHOR = 'SuperMedo'
 # This build; GitHub release tags are v<VERSION> (their digits are compared).
-VERSION = '0.3.3'
+VERSION = '0.3.6'
 RELEASES_API = 'https://api.github.com/repos/Supermedo/uncharted_pc/releases/latest'
 RELEASES_PAGE = 'https://github.com/Supermedo/uncharted_pc/releases/latest'
 UPDATE_DIR = Path(tempfile.gettempdir()) / 'uncharted-update'
@@ -128,11 +128,12 @@ TK_KEYS = {'space': 'Space', 'Return': 'Return', 'Escape': 'Escape', 'Tab': 'Tab
            'KP_Insert': 'Keypad 0', 'KP_End': 'Keypad 1', 'KP_Down': 'Keypad 2', 'KP_Next': 'Keypad 3',
            'KP_Left': 'Keypad 4', 'KP_Begin': 'Keypad 5', 'KP_Right': 'Keypad 6', 'KP_Home': 'Keypad 7',
            'KP_Up': 'Keypad 8', 'KP_Prior': 'Keypad 9'}
+MOUSE_SENS_MIN, MOUSE_SENS_MAX = 0.1, 10.0  # the Controls page slider (the game's default pace is 1)
 # Insert opens the in-game settings menu; Left Alt frees the mouse cursor.
 RESERVED_KEYS = {'Insert': 'Insert opens the in-game settings menu.',
                  'Alt_L': 'Left Alt frees the mouse cursor while held.'}
 
-APP_DEFAULTS = {'game_dir': '', 'user_dir': '', 'start': 'u1', 'language': '1', 'player_name': '',
+APP_DEFAULTS = {'game_dir': '', 'game_dir_u1': '', 'game_dir_u2': '', 'game_dir_u3': '', 'user_dir': '', 'start': 'u1', 'language': '1', 'player_name': '',
                 'fullscreen': False, 'present_mode': 'Mailbox', 'frame_rate': '60', 'show_fps': False,
                 'window_size': '1920x1080', 'scaler': 'fsr1', 'sharpening': '500',
                 'anti_aliasing': 'off', 'aa_sharpness': '0.2', 'frame_generation': 'off',
@@ -172,7 +173,7 @@ def run_role(argv):
     attach_stdio()
     for stream in (sys.stdout, sys.stderr):
         try:
-            stream.reconfigure(line_buffering=True)
+            stream.reconfigure(line_buffering=True, errors='replace', **({} if stream.isatty() else {'encoding': 'utf-8'}))
         except (AttributeError, ValueError):
             pass
     if argv[0] == '--script':
@@ -227,7 +228,7 @@ def set_ini(key, value):
 def game_info(folder):
     """{'title', 'id', 'version', 'games': [keys present]} of a game folder, or None."""
     folder = Path(folder or '.')
-    if not (folder / 'eboot.bin').is_file():
+    if not any((folder / exe).is_file() for _k, _t, _s, exe in GAMES):
         return None
     info = {'title': 'Uncharted', 'id': folder.name, 'version': '?',
             'games': [key for key, _n, _s, exe in GAMES if (folder / exe).is_file()]}
@@ -239,6 +240,37 @@ def game_info(folder):
     except (OSError, ValueError, ImportError):
         pass
     return info
+
+
+def game_folder(s, key):
+    """Where one game is: its own folder (Game page, for a game dumped on its own), else the collection folder."""
+    return str(s.get(f'game_dir_{key}') or '').strip() or str(s.get('game_dir') or '').strip()
+
+
+def game_available(s, key):
+    """The game's executable is in its folder (a game dumped on its own may have it as eboot.bin)."""
+    folder = game_folder(s, key)
+    if not folder:
+        return False
+    exe = next(e for k, _t, _s, e in GAMES if k == key)
+    own = str(s.get(f'game_dir_{key}') or '').strip()
+    return (Path(folder) / exe).is_file() or bool(own and (Path(folder) / 'eboot.bin').is_file())
+
+
+def mouse_sensitivity(s):
+    """The saved sensitivity as the game reads it: a number in the slider's range."""
+    try:
+        return f"{min(MOUSE_SENS_MAX, max(MOUSE_SENS_MIN, float(s.get('mouse_sensitivity')))):.2f}"
+    except (TypeError, ValueError):
+        return '1.00'
+
+
+def side_buttons():
+    """(Mouse 4, Mouse 5) held right now: the system's XBUTTON1 / XBUTTON2 (virtual keys 5 and 6)."""
+    try:
+        return tuple(bool(ctypes.windll.user32.GetAsyncKeyState(vk) & 0x8000) for vk in (5, 6))
+    except (AttributeError, OSError):
+        return (False, False)
 
 
 def display_refresh_rate():
@@ -277,7 +309,7 @@ def write_input_ini(s):
     pad = {**DEFAULT_PAD, **(s.get('pad_bindings') or {})}
     lines = ['# Uncharted controls (written by the launcher, Controls page)',
              f"mouse_look={1 if s.get('mouse_look', True) else 0}",
-             f"mouse_sensitivity={s.get('mouse_sensitivity') or '1.0'}",
+             f"mouse_sensitivity={mouse_sensitivity(s)}",
              f"mouse_invert_y={1 if s.get('mouse_invert_y') else 0}",
              f"pad_invert_y={1 if s.get('pad_invert_y') else 0}"]
     lines += [f'key.{action}={keys.get(action, "")}' for action in DEFAULT_KEYS]
@@ -294,8 +326,14 @@ def game_environment(s, start=None):
         env['BB_INPUT_CONFIG'] = str(write_input_ini(s))
     except OSError:
         pass
-    env['BB_GAME_DIR'] = s['game_dir']
-    env['BB_EXE'] = start or s['start']
+    start = start or s['start']
+    # The collection folder; with none, the folder of the game started. A game with a folder of its own
+    # (Game page) is taken from it, also when another game of the collection starts it.
+    env['BB_GAME_DIR'] = s['game_dir'] or game_folder(s, start)
+    for key, _t, _s, _e in GAMES:
+        if str(s.get(f'game_dir_{key}') or '').strip():
+            env[f'BB_GAME_DIR_{key.upper()}'] = game_folder(s, key)
+    env['BB_EXE'] = start
     if s['user_dir']:
         env['BB_USER_DIR'] = s['user_dir']
     env['BB_LANGUAGE'] = s['language']
@@ -322,6 +360,7 @@ def game_environment(s, start=None):
             env[key] = value
     env['PYTHONUNBUFFERED'] = '1'
     env['PYTHONIOENCODING'] = 'utf-8'
+    env['PYTHONUTF8'] = '1'  # open() and the pipes must not fall back to the ANSI code page (GBK, ...)
     return env
 
 
@@ -352,7 +391,7 @@ class Launcher:
         self.ui_calls = queue.Queue()
         self.banner_key = self.banner_scaled = self.cover_image = None
         self.card_hot = None
-        self.info = None
+        self.info, self.available = None, {}
         self.update_box = None
         root.title(f'{NAME} — The Nathan Drake Collection for Windows · by {AUTHOR}')
         root.configure(bg=BG)
@@ -833,8 +872,7 @@ class Launcher:
         if w < 48 or h < 48:
             return
         title, subtitle = next((t, sub) for k, t, sub, _e in GAMES if k == key)
-        info = self.info
-        present = (not info) or key in info['games']
+        present = self.available.get(key, True)
         chosen = key == self.var('start').get()
         hot = key == self.card_hot
         inner_w, inner_h = self._tile_content_size(w, h)
@@ -875,7 +913,7 @@ class Launcher:
         w, h = max(c.winfo_width(), 400), int(c['height'])
         start = self.var('start').get()
         title, subtitle = next((t, sub) for k, t, sub, _e in GAMES if k == start)
-        game_dir = self.var('game_dir').get()
+        game_dir = game_folder(self.current(), start)
         key = (w, h, start, game_dir)
         if self.banner_key != key:
             self.banner_key = key
@@ -951,10 +989,17 @@ class Launcher:
     def build_game(self):
         f = self.page('game', _('Game'), _('Your own decrypted dump of the collection (CUSA02343, CUSA02320, …).'))
         self.folder(f, 'game_dir', _('Game folder'), _('The folder with eboot.bin'),
-                    _('The folder with eboot.bin, big2-ps4_Shipping.elf and big3-ps4_Shipping.elf.'),
+                    _('The folder with eboot.bin, big2-ps4_Shipping.elf and big3-ps4_Shipping.elf. '
+                      'Leave it empty if every game has a folder of its own, below.'),
                     on_change=self.refresh)
         self.folder(f, 'user_dir', _('Saves folder'), _('Where saves and the shader cache are kept'),
                     _('Empty: the user folder next to the launcher.'))
+        self.section(f, _('Separate game folders'))
+        self.note(f, _('Only when the games are not in one collection folder (each dumped on its own). A game with '
+                       'a folder here is taken from it; the others from the collection folder above.'), top=2)
+        for key, _title, subtitle, _exe in GAMES:
+            self.folder(f, f'game_dir_{key}', _(subtitle.split(' · ')[0]), _('The folder of this game'),
+                        _('Empty: the collection folder.'), on_change=self.refresh)
         self.section(f, _('Console'))
         self.row(f, _('Language'), self.choice(f, 'language', LANGUAGES, 30),
                  _('The language the PS4 would be set to; the games use it for text and speech.'))
@@ -1011,9 +1056,10 @@ class Launcher:
                      'Insert opens the in-game settings menu.'))
         from uncharted_widgets import Slider
         self.row(f, _('Mouse sensitivity'),
-                 Slider(self.tk, self.target(f), self.var('mouse_sensitivity'), 0.1, 5.0, 0.05, COLORS, self.px,
-                        self.font_ui_md, width=300),
-                 _('How far the camera turns for a mouse movement; 1.00 is the default.'))
+                 Slider(self.tk, self.target(f), self.var('mouse_sensitivity'), MOUSE_SENS_MIN, MOUSE_SENS_MAX, 0.05,
+                        COLORS, self.px, self.font_ui_md, width=300, log=True, entry=True),
+                 _('How far the camera turns for a mouse movement; 1.00 is the default. Drag the slider or '
+                   'type a number (0.1 to 10) for a faster turn.'))
         self.check(f, 'mouse_invert_y', _('Invert the mouse vertically'))
 
         self.section(f, _('Keyboard and mouse buttons'))
@@ -1108,10 +1154,27 @@ class Launcher:
             return
         self.root.bind_all('<KeyPress>', self.captured_key)
         self.root.bind_all('<ButtonPress>', self.captured_button)
+        self.poll_side_buttons(side_buttons())
+
+    def poll_side_buttons(self, held):
+        """Tk on Windows never reports the side buttons (XBUTTON1/2: no <Button-4/5> event), so they
+        are read from the system while a binding is being captured. `held`: their state a moment ago."""
+        if not self.capturing:
+            return
+        down = side_buttons()
+        if self.root.focus_displayof():  # only while the launcher is the active window
+            for index, name in enumerate(('Mouse 4', 'Mouse 5')):
+                if down[index] and not held[index]:
+                    self.set_key(*self.capturing, name)
+                    return
+        self.side_poll = self.root.after(15, self.poll_side_buttons, down)
 
     def release_capture(self):
         for sequence in ('<KeyPress>', '<ButtonPress>'):
             self.root.unbind_all(sequence)
+        if getattr(self, 'side_poll', None):
+            self.root.after_cancel(self.side_poll)
+            self.side_poll = None
 
     def captured_key(self, event):
         sym = event.keysym
@@ -1130,7 +1193,9 @@ class Launcher:
         return 'break'
 
     def captured_button(self, event):
-        name = {1: 'Mouse Left', 2: 'Mouse Middle', 3: 'Mouse Right', 4: 'Mouse 4', 5: 'Mouse 5'}.get(event.num)
+        # 4 and 5 as other toolkits number the side buttons; 8 and 9 as X11 does
+        name = {1: 'Mouse Left', 2: 'Mouse Middle', 3: 'Mouse Right', 4: 'Mouse 4', 5: 'Mouse 5',
+                8: 'Mouse 4', 9: 'Mouse 5'}.get(event.num)
         if name:
             self.set_key(*self.capturing, name)
         return 'break'
@@ -1200,17 +1265,25 @@ class Launcher:
         bar.pack(side='right', fill='y')
         self.log.pack(fill='both', expand=True)
 
+    def current(self):
+        """The settings as they stand on screen (not yet saved)."""
+        return {**self.app, **{key: v.get() for key, v in self.vars.items()}}
+
     def refresh(self):
         """Game cards, the ready line and the status for the current choices."""
-        self.info = game_info(self.var('game_dir').get())
+        s = self.current()
+        start = s['start']
+        self.info = game_info(game_folder(s, start))
         info = self.info
-        start = self.var('start').get()
+        # Nothing set yet: no cover is dimmed.
+        unset = not any(game_folder(s, k) for k, _t, _s, _e in GAMES)
+        self.available = {key: unset or game_available(s, key) for key, _t, _s, _e in GAMES}
         for key in self.cards:
             self.draw_card(key)
         if not info:
             ready = _('Choose the game folder (the one with eboot.bin) on the Game page.')
         else:
-            missing = [title for key, title, _s, _e in GAMES if key not in info['games']]
+            missing = [title for key, title, _s, _e in GAMES if not self.available[key]]
             ready = f"{info['title']} · {info['id']} · {_('version')} {info['version']}"
             if missing:
                 ready += '\n' + _('Not in this folder: ') + ', '.join(missing)
@@ -1238,12 +1311,12 @@ class Launcher:
         if self.process:
             return
         self.collect()
-        info = game_info(self.app['game_dir'])
-        if not info:
+        folder = game_folder(self.app, self.app['start'])
+        if not folder or not Path(folder).is_dir():
             self.messagebox.showerror(NAME, _('Choose the game folder with eboot.bin.'))
             self.show('game')
             return
-        if self.app['start'] not in info['games']:
+        if not game_available(self.app, self.app['start']):
             self.messagebox.showerror(NAME, _('This game is not in the chosen folder.'))
             return
         self.set_log('')
@@ -1307,7 +1380,7 @@ class Launcher:
                     stripped = item.strip()
                     if stripped.startswith(('STOP:', 'ERROR', 'GPU crash: the', 'Fault:')) or \
                             ('failed' in stripped and not stripped.startswith('GPU [')) or \
-                            stripped.startswith(('No eboot.bin', 'Set BB_GAME_DIR', 'bb-probe.exe not found')):
+                            stripped.startswith(('No eboot.bin', 'No big', 'Set BB_GAME_DIR', 'bb-probe.exe not found')):
                         if not self.last_problem or stripped.startswith(('STOP:', 'GPU crash')):
                             self.last_problem = stripped
                     if 'Entering original x86-64 code' in item:
@@ -1501,7 +1574,7 @@ class Launcher:
                 # Library pictures (cover, header, hero) from the box art of the player's game folder.
                 try:
                     import uncharted_art
-                    uncharted_art.steam_artwork(self.app['game_dir'], config / 'grid',
+                    uncharted_art.steam_artwork(game_folder(self.app, 'u1') or game_folder(self.app, 'u2'), config / 'grid',
                                                 bbport_steam.shortcut_id(f'"{exe}"', title))
                 except Exception:  # pictures are a nicety: the shortcut works without them
                     pass
@@ -1613,7 +1686,7 @@ def main():
     if FROZEN and UPDATE_DIR not in PORT_DIR.parents:
         shutil.rmtree(UPDATE_DIR, ignore_errors=True)  # what a finished update left behind
     settings = {**APP_DEFAULTS, **load_json(CONFIG_FILE, {})}
-    if '--play' in args and (Path(settings['game_dir'] or '.') / 'eboot.bin').is_file():
+    if '--play' in args and game_available(settings, settings['start']):
         sys.exit(play_without_window(settings))
     try:
         ctypes.windll.shcore.SetProcessDpiAwareness(1)

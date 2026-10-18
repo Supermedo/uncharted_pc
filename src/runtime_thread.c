@@ -260,11 +260,13 @@ static void set_host_name(const char *name) {
 #define exit_setjmp(t) setjmp((t)->exit_jump)
 #define exit_longjmp(t) longjmp((t)->exit_jump,1)
 #endif
-/* BB_GUEST_MXCSR=<hex>: guest threads start with that MXCSR (0x9fc0 is the value sceFiber uses
- * for a fresh FPU state: flush to zero, denormals are zero) and the x87 control word 0x037f.
- * Off by default (the host's 0x1f80): tried against U3's exploding cloth bones, no change. */
+/* Guest threads start with the PS4's FPU state: MXCSR 0x9fc0 (the value sceFiber uses for a fresh
+ * FPU state: flush to zero, denormals are zero) and the x87 control word 0x037f. The game's
+ * fibers already ran with it while its threads used the host's 0x1f80, so the same physics job
+ * could compute differently depending on where it ran (U2's floating NPCs, issue #33).
+ * BB_GUEST_MXCSR=<hex> picks another value; BB_GUEST_MXCSR=1f80 is the old host default. */
 void runtime_set_guest_fpu(void) {
-    static unsigned value=0;
+    static unsigned value=0x9fc0;
     static int once;
     if (!once) {
         const char *env=getenv("BB_GUEST_MXCSR");

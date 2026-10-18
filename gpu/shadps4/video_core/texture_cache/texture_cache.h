@@ -108,7 +108,9 @@ public:
     void InvalidateMemory(VAddr addr, size_t size);
 
     /// Marks an image as dirty if it exists at the provided address.
-    void InvalidateMemoryFromGPU(VAddr address, size_t max_size);
+    /// whole_range (bbport): the GPU wrote exactly [address, address + max_size), so every image
+    /// overlapping it is dirty, not only one starting at the address (copies moving textures).
+    void InvalidateMemoryFromGPU(VAddr address, size_t max_size, bool whole_range = false);
 
     /// Evicts any images that overlap the unmapped range.
     void UnmapMemory(VAddr cpu_addr, size_t size);
@@ -411,6 +413,7 @@ private:
     tsl::robin_map<u64, Sampler> samplers;
     std::unordered_set<ImageId> download_images;
     u64 total_used_memory = 0;
+    u64 registered_image_bytes = 0; ///< bbport: guest bytes of registered images (diagnostics)
     u64 gc_evictions = 0, gc_downloads = 0; ///< bbport: pressure report
     std::chrono::steady_clock::time_point gc_report_time{};
     u64 trigger_gc_memory = 0;
