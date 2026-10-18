@@ -782,6 +782,67 @@ static void patch_eop_tick_wait(uint64_t image_size) {
     }
     if (!patched) printf("Frame pacing: EOP tick check not found\n");
 }
+/* The single offset in the image where a byte pattern ("4d8d7001 74??", ?? = any byte) occurs,
+ * else -1 (none or several). */
+static int64_t find_unique_pattern(uint64_t image_size, const char *pattern) {
+    unsigned char bytes[64], mask[64];
+    size_t n=0;
+    for (const char *p=pattern;*p && n<sizeof(bytes);) {
+        if (*p==' ') { ++p; continue; }
+        mask[n]=p[0]!='?';
+        bytes[n]=mask[n] ? (unsigned char)strtoul((char[]){p[0],p[1],0},NULL,16) : 0;
+        ++n;
+        p+=2;
+    }
+    int64_t found=-1;
+    for (uint64_t at=0;at+n<=image_size;++at) {
+        if (image[at]!=bytes[0]) continue;
+        size_t i=1;
+        while (i<n && (!mask[i] || image[at+i]==bytes[i])) ++i;
+        if (i<n) continue;
+        if (found>=0) return -1;
+        found=(int64_t)at;
+    }
+    return found;
+}
+/* Naughty Dog's job manager (all three games): the six NdJobWorkerThreads spin on their queues
+ * with `pause` unless the manager's sleep flag (byte +0x59, set by its own SetSleepMode) is on.
+ * With it on, an idle worker waits on the manager's condition variable after 1000 spins (10 ms
+ * timeout) and every job submission wakes them. On the PS4 each worker owns a core and the flag
+ * stays off; on a 4-core CPU (Steam Deck) the spinning workers starve the GPU command thread.
+ * The flag is treated as on in the worker loop, in its re-check before waiting and in the submit
+ * path: all three or none. Found by BilalReloaded
+ * (github.com/bc160201983/Uncharted-The-Nathan-Drake-Collection-PC-port, JOB_SLEEP_PATCHES in
+ * tools/probe_uncharted.py). BB_JOB_SLEEP=0 keeps the spinning workers. */
+static void patch_job_sleep(uint64_t image_size) {
+    const char *env=getenv("BB_JOB_SLEEP");
+    if (env && env[0]=='0') { printf("Job workers: spin while idle (BB_JOB_SLEEP=0)\n"); return; }
+    static const struct {
+        const char *name, *pattern;
+        unsigned offset, original_size, size;
+        unsigned char original[2], replacement[6];
+    } patches[]={
+        /* je past the sleep -> nop nop */
+        {"worker loop","4d8d7001 807f5900 74?? 4981f8e8030000 7c??",8,1,2,{0x74},{0x90,0x90}},
+        {"re-check before waiting","498b07 80785900 74?? 4889c7 4883ef80",7,1,2,{0x74},{0x90,0x90}},
+        /* je rel32 past the wake-up -> 6-byte nop */
+        {"job submission wakes them","80785900 0f84????0000 4883c060",4,2,6,{0x0f,0x84},
+         {0x66,0x0f,0x1f,0x44,0x00,0x00}},
+    };
+    int64_t at[3];
+    for (size_t i=0;i<3;++i) {
+        at[i]=find_unique_pattern(image_size,patches[i].pattern);
+        if (at[i]<0 || memcmp(image+at[i]+patches[i].offset,patches[i].original,patches[i].original_size)) {
+            printf("Job workers: %s not found, idle workers keep spinning\n",patches[i].name);
+            return;
+        }
+    }
+    for (size_t i=0;i<3;++i) {
+        memcpy(image+at[i]+patches[i].offset,patches[i].replacement,patches[i].size);
+        printf("Job workers: %s at %#" PRIx64 " (idle workers sleep)\n",patches[i].name,
+               (uint64_t)at[i]+patches[i].offset);
+    }
+}
 /* Restarts the game through run.sh (the settings menu: a new render resolution is a patch
  * applied at start). Descriptors are closed first so the old GPU device and its memory are
  * released before the new process opens its own. */
@@ -1064,6 +1125,7 @@ int main(int argc, char **argv) {
         for (uint64_t s=0;s<ns;++s) if (segments[s].address+segments[s].size>image_end) image_end=segments[s].address+segments[s].size;
         install_game_callbacks(segments, ns, image_end);
         patch_eop_tick_wait(image_end);
+        patch_job_sleep(image_end);
     }
 #ifdef _WIN32
     printf("Guest TCB loads redirected to the TEB TLS slot: %" PRIu64 "\n", patch_tcb_loads(segments, ns));
