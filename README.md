@@ -19,7 +19,7 @@ code runs directly on your PC and the graphics are translated to Vulkan. Unpack 
 - 60 FPS like on PS4, or 120 FPS (higher rates are experimental).
 - Anti-aliasing with TAA, AMD FSR 3.1, AMD FSR 4 or NVIDIA DLSS (DLAA).
 - Frame generation: AMD FSR 3 (any GPU) or NVIDIA DLSS (RTX 40 2x, RTX 50 up to 4x).
-- Keyboard, mouse and controller together, all remappable. Mouse look in U3.
+- Keyboard, mouse and controller together, all remappable. Mouse look in all three games, aiming included (game versions 1.00 and 1.02).
 - Add to Steam and desktop shortcuts from the launcher, automatic updates.
 
 ## Requirements
