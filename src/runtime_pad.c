@@ -10,6 +10,7 @@
  *       lefttrigger righttrigger leftstick rightstick back start dpup dpdown dpleft dpright
  *       touchpad misc1 paddle1..paddle4) or "none", for the button actions above.
  *   mouse_look=1  mouse_sensitivity=1.0  mouse_invert_y=0  pad_invert_y=0
+ *   pad_vibration=1  pad_vibration_strength=100
  *
  * Defaults (no file): WASD move, mouse look, left button R2 (fire), right button L2 (aim),
  * Space Cross, C Circle, F Square, E Triangle, Q L1, G R1, Left Shift L3, V R3, Escape/Enter
@@ -122,7 +123,7 @@ static const Action actions[ACTIONS]={
 static struct {
     Bind keys[ACTIONS][2];
     int pad[16];               /* SDL_GamepadButton, PAD_TRIGGER_*, or -1 */
-    int mouse_look, mouse_invert_y, pad_invert_y;
+    int mouse_look, mouse_invert_y, pad_invert_y, pad_vibration, pad_vibration_strength;
     float mouse_sensitivity;
 } input;
 
@@ -157,6 +158,7 @@ static void load_input(void) {
         if (a<16) input.pad[a]=parse_pad(actions[a].pad);
     }
     input.mouse_look=1; input.mouse_sensitivity=1.0f;
+    input.pad_vibration=1; input.pad_vibration_strength=100;
     const char *path=getenv("BB_INPUT_CONFIG");
     FILE *f=path && *path ? fopen(path,"r") : NULL;
     if (f) {
@@ -171,6 +173,8 @@ static void load_input(void) {
             else if (!strcmp(key,"mouse_sensitivity")) input.mouse_sensitivity=(float)atof(value);
             else if (!strcmp(key,"mouse_invert_y")) input.mouse_invert_y=atoi(value)!=0;
             else if (!strcmp(key,"pad_invert_y")) input.pad_invert_y=atoi(value)!=0;
+            else if (!strcmp(key,"pad_vibration")) input.pad_vibration=atoi(value)!=0;
+            else if (!strcmp(key,"pad_vibration_strength")) input.pad_vibration_strength=atoi(value);
             else for (int a=0;a<ACTIONS;++a) {
                 if (!strncmp(key,"key.",4) && !strcmp(key+4,actions[a].name)) set_keys(a,value);
                 else if (a<16 && !strncmp(key,"pad.",4) && !strcmp(key+4,actions[a].name)) input.pad[a]=parse_pad(value);
@@ -181,6 +185,8 @@ static void load_input(void) {
                input.mouse_look ? "on" : "off",input.mouse_sensitivity);
     }
     if (input.mouse_sensitivity<=0.0f) input.mouse_sensitivity=1.0f;
+    if (input.pad_vibration_strength<0) input.pad_vibration_strength=0;
+    if (input.pad_vibration_strength>100) input.pad_vibration_strength=100;
     bbgpu_mouse_configure(input.mouse_look);
 }
 
@@ -835,8 +841,13 @@ static ABI int32_t pad_vibration(int32_t handle, const uint8_t *param) {
     if (handle!=PAD_HANDLE || !opened) return ERR_INVALID_HANDLE;
     if (!param) return ERR_INVALID_ARG;
     pthread_mutex_lock(&lock);
-    SDL_Gamepad *g=current_gamepad();
-    if (g) SDL_RumbleGamepad(g,(uint16_t)(param[0]*257),(uint16_t)(param[1]*257),1000);
+    SDL_Gamepad *g=input.pad_vibration ? current_gamepad() : NULL;
+    if (g) {
+        const unsigned strength=(unsigned)input.pad_vibration_strength;
+        const uint16_t low=(uint16_t)((param[0]*257u*strength+50u)/100u);
+        const uint16_t high=(uint16_t)((param[1]*257u*strength+50u)/100u);
+        SDL_RumbleGamepad(g,low,high,1000);
+    }
     pthread_mutex_unlock(&lock);
     return 0;
 }
@@ -872,3 +883,39 @@ static const RuntimeExport exports[]={
 };
 uintptr_t runtime_pad_resolve(const char *name) { return RUNTIME_LOOKUP(exports,name); }
 void runtime_pad_report(void) { printf("Runtime: pad reads=%zu, gamepad=%s\n",reads,gamepad ? SDL_GetGamepadName(gamepad) : "none"); }
+
+/* A loader command used by the launcher before the game starts: no Vulkan or guest memory. */
+int runtime_pad_tool(int test, int strength) {
+    const int already_ready=SDL_WasInit(SDL_INIT_GAMEPAD)!=0;
+    if (!already_ready && !SDL_InitSubSystem(SDL_INIT_GAMEPAD)) {
+        fprintf(stderr,"Controller detection failed: %s\n",SDL_GetError());
+        return 1;
+    }
+    int count=0;
+    SDL_JoystickID *ids=SDL_GetGamepads(&count);
+    SDL_Gamepad *pad=ids && count>0 ? SDL_OpenGamepad(ids[0]) : NULL;
+    SDL_free(ids);
+    if (!pad) {
+        puts("connected=0\nrumble=0");
+        if (!already_ready) SDL_QuitSubSystem(SDL_INIT_GAMEPAD);
+        return 0;
+    }
+    const char *name=SDL_GetGamepadName(pad);
+    const bool rumble=SDL_GetBooleanProperty(SDL_GetGamepadProperties(pad),
+                                             SDL_PROP_GAMEPAD_CAP_RUMBLE_BOOLEAN,false);
+    puts("connected=1");
+    printf("name=%s\n",name ? name : "Game controller");
+    printf("rumble=%d\n",rumble ? 1 : 0);
+    if (test) {
+        if (strength<0) strength=0;
+        if (strength>100) strength=100;
+        const uint16_t amount=(uint16_t)((65535u*(unsigned)strength+50u)/100u);
+        const bool started=rumble && SDL_RumbleGamepad(pad,amount,amount,500);
+        if (started) SDL_Delay(500);
+        SDL_RumbleGamepad(pad,0,0,0);
+        printf("tested=%d\n",started ? 1 : 0);
+    }
+    SDL_CloseGamepad(pad);
+    if (!already_ready) SDL_QuitSubSystem(SDL_INIT_GAMEPAD);
+    return 0;
+}

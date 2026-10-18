@@ -822,6 +822,9 @@ int main(int argc, char **argv) {
     mallopt(M_MMAP_THRESHOLD,32*1024*1024);
 #endif
     if (argc == 2 && !strcmp(argv[1], "--vulkan-only")) return vulkan_smoke();
+    if (argc == 2 && !strcmp(argv[1], "--controller-info")) return runtime_pad_tool(0,100);
+    if (argc == 3 && !strcmp(argv[1], "--controller-test"))
+        return runtime_pad_tool(1,atoi(argv[2]));
     check_cpu();
 #ifdef _WIN32
     /* The PS4 user range must stay free of host allocations (GPU driver, heaps), and the guest
@@ -845,7 +848,7 @@ int main(int argc, char **argv) {
         else { fprintf(stderr, "Unknown option: %s\n", argv[i]); return 1; }
     }
     if (argc < 2) {
-        fprintf(stderr, "Usage: %s boot.bin [--cpu-only] [--strict-imports] [--list-missing] [--content-profile file] [--app0 dir] [--user dir] [--patches file] [--guest-argv file] [--timeout seconds] | --vulkan-only\n", argv[0]);
+        fprintf(stderr, "Usage: %s boot.bin [options] | --vulkan-only | --controller-info | --controller-test 0..100\n", argv[0]);
         return 1;
     }
     if (content_profile) {

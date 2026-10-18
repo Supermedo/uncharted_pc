@@ -146,8 +146,9 @@ class Slider:
     entry=True makes the value a box the number can be typed into (clamped to the range)."""
 
     def __init__(self, tk, parent, variable, low, high, step, colors, px, font, fmt='{:.2f}', width=320,
-                 log=False, entry=False):
+                 log=False, entry=False, suffix='×'):
         self.var, self.low, self.high, self.step, self.fmt, self.log = variable, low, high, step, fmt, log
+        self.suffix = suffix
         self.colors, self.px = colors, px
         self.frame = tk.Frame(parent, bg=colors['card'])
         self.w, self.h = px(width), px(26)
@@ -200,7 +201,7 @@ class Slider:
         d = self.px(18)
         c.create_image(x, y, image=circle_image(d, colors['knob_on'], colors['card'], colors['gold']))
         if not self.entry:
-            self.label.configure(text=self.fmt.format(self.value()) + '×')
+            self.label.configure(text=self.fmt.format(self.value()) + self.suffix)
 
     def grid(self, **kw):
         self.frame.grid(**kw)

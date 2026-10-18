@@ -139,7 +139,9 @@ APP_DEFAULTS = {'game_dir': '', 'game_dir_u1': '', 'game_dir_u2': '', 'game_dir_
                 'anti_aliasing': 'off', 'aa_sharpness': '0.2', 'frame_generation': 'off',
                 'frame_gen_multiplier': '2', 'extra_env': '', 'close_on_play': False,
                 'mouse_look': True, 'mouse_sensitivity': '1.0', 'mouse_invert_y': False,
-                'pad_invert_y': False, 'key_bindings': {}, 'pad_bindings': {}, 'check_updates': True}
+                'pad_invert_y': False, 'pad_vibration': True, 'pad_vibration_strength': '100',
+                'key_bindings': {}, 'pad_bindings': {},
+                'check_updates': True}
 
 
 def _(text):
@@ -264,6 +266,45 @@ def mouse_sensitivity(s):
         return '1.00'
 
 
+def vibration_strength(s):
+    """Saved vibration percentage, clamped at the launcher/runtime boundary."""
+    try:
+        return min(100, max(0, int(float(s.get('pad_vibration_strength', 100)))))
+    except (TypeError, ValueError):
+        return 100
+
+
+def controller_probe_path():
+    """The packaged or development loader, which also provides the lightweight controller probe."""
+    configured = os.environ.get('BB_PROBE')
+    candidates = ([Path(configured)] if configured else []) + [PORT_DIR / 'bin' / 'bb-probe.exe',
+                                                               PORT_DIR / 'out' / 'bb-probe.exe']
+    return next((path for path in candidates if path.is_file()), None)
+
+
+def controller_probe_environment(probe):
+    """Development builds find SDL beside MSYS2; packages already keep it beside bb-probe."""
+    env = dict(os.environ)
+    if not (probe.parent / 'SDL3.dll').is_file():
+        clang64 = Path(env.get('MSYS2_ROOT', r'C:\msys64')) / 'clang64' / 'bin'
+        if clang64.is_dir():
+            env['PATH'] = f'{clang64}{os.pathsep}{env.get("PATH", "")}'
+    return env
+
+
+def parse_controller_probe(text):
+    """Parse bb-probe's deliberately small key=value controller response."""
+    values = {}
+    for line in text.splitlines():
+        if '=' in line:
+            key, value = line.split('=', 1)
+            values[key.strip()] = value.strip()
+    return {'connected': values.get('connected') == '1',
+            'name': values.get('name', ''),
+            'rumble': values.get('rumble') == '1',
+            'tested': values.get('tested') == '1'}
+
+
 def side_buttons():
     """(Mouse 4, Mouse 5) held right now: the system's XBUTTON1 / XBUTTON2 (virtual keys 5 and 6)."""
     try:
@@ -310,7 +351,9 @@ def write_input_ini(s):
              f"mouse_look={1 if s.get('mouse_look', True) else 0}",
              f"mouse_sensitivity={mouse_sensitivity(s)}",
              f"mouse_invert_y={1 if s.get('mouse_invert_y') else 0}",
-             f"pad_invert_y={1 if s.get('pad_invert_y') else 0}"]
+             f"pad_invert_y={1 if s.get('pad_invert_y') else 0}",
+             f"pad_vibration={1 if s.get('pad_vibration', True) else 0}",
+             f"pad_vibration_strength={vibration_strength(s)}"]
     lines += [f'key.{action}={keys.get(action, "")}' for action in DEFAULT_KEYS]
     lines += [f'pad.{action}={pad.get(action, "none")}' for action in DEFAULT_PAD]
     path = input_ini_path()
@@ -402,6 +445,7 @@ class Launcher:
         self.show('play')
         root.protocol('WM_DELETE_WINDOW', self.close)
         root.after(100, self.drain_output)
+        root.after(150, self.detect_controller)
         if self.app.get('check_updates', True):
             threading.Thread(target=self.check_update, daemon=True).start()
 
@@ -1102,6 +1146,27 @@ class Launcher:
         holder.grid(row=self.next_row(card), column=0, columnspan=2, sticky='w', pady=(12, 0))
         self.pill(holder, _('Default controller buttons'), self.reset_pad).pack(side='left')
 
+        self.section(f, _('Vibration'))
+        self.controller_name = self.ttk.Label(self.target(f), text=_('Detecting…'))
+        self.row(f, _('Controller'), self.controller_name)
+        self.controller_status = self.ttk.Label(self.target(f), text=_('Checking vibration support…'),
+                                                style='Muted.TLabel')
+        self.row(f, _('Status'), self.controller_status)
+        self.check(f, 'pad_vibration', _('Controller vibration'),
+                   _('The setting applies the next time the game starts.'))
+        self.row(f, _('Vibration intensity'),
+                 Slider(self.tk, self.target(f), self.var('pad_vibration_strength'), 0, 100, 5,
+                        COLORS, self.px, self.font_ui_md, fmt='{:.0f}', width=300, suffix='%'))
+        card = self.target(f)
+        holder = self.tk.Frame(card, bg=CARD)
+        holder.grid(row=self.next_row(card), column=0, columnspan=2, sticky='w', pady=(12, 0))
+        self.controller_refresh_button = self.pill(holder, _('Detect controller'), self.detect_controller)
+        self.controller_refresh_button.pack(side='left')
+        self.controller_test_button = self.pill(holder, _('Test vibration'),
+                                                lambda: self.detect_controller(test=True))
+        self.controller_test_button.pack(side='left', padx=(8, 0))
+        self.controller_test_button.configure(state='disabled')
+
     def key_list(self, action):
         value = (self.app.get('key_bindings') or {}).get(action, DEFAULT_KEYS[action])
         parts = (value.split('|') + ['', ''])[:2]
@@ -1295,6 +1360,62 @@ class Launcher:
         except OSError:
             pass
 
+    def detect_controller(self, test=False):
+        """Detect or briefly rumble the first SDL gamepad without starting the game renderer."""
+        if self.process:
+            self.controller_status.configure(text=_('Unavailable while the game is running.'))
+            return
+        probe = controller_probe_path()
+        if not probe:
+            self.controller_name.configure(text=_('Not available'))
+            self.controller_status.configure(text=_('bb-probe.exe was not found.'))
+            return
+        self.controller_refresh_button.configure(state='disabled')
+        self.controller_test_button.configure(state='disabled')
+        self.controller_status.configure(text=_('Testing…') if test else _('Detecting…'))
+        strength = vibration_strength(self.current())
+
+        def work():
+            command = [str(probe), '--controller-test', str(strength)] if test \
+                else [str(probe), '--controller-info']
+            try:
+                result = subprocess.run(command, capture_output=True, text=True, encoding='utf-8',
+                                        errors='replace', timeout=5, env=controller_probe_environment(probe),
+                                        creationflags=NO_WINDOW)
+                if result.returncode:
+                    raise OSError(result.stderr.strip() or _('controller probe failed'))
+                info, error = parse_controller_probe(result.stdout), ''
+            except (OSError, subprocess.TimeoutExpired) as failure:
+                info, error = None, str(failure)
+            self.ui_calls.put(lambda: self.show_controller(info, error, test))
+        threading.Thread(target=work, daemon=True).start()
+
+    def show_controller(self, info, error, test):
+        if self.process:
+            self.controller_refresh_button.configure(state='disabled')
+            self.controller_test_button.configure(state='disabled')
+            self.controller_status.configure(text=_('Unavailable while the game is running.'))
+            return
+        self.controller_refresh_button.configure(state='normal')
+        if error:
+            self.controller_name.configure(text=_('Not available'))
+            self.controller_status.configure(text=_('Could not detect the controller: {}').format(error[:120]))
+            return
+        if not info['connected']:
+            self.controller_name.configure(text=_('No controller detected'))
+            self.controller_status.configure(text=_('Connect a controller, then detect again.'))
+            return
+        self.controller_name.configure(text=info['name'] or _('Game controller'))
+        self.controller_test_button.configure(state='normal' if info['rumble'] else 'disabled')
+        if not info['rumble']:
+            status = _('Connected · Vibration not supported')
+        elif test:
+            status = _('Connected · Vibration test completed') if info['tested'] \
+                else _('Connected · Vibration test failed')
+        else:
+            status = _('Connected · Vibration supported')
+        self.controller_status.configure(text=status)
+
     def play(self):
         if self.process:
             return
@@ -1321,6 +1442,8 @@ class Launcher:
         threading.Thread(target=self.read_output, args=(self.process,), daemon=True).start()
         self.play_button.configure(state='disabled')
         self.stop_button.configure(state='normal')
+        self.controller_refresh_button.configure(state='disabled')
+        self.controller_test_button.configure(state='disabled')
         self.status.configure(text=_('Preparing the game; it opens in its own window…'), fg=GOLD)
         if self.app.get('close_on_play'):
             self.root.after(5000, self.root.destroy)
@@ -1358,6 +1481,7 @@ class Launcher:
                     self.play_button.configure(state='normal')
                     self.stop_button.configure(state='disabled')
                     self.refresh()
+                    self.detect_controller()
                     # It failed to start or crashed (not Stop, not closing the window): say why.
                     if not self.stopping and (code != 0 or not self.entered):
                         reason = self.last_problem or _('see the Log page')
