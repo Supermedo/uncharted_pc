@@ -62,7 +62,7 @@ def game_app_version(game):
 
 
 def game_title_id(game):
-    """TITLE_ID of the game folder's param.sfo (CUSA03173, ...), or None."""
+    """param.sfo's TITLE_ID ("CUSA02320", "CUSA03173", ...), or None when it cannot be read."""
     try:
         from prepare import sfo
         return sfo((Path(game) / 'sce_sys/param.sfo').read_bytes()).get('TITLE_ID')
@@ -266,10 +266,11 @@ NDC_ELFS=('eboot.bin','big2-ps4_Shipping.elf','big3-ps4_Shipping.elf')
 
 
 def external_patches(directory, app_version='01.09', exclude=Path(__file__).resolve().parent.parent/'patches/Bloodborne.xml',
-                     app_elf='eboot.bin'):
+                     app_elf='eboot.bin', title_id=None):
     """[(key, file, metadata)] of patches for this executable and version in directory/*.xml.
     key is "<file name>/<patch name>" (the launcher's selection, patches.json). app_version may
-    be one version or a set of them (the dump's VERSION and APP_VER)."""
+    be one version or a set of them (the dump's VERSION and APP_VER). With title_id (the dump's
+    TITLE_ID), a file that lists title IDs must list that one."""
     versions={app_version} if isinstance(app_version,str) else set(app_version)
     found=[]
     directory=Path(directory)
@@ -282,6 +283,7 @@ def external_patches(directory, app_version='01.09', exclude=Path(__file__).reso
             continue
         ids={e.text.strip() for e in root.iter('ID') if e.text}
         if ids and not ids&(BLOODBORNE_IDS|NDC_IDS): continue
+        if title_id and ids and title_id not in ids: continue
         for meta in root.iter('Metadata'):
             if meta.get('AppVer') in versions and meta.get('AppElf','eboot.bin')==app_elf:
                 found.append((f'{path.name}/{meta.get("Name")}',path,meta))
@@ -360,7 +362,7 @@ def main():
     if a.external_only:
         writes=[]
         if a.patches_dir:
-            found=external_patches(a.patches_dir,game_versions(a.game_dir),a.xml,a.app_elf)
+            found=external_patches(a.patches_dir,game_versions(a.game_dir),a.xml,a.app_elf,game_title_id(a.game_dir))
             writes=compile_external(external_selection(found,a.patches_config),
                                     eboot_segments((a.out/'eboot.elf').read_bytes()))
         # After the built-in patch set run.py compiled (apply_patches, empty for a game it does
