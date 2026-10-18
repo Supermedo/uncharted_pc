@@ -427,6 +427,60 @@ void PrintFaultHistory(VAddr address, u64 size) {
     }
 }
 
+namespace {
+/// bbport: who owns the bytes of a shadowed GPU-written range (ShadowGpuData) once the guest has
+/// written the page. A byte the guest changed is its own; one it left as it was keeps the GPU's
+/// data. Judged byte by byte, a guest store of the value already there (zero over zero, the
+/// commonest) kept the GPU's bytes instead: U3's London pub reuses memory the GPU had filled
+/// with 0xff, and a free-list link the game set to 0 read back as ffffffffffffffff (its
+/// allocator faulted at 0xd9c59b), while the GPU read the same mixture and hung (device lost).
+/// The guest writes whole objects, so a change anywhere in an aligned 64-byte block (one cache
+/// line; GPU buffers are at least that aligned) makes the whole block the guest's.
+/// fn(begin, end, guest_owned) gets the runs of shadow.bytes, as offsets.
+constexpr u64 ShadowBlockBytes = 64;
+std::atomic<u64> shadow_equal_bytes_claimed{0};
+std::atomic<u32> shadow_claim_reports{0};
+
+template <typename Shadow, typename Fn>
+void ForEachShadowRun(const Shadow& shadow, Fn&& fn) {
+    const auto* guest = reinterpret_cast<const u8*>(shadow.start);
+    const size_t count = shadow.bytes.size();
+    size_t run_begin = 0;
+    bool run_owned = false;
+    u64 equal_claimed = 0;
+    for (size_t i = 0; i < count;) {
+        const size_t end = std::min<size_t>(
+            count, Common::AlignUp(shadow.start + i + 1, ShadowBlockBytes) - shadow.start);
+        const bool owned = std::memcmp(guest + i, shadow.bytes.data() + i, end - i) != 0;
+        if (owned) {
+            for (size_t k = i; k < end; ++k) {
+                equal_claimed += guest[k] == shadow.bytes[k];
+            }
+        }
+        if (i != 0 && owned != run_owned) {
+            fn(run_begin, i, run_owned);
+            run_begin = i;
+        }
+        run_owned = owned;
+        i = end;
+    }
+    if (count != 0) {
+        fn(run_begin, count, run_owned);
+    }
+    if (equal_claimed != 0) {
+        // BB_FRAME_STATS-free evidence that the old rule would have kept GPU bytes here.
+        shadow_equal_bytes_claimed.fetch_add(equal_claimed, std::memory_order_relaxed);
+        if (shadow_claim_reports.fetch_add(1, std::memory_order_relaxed) < 20) {
+            std::printf("Buffer merge: guest data at 0x%llx (%zu bytes) kept %llu bytes it "
+                        "rewrote unchanged (%llu so far)\n",
+                        static_cast<unsigned long long>(shadow.start), count,
+                        static_cast<unsigned long long>(equal_claimed),
+                        static_cast<unsigned long long>(shadow_equal_bytes_claimed.load()));
+        }
+    }
+}
+} // namespace
+
 void BufferCache::ShadowGpuData(VAddr page, u64 length) {
     std::scoped_lock lk{shadow_mutex};
     for (VAddr at = page; at < page + length; at += TRACKER_BYTES_PER_PAGE) {
@@ -545,9 +599,10 @@ void BufferCache::DownloadMemory(const Buffer* arena, VAddr device_addr, u64 siz
         const char* env = std::getenv("BB_DOWNLOAD_CHECK");
         return env && env[0] == '1';
     }();
-    // Shadowed pages (ShadowGpuData) in the range: the bytes the guest changed since stay, and
-    // the pages need no shadow afterwards (their GPU data is in guest memory).
-    std::vector<std::pair<VAddr, u8>> guest_bytes;
+    // Shadowed pages (ShadowGpuData) in the range: the blocks the guest changed since stay
+    // (ForEachShadowRun), and the pages need no shadow afterwards (their GPU data is in guest
+    // memory).
+    std::vector<std::pair<VAddr, std::vector<u8>>> guest_bytes;
     if (shadow_pages.load(std::memory_order_relaxed)) {
         std::scoped_lock lk{shadow_mutex};
         for (VAddr page = Common::AlignDown(device_addr, TRACKER_BYTES_PER_PAGE);
@@ -558,11 +613,12 @@ void BufferCache::DownloadMemory(const Buffer* arena, VAddr device_addr, u64 siz
             }
             for (const auto& shadow : it->second) {
                 const auto* guest = reinterpret_cast<const u8*>(shadow.start);
-                for (size_t i = 0; i < shadow.bytes.size(); ++i) {
-                    if (guest[i] != shadow.bytes[i]) {
-                        guest_bytes.emplace_back(shadow.start + i, guest[i]);
+                ForEachShadowRun(shadow, [&](size_t begin, size_t end, bool guest_owned) {
+                    if (guest_owned) {
+                        guest_bytes.emplace_back(shadow.start + begin,
+                                                 std::vector<u8>(guest + begin, guest + end));
                     }
-                }
+                });
             }
             shadows.erase(it);
             shadow_pages.fetch_sub(1, std::memory_order_relaxed);
@@ -587,8 +643,8 @@ void BufferCache::DownloadMemory(const Buffer* arena, VAddr device_addr, u64 siz
         }
         memory->TryWriteBacking(dst_addr, data, copy.size);
     }
-    for (const auto& [address, value] : guest_bytes) {
-        memory->TryWriteBacking(reinterpret_cast<void*>(address), &value, 1);
+    for (const auto& [address, bytes] : guest_bytes) {
+        memory->TryWriteBacking(reinterpret_cast<void*>(address), bytes.data(), bytes.size());
     }
     memory_tracker->UnmarkRegionAsGpuModified(device_addr, size);
 }
@@ -1053,8 +1109,8 @@ bool BufferCache::SynchronizeMemory(const Buffer* arena, VAddr device_addr, u32 
                 add_upload(addr, size);
                 return;
             }
-            // Shadowed pages (ShadowGpuData): bytes of GPU-written ranges the guest left as they
-            // were keep the GPU's data; the bytes it changed are its data now.
+            // Shadowed pages (ShadowGpuData): blocks of GPU-written ranges the guest left as they
+            // were keep the GPU's data; the blocks it changed are its data now (ForEachShadowRun).
             std::scoped_lock lk{shadow_mutex};
             const VAddr end = addr + size;
             VAddr cursor = addr;
@@ -1064,27 +1120,17 @@ bool BufferCache::SynchronizeMemory(const Buffer* arena, VAddr device_addr, u32 
                     continue;
                 }
                 for (const auto& shadow : it->second) {
-                    const auto* guest = reinterpret_cast<const u8*>(shadow.start);
-                    const size_t count = shadow.bytes.size();
-                    for (size_t i = 0; i < count;) {
-                        size_t j = i;
-                        if (guest[i] == shadow.bytes[i]) {
-                            while (j < count && guest[j] == shadow.bytes[j]) {
-                                ++j;
-                            }
-                            const VAddr skip = shadow.start + i;
-                            if (skip > cursor) {
-                                add_upload(cursor, skip - cursor);
-                            }
-                            cursor = shadow.start + j;
-                        } else {
-                            while (j < count && guest[j] != shadow.bytes[j]) {
-                                ++j;
-                            }
+                    ForEachShadowRun(shadow, [&](size_t i, size_t j, bool guest_owned) {
+                        if (guest_owned) {
                             gpu_modified_ranges.Subtract(shadow.start + i, j - i);
+                            return;
                         }
-                        i = j;
-                    }
+                        const VAddr skip = shadow.start + i;
+                        if (skip > cursor) {
+                            add_upload(cursor, skip - cursor);
+                        }
+                        cursor = shadow.start + j;
+                    });
                 }
                 shadows.erase(it);
                 shadow_pages.fetch_sub(1, std::memory_order_relaxed);
@@ -1318,7 +1364,10 @@ void BufferCache::SubmitPendingArenaBinds(Vulkan::SubmitInfo& info) {
         (void)instance.GetGraphicsQueue().waitIdle();
     }
     auto submit_result = instance.GetSparseQueue().bindSparse(sparse_info);
-    ASSERT_MSG(submit_result != vk::Result::eErrorDeviceLost, "Device lost during submit");
+    if (submit_result == vk::Result::eErrorDeviceLost) {
+        std::printf("Device lost during a sparse bind\n");
+        Vulkan::DeviceLost(instance.GetDevice());
+    }
     static const bool arena_log = [] {
         const char* env = std::getenv("BB_ARENA_LOG");
         return env && env[0] == '1';
