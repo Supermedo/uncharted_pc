@@ -6,6 +6,7 @@
 #include <string.h>
 #include <inttypes.h>
 #include <time.h>
+#include <cpuid.h>
 #include "runtime.h"
 #include "gpu/bbgpu.h"
 #if !defined(__x86_64__) || !defined(__GNUC__)
@@ -143,6 +144,60 @@ __asm__(".text\n.globl enter_on_stack\nenter_on_stack:\n"
         " mov %rbp,%rsp\n pop %rbp\n ret\n");
 #endif
 static ABI void guest_exit(void) { puts("Runtime: process finalizer callback reached"); }
+/* The game is built for the PS4's AMD Jaguar CPU: AVX throughout, and BMI1 (andn, bextr, blsi, blsr,
+ * tzcnt), MOVBE, LZCNT and POPCNT in thousands of places, its libc's string functions among them.
+ * Without them it stopped at the first one with an illegal instruction (0xc000001d in libc.prx
+ * while module 0 initialized), except LZCNT, which older Intel CPUs run as BSR (other results).
+ * Exit code 24 with a message instead; BB_SKIP_CPU_CHECK=1 starts anyway. */
+static void check_cpu(void) {
+    if (getenv("BB_SKIP_CPU_CHECK")) return;
+    unsigned a=0, b=0, c=0, d=0, basic=0, leaf7=0, extended=0;
+    if (__get_cpuid(1,&a,&b,&c,&d)) basic=c;
+    if (__get_cpuid_max(0,NULL)>=7) { __cpuid_count(7,0,a,b,c,d); leaf7=b; }    if (__get_cpuid(0x80000001,&a,&b,&c,&d)) extended=c;
+    int avx=0;
+    if (((basic>>27)&1) && ((basic>>28)&1)) { /* OSXSAVE and AVX: the OS also has to save YMM state */
+        unsigned low, high;
+        __asm__ volatile("xgetbv" : "=a"(low), "=d"(high) : "c"(0));
+        avx=(low&6)==6;
+    }
+    const struct { int present; const char *name; } features[]={
+        {avx,"AVX"}, {(leaf7>>3)&1,"BMI1"}, {(basic>>22)&1,"MOVBE"}, {(extended>>5)&1,"LZCNT"},
+        {(basic>>23)&1,"POPCNT"}, {(basic>>20)&1,"SSE4.2"},
+    };
+    char missing[64]="";
+    int no_movbe=0;
+    for (size_t i=0;i<sizeof(features)/sizeof(*features);++i) {
+        if (features[i].present) continue;
+#ifdef _WIN32
+        /* MOVBE alone (AMD FX): the fault handler does it (emulate_movbe). */
+        if (!strcmp(features[i].name,"MOVBE")) { no_movbe=1; continue; }
+#endif
+        if (*missing) strcat(missing,", ");
+        strcat(missing,features[i].name);
+    }
+    if (!*missing) {
+        if (no_movbe) printf("CPU: no MOVBE, the game's MOVBE instructions are emulated (slower)\n");
+        return;
+    }
+    unsigned words[12]={0};
+    char brand[49]="";
+    if (__get_cpuid_max(0x80000000,NULL)>=0x80000004)
+        for (unsigned i=0;i<3;++i) __get_cpuid(0x80000002+i,&words[i*4],&words[i*4+1],&words[i*4+2],&words[i*4+3]);
+    memcpy(brand,words,48);
+    for (size_t n=strlen(brand); n && brand[n-1]==' '; --n) brand[n-1]=0;
+    const char *name=brand;
+    while (*name==' ') ++name;
+    if (!*name) name="unknown processor";
+    fprintf(stderr,"STOP: unsupported CPU %s: missing %s (needs Intel Core 4th generation or newer, or AMD Ryzen)\n",name,missing);
+#ifdef _WIN32
+    char text[512];
+    snprintf(text,sizeof(text),"This processor cannot run the game:\n%s\n\nMissing instructions: %s\n\n"
+             "The game uses instructions of the PS4's processor. They need an Intel Core of the 4th "
+             "generation (Haswell, 2013) or newer, or an AMD Ryzen.",name,missing);
+    MessageBoxA(NULL,text,"Uncharted",MB_OK|MB_ICONERROR|MB_SETFOREGROUND);
+#endif
+    exit(24);
+}
 #ifdef _WIN32
 static void describe_address(char *out, size_t size, uintptr_t address) {
     HMODULE module=NULL;
@@ -186,6 +241,69 @@ static LONG fatal_exception(EXCEPTION_POINTERS *info) {
     TerminateProcess(GetCurrentProcess(),3);
     return EXCEPTION_CONTINUE_SEARCH;
 }
+/* AMD FX (Piledriver) has everything the PS4's code needs except MOVBE (byte-swapped loads and
+ * stores, a few hundred places in each game). There it raises an illegal instruction: the load
+ * or store is done here and the guest goes on after it (issue #251). Register operand forms do
+ * not exist; segment and address-size prefixes are left to the fault report. */
+static volatile LONG64 movbe_emulated;
+/* Decodes a MOVBE with a memory operand at p (regs: Rax, Rcx, Rdx, Rbx, Rsp, Rbp, Rsi, Rdi,
+ * R8-R15, as in CONTEXT): its length, or 0 when it is not one. */
+static int movbe_decode(const unsigned char *p, const uint64_t *regs, uint64_t rip, uint64_t *address,
+                        int *reg, int *width, int *store) {
+    int n=0, size16=0, rex=0;
+    while (n<3 && p[n]==0x66) { size16=1; ++n; }
+    if ((p[n]&0xf0)==0x40) rex=p[n++];
+    if (p[n]!=0x0f || p[n+1]!=0x38 || (p[n+2]!=0xf0 && p[n+2]!=0xf1)) return 0;
+    *store=p[n+2]==0xf1;
+    n+=3;
+    const unsigned char modrm=p[n++];
+    const int mod=modrm>>6, rm=modrm&7;
+    *reg=((modrm>>3)&7)|((rex&4)<<1);
+    if (mod==3) return 0;
+    uint64_t at=0;
+    int rip_relative=0;
+    if (rm==4) {
+        const unsigned char sib=p[n++];
+        const int index=((sib>>3)&7)|((rex&2)<<2), base=(sib&7)|((rex&1)<<3);
+        if (index!=4) at+=regs[index]<<(sib>>6);
+        if ((sib&7)==5 && mod==0) { int32_t d; memcpy(&d,p+n,4); n+=4; at+=(uint64_t)(int64_t)d; }
+        else at+=regs[base];
+    } else if (rm==5 && mod==0) {
+        int32_t d; memcpy(&d,p+n,4); n+=4; at=(uint64_t)(int64_t)d; rip_relative=1;
+    } else {
+        at=regs[rm|((rex&1)<<3)];
+    }
+    if (mod==1) { at+=(uint64_t)(int64_t)(int8_t)p[n]; n+=1; }
+    else if (mod==2) { int32_t d; memcpy(&d,p+n,4); n+=4; at+=(uint64_t)(int64_t)d; }
+    if (rip_relative) at+=rip+(uint64_t)n;
+    *address=at;
+    *width=(rex&8) ? 8 : size16 ? 2 : 4;
+    return n;
+}
+static int emulate_movbe(CONTEXT *c) {
+    DWORD64 *regs=&c->Rax;
+    uint64_t address;
+    int reg, width, store;
+    const int n=movbe_decode((const unsigned char *)(uintptr_t)c->Rip,(const uint64_t *)regs,c->Rip,
+                             &address,&reg,&width,&store);
+    if (!n) return 0;
+    void *memory=(void *)(uintptr_t)address;
+    if (store) {
+        const uint64_t v=regs[reg];
+        if (width==8) { uint64_t s=__builtin_bswap64(v); memcpy(memory,&s,8); }
+        else if (width==4) { uint32_t s=__builtin_bswap32((uint32_t)v); memcpy(memory,&s,4); }
+        else { uint16_t s=__builtin_bswap16((uint16_t)v); memcpy(memory,&s,2); }
+    } else if (width==8) {
+        uint64_t v; memcpy(&v,memory,8); regs[reg]=__builtin_bswap64(v);
+    } else if (width==4) {
+        uint32_t v; memcpy(&v,memory,4); regs[reg]=__builtin_bswap32(v);
+    } else {
+        uint16_t v; memcpy(&v,memory,2); regs[reg]=(regs[reg]&~(DWORD64)0xffff)|__builtin_bswap16(v);
+    }
+    c->Rip+=(DWORD64)n;
+    InterlockedIncrement64(&movbe_emulated);
+    return 1;
+}
 static LONG CALLBACK vectored_fault(EXCEPTION_POINTERS *info) {
     const EXCEPTION_RECORD *record=info->ExceptionRecord;
     DWORD code=record->ExceptionCode;
@@ -205,6 +323,9 @@ static LONG CALLBACK vectored_fault(EXCEPTION_POINTERS *info) {
             return EXCEPTION_CONTINUE_EXECUTION;
         }
     }
+    if (code==EXCEPTION_ILLEGAL_INSTRUCTION && image &&
+        (uintptr_t)info->ContextRecord->Rip-(uintptr_t)image<0x20000000 &&
+        emulate_movbe(info->ContextRecord)) return EXCEPTION_CONTINUE_EXECUTION;
     if (code==EXCEPTION_ACCESS_VIOLATION || code==EXCEPTION_ILLEGAL_INSTRUCTION || code==EXCEPTION_PRIV_INSTRUCTION ||
         code==EXCEPTION_STACK_OVERFLOW || code==EXCEPTION_INT_DIVIDE_BY_ZERO || code==EXCEPTION_DATATYPE_MISALIGNMENT) {
         /* Faults in guest code, the loader or the runtime end the process with a report; drivers
@@ -639,13 +760,18 @@ static void patch_eop_tick_wait(uint64_t image_size) {
         if (image[at]!=0x48 || image[at+1]!=0x8d || image[at+2]!=0x3d) continue;
         int32_t rel; memcpy(&rel,image+at+3,4);
         if (image+at+7+rel!=text) continue;
-        /* Up to 64 bytes before: cmp qword [reg+disp32], 0 (48/49 83 /7, mod 10) ; jne past it */
+        /* Up to 64 bytes before: cmp qword [base(+index*scale)+disp8/32], 0 (REX.W 83 /7, mod
+         * 01/10, with or without SIB: 1.00 has [rax+0xa08], US 1.02 [rax+rcx+0xa08]); jne past
+         * the message, with room for the 4 patched bytes before it */
         for (uint64_t back=10;back<=64 && back<=at;++back) {
             unsigned char *c=image+at-back;
-            if ((c[0]!=0x48 && c[0]!=0x49) || c[1]!=0x83 || (c[2]&0xf8)!=0xb8 || (c[2]&7)==4 ||
-                c[7]!=0x00 || c[8]!=0x75) continue;
-            unsigned char *jne=c+8, *ok=jne+2+(int8_t)jne[1];
-            if (ok<=image+at || jne[2]!=0xe8) continue;
+            if ((c[0]&0xf8)!=0x48 || c[1]!=0x83 || ((c[2]>>3)&7)!=7) continue;
+            const int mod=c[2]>>6, sib=(c[2]&7)==4;
+            if (mod!=1 && mod!=2) continue;
+            const int length=3+sib+(mod==2 ? 4 : 1);
+            if (c[length]!=0x00 || c[length+1]!=0x75) continue;
+            unsigned char *jne=c+length+1, *ok=jne+2+(int8_t)jne[1];
+            if (ok<=image+at || image+at-(jne+2)<4) continue;
             /* after the jne: pause; jmp back to the cmp */
             jne[2]=0xf3; jne[3]=0x90; jne[4]=0xeb; jne[5]=(unsigned char)(int8_t)(c-(jne+6));
             printf("Frame pacing: the EOP tick check at %#" PRIx64 " waits for the GPU\n",
@@ -696,6 +822,7 @@ int main(int argc, char **argv) {
     mallopt(M_MMAP_THRESHOLD,32*1024*1024);
 #endif
     if (argc == 2 && !strcmp(argv[1], "--vulkan-only")) return vulkan_smoke();
+    check_cpu();
 #ifdef _WIN32
     /* The PS4 user range must stay free of host allocations (GPU driver, heaps), and the guest
      * TCB needs one of the 64 TEB TLS slots before DLLs (Vulkan drivers) take them. */

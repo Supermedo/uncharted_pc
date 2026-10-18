@@ -309,11 +309,28 @@ static void touch_for_write(void *buffer,uint64_t size) {
         *b=*b;
     }
 }
+/* The GPU side can write-protect a destination page again between touch_for_write and the read;
+ * the host then stops short (Windows: no error, fewer bytes) and a short read the guest takes as
+ * complete loses data (U2's script module: 16384 of 392775 bytes, issue #101; streamed level
+ * data). Files are read until the request is done or the file ends, touching the rest again.
+ * offset -1: at the file position. */
+static ssize_t read_full(int h,void *buffer,uint64_t size,int64_t offset) {
+    unsigned char *at=buffer;
+    uint64_t done=0;
+    int retries=0;
+    while (done<size) {
+        touch_for_write(at+done,size-done);
+        ssize_t n=offset<0 ? host_read(h,at+done,size-done) : pread(h,at+done,size-done,offset+(int64_t)done);
+        if (n>0) { done+=(uint64_t)n; retries=0; if (h<3) break; continue; }
+        if (n==0) break;
+        if (++retries>8) { if (done) break; return -1; }
+    }
+    return (ssize_t)done;
+}
 static int64_t do_read(int fd,void *buffer,uint64_t size) {
     int h=host_fd(fd);
     if (h<0) return -EBADF;
-    touch_for_write(buffer,size);
-    ssize_t n=host_read(h,buffer,size);
+    ssize_t n=read_full(h,buffer,size,-1);
     if (n<0) { if (audio_trace()) printf("Audio trace: read(fd %d, %llu) failed, errno %d\n",fd,(unsigned long long)size,errno); return -errno; }
     trace_bank_read(fd,size,-1,n);
     __atomic_add_fetch(&reads,1,__ATOMIC_RELAXED); __atomic_add_fetch(&bytes_read,(uint64_t)n,__ATOMIC_RELAXED);
@@ -322,8 +339,7 @@ static int64_t do_read(int fd,void *buffer,uint64_t size) {
 static int64_t do_pread(int fd,void *buffer,uint64_t size,int64_t offset) {
     int h=host_fd(fd);
     if (h<0) return -EBADF;
-    touch_for_write(buffer,size);
-    ssize_t n=pread(h,buffer,size,offset);
+    ssize_t n=read_full(h,buffer,size,offset);
     if (n<0) { if (audio_trace()) printf("Audio trace: pread(fd %d, %llu @%lld) failed, errno %d\n",fd,(unsigned long long)size,(long long)offset,errno); return -errno; }
     trace_bank_read(fd,size,offset,n);
     __atomic_add_fetch(&reads,1,__ATOMIC_RELAXED); __atomic_add_fetch(&bytes_read,(uint64_t)n,__ATOMIC_RELAXED);

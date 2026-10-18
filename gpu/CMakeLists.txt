@@ -2,6 +2,13 @@
 # drivers, adapted to the native_probe runtime through shims in shim/.
 cmake_minimum_required(VERSION 3.24)
 project(bbgpu LANGUAGES C CXX)
+# Newer libc++ (clang 21+) no longer includes these transitively; the shadPS4, sirit and FFX
+# sources rely on them (std::abort, _countof, swprintf_s, log2, placement new, ...).
+if(WIN32)
+    foreach(header cstdlib cstring cstdio cstdint cmath cwchar new limits utility algorithm)
+        add_compile_options("$<$<COMPILE_LANGUAGE:CXX>:SHELL:-include ${header}>")
+    endforeach()
+endif()
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)

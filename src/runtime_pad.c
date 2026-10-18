@@ -97,8 +97,9 @@ static SDL_Gamepad *current_gamepad(void) {
     }
     return gamepad;
 }
-/* Degrees of camera turn per mouse pixel at sensitivity 1. */
-#define MOUSE_DEGREES_PER_PIXEL 0.08f
+/* Degrees of camera turn per mouse pixel at sensitivity 1 (0.08 felt "very slow", issue #18; the
+ * launcher's slider and box go from 0.1 to 10 times this). */
+#define MOUSE_DEGREES_PER_PIXEL 0.15f
 
 /* ---- bindings (input.ini) ---------------------------------------------------------------- */
 enum { BIND_KEY=1, BIND_MOUSE, BIND_WHEEL };
@@ -481,6 +482,25 @@ static const unsigned char u2_focus_reset[]={
     0xcd,0x41,                                    /* trap: int 0x41 */
 };
 _Static_assert(sizeof(u2_focus_reset)==sizeof(u2_focus_assert_code),"same size");
+/* U2 (EU 1.00) game/character-leg-ik.cpp:391, assertion IsFinite(deltaTransform): the root delta
+ * the leg IK gets from its caller can be NaN for a frame (train wreck, chapter 1: issues #88,
+ * #253) and the game stopped. The leg IK only adds its y to two accumulators, so a non-finite
+ * delta now counts as no movement: it is zeroed (also in the caller's vector) and the update
+ * goes on. */
+static const unsigned char u2_leg_ik_assert_code[]={
+    0xe8,0xa3,0xcb,0xbf,0xff,0x48,0x85,0xc0,0x74,0x27,0x48,0x8d,0x3d,0x1b,0xfe,0x25,0x00,0x48,0x8d,
+    0x35,0x92,0xfc,0x25,0x00,0x48,0x8d,0x15,0x06,0xfe,0x25,0x00,0x48,0x8d,0x0d,0xd1,0xfc,0x25,0x00,
+    0x41,0xb8,0x87,0x01,0x00,0x00,0x45,0x31,0xc9,0xff,0xd0,0xcd,0x41,
+};
+static const unsigned char u2_leg_ik_zero[]={
+    0xc5,0xf8,0x57,0xc0,                          /* vxorps xmm0, xmm0, xmm0 */
+    0xc4,0xc1,0x78,0x29,0x07,                     /* vmovaps [r15], xmm0 */
+    0xeb,0x2d,                                    /* jmp (the update, 0x8ec650) */
+    0xcc,0xcc,0xcc,0xcc,0xcc,0xcc,0xcc,0xcc,0xcc,0xcc,0xcc,0xcc,0xcc,0xcc,0xcc,0xcc,0xcc,0xcc,0xcc,
+    0xcc,0xcc,0xcc,0xcc,0xcc,0xcc,0xcc,0xcc,0xcc,0xcc,0xcc,0xcc,0xcc,0xcc,0xcc,0xcc,0xcc,0xcc,0xcc,
+    0xcc,0xcc,
+};
+_Static_assert(sizeof(u2_leg_ik_zero)==sizeof(u2_leg_ik_assert_code),"same size");
 static const RuntimeGuestCallback guest_callbacks[]={
     {"U1 follow camera (mouse)",0xaecf0,u1_follow_camera_code,sizeof(u1_follow_camera_code),6,u1_follow_camera,NULL},
     {"U1 pad update (mouse)",0x117200,u1_pad_update_code,sizeof(u1_pad_update_code),6,u1_pad_update,NULL},
@@ -489,6 +509,8 @@ static const RuntimeGuestCallback guest_callbacks[]={
     {"U3 follow camera (mouse)",0x121b90,u3_follow_camera_code,sizeof(u3_follow_camera_code),6,u3_follow_camera,NULL},
     {"U2 camera focus NaN reset",0x33ba13,u2_focus_assert_code,sizeof(u2_focus_assert_code),
      sizeof(u2_focus_reset),NULL,u2_focus_reset},
+    {"U2 leg IK NaN delta",0x8ec618,u2_leg_ik_assert_code,sizeof(u2_leg_ik_assert_code),
+     sizeof(u2_leg_ik_zero),NULL,u2_leg_ik_zero},
 };
 const RuntimeGuestCallback *runtime_guest_callbacks(size_t *count) {
     *count=sizeof(guest_callbacks)/sizeof(*guest_callbacks);

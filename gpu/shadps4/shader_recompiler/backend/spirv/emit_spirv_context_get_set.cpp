@@ -4,6 +4,7 @@
 #include "common/assert.h"
 #include "core/emulator_settings.h"
 #include "shader_recompiler/backend/spirv/emit_spirv_instructions.h"
+#include "bbport_nan_guard.h"
 #include "shader_recompiler/backend/spirv/spirv_emit_context.h"
 #include "shader_recompiler/ir/attribute.h"
 #include "shader_recompiler/ir/microinstruction.h"
@@ -313,6 +314,15 @@ void EmitSetAttribute(EmitContext& ctx, IR::Attribute attr, Id value, u32 elemen
         if (element < 3 && ctx.runtime_info.hw.fs.color_buffers[index].blend_self_scale) {
             // Emulates GCN's factor-scaled min/max blend: min/max(src*src, dst*dst).
             value = ctx.OpFMul(ctx.F32[1], value, value);
+        }
+        if (BbNanGuard::ExportNanGuard() && !OutputAttrComponentType(ctx, attr).second) {
+            // NaN -> 0; mode 2 also +-Inf -> +-65504 (bbport_nan_guard.h).
+            // NaN first: FClamp may return either bound for a NaN.
+            value = ctx.OpSelect(ctx.F32[1], ctx.OpIsNan(ctx.U1[1], value), ctx.f32_zero_value, value);
+            if (BbNanGuard::NanGuardMode() == 2) {
+                const Id limit{ctx.ConstF32(65504.0f)};
+                value = ctx.OpFClamp(ctx.F32[1], value, ctx.OpFNegate(ctx.F32[1], limit), limit);
+            }
         }
         if (info.num_components == 1) {
             return op_store(info.id);
