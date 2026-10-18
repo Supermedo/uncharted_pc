@@ -91,16 +91,26 @@ int runtime_savedata_pick(int32_t user, const char *title, const char (*names)[3
 void runtime_thread_attach_host(const char *name);
 uintptr_t runtime_fiber_resolve(const char *name);
 void runtime_fiber_report(void);
-/* Host functions the loader runs at the start of matching guest functions (probe.c): the code
- * at `offset` must equal `signature`; `moved` bytes of whole position-independent instructions
- * move to the thunk. The callback gets the guest's rdi, rsi and r14 there and the image base.
- * Without a callback, `patch` replaces the first `moved` bytes instead (a fix in the game's code). */
+/* Host functions the loader runs at the start of matching guest functions (probe.c). The guest
+ * code is found by `pattern`, not by a fixed address, so every build of a game is covered that
+ * contains it: hex bytes separated by spaces, "??" for a byte that differs between builds
+ * (RIP-relative displacements, call targets). The pattern must match exactly once in the
+ * executable segments; the hook sits `skip` bytes into the match, and `moved` bytes of whole
+ * position-independent instructions there move to the thunk. Entries with the same name are
+ * variants (one per build of the code, or one per copy of the code in a build): each one that matches is
+ * installed, in table order, and a site is hooked once (an entry may be a catch-all after specific ones).
+ * The callback gets the guest's rdi, rsi and r14 there, the image base, and the registers the
+ * thunk saved. Without a callback, `patch` (`moved` bytes) replaces the code at the hook instead
+ * (a fix in the game's code). */
+typedef struct {
+    uint64_t r15, r13, r12, rbx, r11, r10, r9, r8, rdx, rcx, rax, rflags;
+} RuntimeGuestRegs;
 typedef struct {
     const char *name;
-    uint64_t offset;
-    const unsigned char *signature;
-    size_t signature_size, moved;
-    void (__attribute__((ms_abi)) *callback)(uint64_t rdi, uint64_t rsi, uint64_t image, uint64_t r14);
+    const char *pattern;
+    size_t skip, moved;
+    void (__attribute__((ms_abi)) *callback)(uint64_t rdi, uint64_t rsi, uint64_t image, uint64_t r14,
+                                             const RuntimeGuestRegs *regs);
     const unsigned char *patch;
 } RuntimeGuestCallback;
 const RuntimeGuestCallback *runtime_guest_callbacks(size_t *count);

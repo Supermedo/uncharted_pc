@@ -688,32 +688,78 @@ static unsigned char *near_image_memory(size_t size) {
 #endif
     return memory;
 }
+/* Finds `pattern` (hex bytes, "??" = any byte) in the executable segments: returns the number of
+ * matches and the first one (an image offset) in *found; the pattern length goes to *length. */
+static size_t find_pattern(Segment *segments, uint64_t ns, const char *pattern, uint64_t *found, size_t *length) {
+    unsigned char bytes[256], mask[256];
+    size_t n=0, matches=0, first=0;
+    for (const char *p=pattern;*p;) {
+        if (*p==' ') { ++p; continue; }
+        if (n==sizeof(bytes) || !p[1]) return 0;
+        if (p[0]=='?' && p[1]=='?') { bytes[n]=0; mask[n++]=0; p+=2; continue; }
+        char pair[3]={p[0],p[1],0}, *end;
+        bytes[n]=(unsigned char)strtol(pair,&end,16);
+        if (*end) return 0;
+        mask[n++]=1; p+=2;
+    }
+    *length=n;
+    while (first<n && !mask[first]) ++first;
+    if (first==n) return 0;
+    for (uint64_t s=0;s<ns;++s) {
+        if (!(segments[s].flags&1) || segments[s].size<n) continue;
+        const unsigned char *code=image+segments[s].address;
+        for (uint64_t i=0;i+n<=segments[s].size;++i) {
+            if (code[i+first]!=bytes[first]) continue;
+            size_t k=0;
+            while (k<n && (!mask[k] || code[i+k]==bytes[k])) ++k;
+            if (k==n && !matches++) *found=segments[s].address+i;
+        }
+    }
+    return matches;
+}
 static void install_game_callbacks(Segment *segments, uint64_t ns, uint64_t image_size) {
     size_t count=0;
     const RuntimeGuestCallback *callbacks=runtime_guest_callbacks(&count);
     unsigned char *thunks=NULL;
     size_t used=0;
+    uint8_t installed[32]={0};
+    uint64_t hook_offsets[32]; size_t hooks_done=0;
     guest_image_size=image_size;
+    if (count>sizeof(installed)) count=sizeof(installed);
+    /* A/B tests: BB_CALLBACKS=0 installs none, BB_CALLBACKS_SKIP=<text> none whose name contains the text */
+    const char *off=getenv("BB_CALLBACKS"), *skip=getenv("BB_CALLBACKS_SKIP");
+    if (off && off[0]=='0') { printf("Callbacks: disabled (BB_CALLBACKS=0)\n"); return; }
     for (size_t i=0;i<count;++i) {
         const RuntimeGuestCallback *c=&callbacks[i];
-        if (!mapped(segments,ns,c->offset,c->signature_size) ||
-            memcmp(image+c->offset,c->signature,c->signature_size)) continue;
+        if (skip && *skip && strstr(c->name,skip)) continue;
+        uint64_t found=0;
+        size_t length=0, matches=find_pattern(segments,ns,c->pattern,&found,&length);
+        if (matches>1) { printf("Callbacks: %s: %zu matches, not installed\n",c->name,matches); continue; }
+        if (!matches) continue;
+        const uint64_t offset=found+c->skip;
+        int hooked=0;
+        for (size_t j=0;j<hooks_done;++j) if (hook_offsets[j]==offset) hooked=1;
+        if (hooked) continue;                                          /* an earlier entry took this site */
+        if (hooks_done<sizeof(hook_offsets)/sizeof(*hook_offsets)) hook_offsets[hooks_done++]=offset;
         if (!c->callback) {
-            memcpy(image+c->offset,c->patch,c->moved);
-            printf("Callbacks: %s at %#" PRIx64 " (patch)\n",c->name,c->offset);
+            memcpy(image+offset,c->patch,c->moved);
+            installed[i]=1;
+            printf("Callbacks: %s at %#" PRIx64 " (patch)\n",c->name,offset);
             continue;
         }
-        if (!thunks && !(thunks=near_image_memory(4096))) { printf("Callbacks: no thunk memory\n"); return; }
-        if (used+256>4096) break;
-        unsigned char *t=thunks+used, *f=image+c->offset;
+        if (!thunks && !(thunks=near_image_memory(8192))) { printf("Callbacks: no thunk memory\n"); return; }
+        if (used+320>8192) break;
+        unsigned char *t=thunks+used, *f=image+offset;
         size_t k=0;
-        /* pushfq; push rax rcx rdx r8-r11 rbx; mov rbx, rsp; and rsp, -16; sub rsp, 0xa0 (works at
-         * a function's start and inside it) */
+        /* pushfq; push rax rcx rdx r8-r11 rbx r12 r13 r15 (the RuntimeGuestRegs block); mov rbx, rsp;
+         * and rsp, -16; sub rsp, 0xb0 (shadow space, the fifth argument, 8 xmm saves): works at a
+         * function's start and inside it */
         static const unsigned char save[]={0x9c,0x50,0x51,0x52,0x41,0x50,0x41,0x51,0x41,0x52,0x41,0x53,0x53,
-                                           0x48,0x89,0xe3,0x48,0x83,0xe4,0xf0,0x48,0x81,0xec,0xa0,0x00,0x00,0x00};
+                                           0x41,0x54,0x41,0x55,0x41,0x57,
+                                           0x48,0x89,0xe3,0x48,0x83,0xe4,0xf0,0x48,0x81,0xec,0xb0,0x00,0x00,0x00};
         memcpy(t+k,save,sizeof(save)); k+=sizeof(save);
-        for (int x=0;x<8;++x) {                                     /* movdqu [rsp+0x20+16x], xmmx */
-            const uint32_t disp=0x20u+16u*(uint32_t)x;
+        for (int x=0;x<8;++x) {                                     /* movdqu [rsp+0x30+16x], xmmx */
+            const uint32_t disp=0x30u+16u*(uint32_t)x;
             t[k++]=0xf3; t[k++]=0x0f; t[k++]=0x7f; t[k++]=(unsigned char)(0x84|x<<3); t[k++]=0x24;
             memcpy(t+k,&disp,4); k+=4;
         }
@@ -722,16 +768,17 @@ static void install_game_callbacks(Segment *segments, uint64_t ns, uint64_t imag
         const uintptr_t base=(uintptr_t)image, host=(uintptr_t)c->callback;
         t[k++]=0x49; t[k++]=0xb8; memcpy(t+k,&base,8); k+=8;        /* movabs r8, image */
         t[k++]=0x4d; t[k++]=0x89; t[k++]=0xf1;                      /* mov r9, r14 */
+        t[k++]=0x48; t[k++]=0x89; t[k++]=0x5c; t[k++]=0x24; t[k++]=0x20; /* mov [rsp+0x20], rbx (regs) */
         t[k++]=0x48; t[k++]=0xb8; memcpy(t+k,&host,8); k+=8;        /* movabs rax, callback */
         t[k++]=0xff; t[k++]=0xd0;                                   /* call rax */
-        for (int x=0;x<8;++x) {                                     /* movdqu xmmx, [rsp+0x20+16x] */
-            const uint32_t disp=0x20u+16u*(uint32_t)x;
+        for (int x=0;x<8;++x) {                                     /* movdqu xmmx, [rsp+0x30+16x] */
+            const uint32_t disp=0x30u+16u*(uint32_t)x;
             t[k++]=0xf3; t[k++]=0x0f; t[k++]=0x6f; t[k++]=(unsigned char)(0x84|x<<3); t[k++]=0x24;
             memcpy(t+k,&disp,4); k+=4;
         }
-        /* mov rsp, rbx; pop rbx r11-r8 rdx rcx rax; popfq */
-        static const unsigned char restore[]={0x48,0x89,0xdc,0x5b,0x41,0x5b,0x41,0x5a,0x41,0x59,0x41,0x58,
-                                              0x5a,0x59,0x58,0x9d};
+        /* mov rsp, rbx; pop r15 r13 r12 rbx r11-r8 rdx rcx rax; popfq */
+        static const unsigned char restore[]={0x48,0x89,0xdc,0x41,0x5f,0x41,0x5d,0x41,0x5c,0x5b,
+                                              0x41,0x5b,0x41,0x5a,0x41,0x59,0x41,0x58,0x5a,0x59,0x58,0x9d};
         memcpy(t+k,restore,sizeof(restore)); k+=sizeof(restore);
         memcpy(t+k,f,c->moved); k+=c->moved;                       /* the moved instructions */
         int32_t back=(int32_t)((int64_t)(uintptr_t)(f+c->moved)-(int64_t)(uintptr_t)(t+k+5));
@@ -739,8 +786,23 @@ static void install_game_callbacks(Segment *segments, uint64_t ns, uint64_t imag
         int32_t to=(int32_t)((int64_t)(uintptr_t)t-(int64_t)(uintptr_t)(f+5));
         f[0]=0xe9; memcpy(f+1,&to,4); memset(f+5,0x90,c->moved-5);
         used+=(k+15)&~(size_t)15;
-        printf("Callbacks: %s at %#" PRIx64 "\n",c->name,c->offset);
+        installed[i]=1;
+        printf("Callbacks: %s at %#" PRIx64 "\n",c->name,offset);
     }
+    /* Names start with the game ("U2 ..."): a callback missing from a game whose other callbacks
+     * attached is reported; callbacks of the other games are not. */
+    int any=0;
+    for (size_t i=0;i<count;++i) {
+        int seen=0, ok=0, group=0;
+        const size_t game=strcspn(callbacks[i].name," ");
+        for (size_t j=0;j<count;++j) {
+            if (!strcmp(callbacks[j].name,callbacks[i].name)) { if (j<i) seen=1; if (installed[j]) ok=1; }
+            if (installed[j] && !strncmp(callbacks[j].name,callbacks[i].name,game+1)) group=1;
+        }
+        any|=ok;
+        if (!seen && !ok && group) printf("Callbacks: %s not found\n",callbacks[i].name);
+    }
+    if (!any) printf("Callbacks: none of the known camera and pad code was found (unknown build?)\n");
 }
 /* Naughty Dog's FrameBegin (ndlib/render/fg-draw-mgr.cpp) asserts that the frame it recycles,
  * three back, has its GPU end-of-pipe tick (set by the game's EOP interrupt handler). It never
