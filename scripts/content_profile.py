@@ -15,10 +15,13 @@ def prepare(game, out, sku='full'):
                  user_params=params, mounted_addons=[],boot_attr=0)
     out.mkdir(parents=True,exist_ok=True)
     (out/'content.bin').write_bytes(struct.pack('<8s5I',b'BBCONT01',{'full':3,'trial':1}[sku],*params))
-    (out/'content-profile.json').write_text(json.dumps(profile,indent=2)+'\n')
+    (out/'content-profile.json').write_text(json.dumps(profile,indent=2)+'\n',encoding='utf-8')
     print(f'AppContent profile: SKU={sku} (probe setting), user params={params}, mounted add-ons=0')
 
 if __name__=='__main__':
+    import sys
+    for _s in (sys.stdout, sys.stderr):  # console may be GBK etc.: titles carry a trademark sign
+        if _s: _s.reconfigure(encoding='utf-8', errors='replace')
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('game',type=Path)
     p.add_argument('--out',type=Path,default=Path(__file__).resolve().parent.parent/'out')
