@@ -72,18 +72,22 @@ jobs:
       # msys2/setup-msys2 installs CLANG64 and the packages named in
       # packaging/windows/README.md. The extra ones are what the C tests link:
       # SDL3 (runtime_pad.c) and FFmpeg (runtime_ajm.c).
+      # Use the full arch-qualified names. setup-msys2 does not expand short
+      # names, and pacman reports "target not found" for both "SDL3" and
+      # "mingw-w64-sdl3" on a clean runner. These are the names
+      # `pacman -Q` reports locally under CLANG64.
       - uses: msys2/setup-msys2@v2
         with:
           msystem: CLANG64
           update: true
           install: >-
-            clang
-            cmake
-            ninja
-            pkgconf
-            git
-            mingw-w64-sdl3
-            ffmpeg
+            mingw-w64-clang-x86_64-clang
+            mingw-w64-clang-x86_64-cmake
+            mingw-w64-clang-x86_64-ninja
+            mingw-w64-clang-x86_64-pkgconf
+            mingw-w64-clang-x86_64-git
+            mingw-w64-clang-x86_64-sdl3
+            mingw-w64-clang-x86_64-ffmpeg
 
       - name: Build and run
         run: bash tests/build.sh
@@ -135,31 +139,31 @@ jobs:
           msystem: CLANG64
           update: true
           install: >-
-            clang
-            cmake
-            ninja
-            pkgconf
-            git
-            patch
-            mingw-w64-sdl3
-            ffmpeg
-            vulkan-headers
-            vulkan-loader
-            vulkan-memory-allocator
-            glslang
-            boost
-            spirv-tools
-            spirv-headers
-            spirv-cross
-            xxhash
-            protobuf
-            openssl
-            zlib
-            miniupnpc
-            nlohmann-json
-            robin-map
-            zydis
-            fmt
+            mingw-w64-clang-x86_64-clang
+            mingw-w64-clang-x86_64-cmake
+            mingw-w64-clang-x86_64-ninja
+            mingw-w64-clang-x86_64-pkgconf
+            mingw-w64-clang-x86_64-git
+            mingw-w64-clang-x86_64-patch
+            mingw-w64-clang-x86_64-sdl3
+            mingw-w64-clang-x86_64-ffmpeg
+            mingw-w64-clang-x86_64-vulkan-headers
+            mingw-w64-clang-x86_64-vulkan-loader
+            mingw-w64-clang-x86_64-vulkan-memory-allocator
+            mingw-w64-clang-x86_64-glslang
+            mingw-w64-clang-x86_64-boost
+            mingw-w64-clang-x86_64-spirv-tools
+            mingw-w64-clang-x86_64-spirv-headers
+            mingw-w64-clang-x86_64-spirv-cross
+            mingw-w64-clang-x86_64-xxhash
+            mingw-w64-clang-x86_64-protobuf
+            mingw-w64-clang-x86_64-openssl
+            mingw-w64-clang-x86_64-zlib
+            mingw-w64-clang-x86_64-miniupnpc
+            mingw-w64-clang-x86_64-nlohmann-json
+            mingw-w64-clang-x86_64-robin-map
+            mingw-w64-clang-x86_64-zydis
+            mingw-w64-clang-x86_64-fmt
 
       # The runner uses git's default core.autocrlf=true, which checks the FSR-Vulkan
       # submodule out with CRLF and makes the patches fail to apply. Nothing overrides
