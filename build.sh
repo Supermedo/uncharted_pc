@@ -2,6 +2,35 @@
 set -euo pipefail
 cd -- "$(dirname -- "$0")"
 mkdir -p out
+
+# Applies this port's changes to the FSR-Vulkan submodule, once, idempotently.
+#
+# core.autocrlf=true (git's Windows default) checks the submodule out with CRLF while
+# the patch files here are LF, so `git apply` finds no match and the build dies with
+# "patch does not apply". The submodule is pinned to LF for the same reason: it is the
+# tree those patches are written against.
+apply_fsr_patches() {
+    local submodule=gpu/third_party/fsr-vulkan patch
+    if [[ $(git -C "$submodule" config core.autocrlf 2>/dev/null) == true ]]; then
+        echo 'fsr-vulkan: working tree has CRLF (core.autocrlf=true); converting to LF for the patches'
+        git -C "$submodule" config core.autocrlf false
+        git -C "$submodule" checkout -- .
+    fi
+    for patch in gpu/patches/fsr-vulkan/*.patch; do
+        # Reverse-check first, so applying twice is a no-op.
+        if git -C "$submodule" apply --reverse --check "$PWD/$patch" 2>/dev/null; then
+            continue
+        fi
+        if ! git -C "$submodule" apply --check "$PWD/$patch" 2>/dev/null; then
+            echo "Patch does not apply to the checked-out FSR-Vulkan: $patch" >&2
+            echo "Reset it and update the submodule: git -C $submodule checkout -- ." >&2
+            exit 1
+        fi
+        git -C "$submodule" apply "$PWD/$patch"
+        echo "Applied $(basename "$patch")"
+    done
+}
+
 # Windows: MSYS2 CLANG64 (packages in packaging/windows/README.md). The GPU library is static
 # there and CMake links bb-probe.exe as well; no PGO (GCC-only flags), LTO off by default.
 case $(uname -s) in
@@ -15,11 +44,7 @@ MINGW*|MSYS*)
           ! -f gpu/third_party/xbyak/xbyak/xbyak.h ]]; then
         git submodule update --init --recursive
     fi
-    for patch in gpu/patches/fsr-vulkan/*.patch; do
-        if ! git -C gpu/third_party/fsr-vulkan apply --reverse --check "$PWD/$patch" 2>/dev/null; then
-            git -C gpu/third_party/fsr-vulkan apply "$PWD/$patch"
-        fi
-    done
+    apply_fsr_patches
     cmake -S gpu -B out/gpu -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DBB_PGO=off \
         -DBB_LTO="${BB_LTO:-OFF}" -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ >/dev/null
     echo "GPU library and loader: LTO ${BB_LTO:-OFF}"
@@ -29,6 +54,11 @@ MINGW*|MSYS*)
     fi
     cp out/gpu/bb-probe.exe out/gpu/bb-gpu-capabilities.exe out/gpu/bb-play.exe out/
     echo "Built $PWD/out/bb-probe.exe"
+    # The C tests need the submodules (tests/stubs.c links against the runtime,
+    # LibAtrac9 for runtime_ajm.c) and SDL3/FFmpeg for runtime_pad.c/runtime_ajm.c.
+    if [[ ${1:-} == --test ]]; then
+        bash tests/build.sh
+    fi
     exit 0
     ;;
 esac
@@ -64,11 +94,7 @@ mkdir -p pgo
 if [[ ! -f gpu/third_party/fsr-vulkan/CMakeLists.txt || ! -f gpu/third_party/imgui/imgui.h ]]; then
     git submodule update --init --recursive
 fi
-for patch in gpu/patches/fsr-vulkan/*.patch; do
-    if ! git -C gpu/third_party/fsr-vulkan apply --reverse --check "$PWD/$patch" 2>/dev/null; then
-        git -C gpu/third_party/fsr-vulkan apply "$PWD/$patch"
-    fi
-done
+apply_fsr_patches
 cmake -S gpu -B out/gpu -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DBB_PGO="$pgo" \
     -DBB_LTO="${BB_LTO:-ON}" -DBB_PGO_DIR="$PWD/pgo" >/dev/null
 echo "GPU library: PGO $pgo, LTO ${BB_LTO:-ON}"

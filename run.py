@@ -42,14 +42,35 @@ def no_console():
     return 0 if ctypes.windll.kernel32.GetConsoleWindow() else subprocess.CREATE_NO_WINDOW
 
 
-def run_script(name, *args):
+def run_script(name, *args, tolerant=False):
+    """Run one of the preparation scripts. `tolerant` reports instead of exiting.
+
+    The preparation scripts must succeed; the patch compiler may legitimately
+    decline (a game version the patches do not fit), so callers that can carry on
+    without it pass tolerant=True.
+    """
+    result = subprocess.run(script_command(name, *args), stdin=subprocess.DEVNULL,
+                            creationflags=no_console())
+    if result.returncode and not tolerant:
+        sys.exit(result.returncode)
+    return result
+
+
+def script_command(name, *args):
     # Inside the packaged executable (PyInstaller) the executable runs scripts itself.
     script = ['--script'] if getattr(sys, 'frozen', False) else []
-    command = [sys.executable, *script, str(PORT / 'scripts' / name), *map(str, args)]
-    # stdin given: the output handles are passed explicitly (a windowed child would get none).
-    result = subprocess.run(command, stdin=subprocess.DEVNULL, creationflags=no_console())
-    if result.returncode:
-        sys.exit(result.returncode)
+    return [sys.executable, *script, str(PORT / 'scripts' / name), *map(str, args)]
+
+
+def run_script_capture(name, *args):
+    """Run a preparation script and return its stdout, '' when it fails."""
+    try:
+        result = subprocess.run(script_command(name, *args), stdin=subprocess.DEVNULL,
+                                capture_output=True, text=True, encoding='utf-8',
+                                errors='replace', creationflags=no_console())
+    except OSError:
+        return ''
+    return result.stdout if result.returncode == 0 else ''
 
 
 def find_executable(name):
@@ -96,6 +117,85 @@ def prepare(game, exe, out):
     stamp.write_text(source, encoding='utf-8')
 
 
+def read_setting(settings, key):
+    """One key from bbport.ini, or '' when absent."""
+    try:
+        with open(settings, encoding='utf-8-sig', errors='replace') as stream:
+            for line in stream:
+                name, _, value = line.partition('=')
+                if name.strip() == key:
+                    return value.strip()
+    except OSError:
+        pass
+    return ''
+
+
+def render_sizes(config):
+    """(scene, output) from bbport.ini, or (None, None) for plain 1080p."""
+    result = run_script_capture('patches.py', '--print-scaled', '--settings', config)
+    parts = result.split()
+    if len(parts) == 2 and 'x' in parts[0] and 'x' in parts[1]:
+        return parts[0], parts[1]
+    return None, None
+
+
+def apply_patches(game, out, env, caps):
+    """Compile patches.bin for this game version and point the loader at it.
+
+    The patches are byte writes at the addresses of one game version; on another
+    version they would corrupt code, so patches.py writes an empty patch set and
+    says so rather than failing (the game then runs at its own frame rate). That
+    message is the user-visible explanation, so it is printed here, not swallowed.
+    """
+    fps = env.get('BB_FPS') or 'uncap'
+    scaled_render, scaled_output = (None, None)
+    if not env.get('BB_RENDER_RES'):
+        scaled_render, scaled_output = render_sizes(env['BB_CONFIG'])
+    # Live resolution changes keep the guest at 1920x1080 and scale host targets at run
+    # time; otherwise the render size is a startup patch. Same rules as run.sh: the
+    # setting wins, then bbport.ini, and anything but "1" means the startup patch.
+    live = env.get('BB_LIVE_RES') or read_setting(env['BB_CONFIG'], 'live_resolution') or '0'
+    if scaled_output and live == 'auto':
+        live = '1' if gpu_supports_live(caps) else '0'
+    if live != '1':
+        live = '0'
+    if scaled_output and live == '1':
+        print(f'Output {scaled_output}: live resolution changes (no startup patch)')
+    elif scaled_output:
+        env['BB_RENDER_RES'], env['BB_OUTPUT_RES'] = scaled_render, scaled_output
+        env['BB_AUTO_RENDER_RES'] = '1'
+        env.setdefault('BB_DMEM_MB', '9152')
+        print(f'Output {scaled_output}: scene {scaled_render} (startup patch)')
+
+    run_script('patches.py', '--out', out, '--fps', fps,
+               '--extra', env.get('BB_PATCHES', ''), '--settings', env['BB_CONFIG'],
+               '--game-dir', game, '--render-res', env.get('BB_RENDER_RES', ''),
+               '--output-res', env.get('BB_OUTPUT_RES', ''),
+               '--patches-dir', env.get('BB_PATCHES_DIR', ''),
+               '--patches-config', env.get('BB_PATCHES_CONFIG', ''),
+               tolerant=True)
+    # The launcher's frame rate wins; otherwise the present rate follows the FPS patch,
+    # as in run.sh. setdefault, not assignment: an explicit BB_VBLANK_HZ is kept.
+    env.setdefault('BB_VBLANK_HZ', {'uncap': '0', '90': '90'}.get(fps, '60'))
+    # Only offer the loader a patch file that exists.
+    if (out / 'patches.bin').is_file():
+        env['BB_PATCHES_FILE'] = str(out / 'patches.bin')
+    else:
+        env.pop('BB_PATCHES_FILE', None)
+
+
+def gpu_supports_live(caps):
+    """Whether bb-gpu-capabilities says this GPU can do live resolution changes."""
+    if not caps or not Path(caps).is_file():
+        return False
+    try:
+        done = subprocess.run([str(caps), '--live-resolution'], capture_output=True,
+                              text=True, timeout=30)
+        return done.returncode == 0 and done.stdout.strip().endswith('1')
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
 def main():
     args = sys.argv[1:]
     if len(args) >= 2 and args[0] == '--after':
@@ -140,7 +240,8 @@ def main():
     user_dir.mkdir(parents=True, exist_ok=True)
     # GPU caches (shaders, pipelines) beside the saves; read before main(), so set here.
     env.setdefault('BB_GPU_USER_DIR', str(user_dir))
-    env.setdefault('BB_VBLANK_HZ', '60')
+    # BB_VBLANK_HZ is left to apply_patches(), which derives it from the FPS patch the
+    # same way run.sh does (uncap -> uncapped, 90 -> 90, otherwise 60).
     loadexec = out_root / 'loadexec.txt'
     env['BB_LOADEXEC_FILE'] = str(loadexec)
     guest_argv = None
@@ -153,11 +254,18 @@ def main():
         out = out_root / Path(exe).stem.split('-')[0]
         prepare(game, file, out)
         run_script('content_profile.py', game, '--out', out, '--sku', env.get('BB_CONTENT_SKU', 'full'))
+        # After prepare(): patches.py reads out/eboot.elf, and the resolution presets
+        # need BB_RENDER_RES settled before the loader starts.
+        apply_patches(game, out, env, probe.parent / 'bb-gpu-capabilities.exe')
         this = ['--run'] if getattr(sys, 'frozen', False) else [str(Path(__file__).resolve())]
         env['BB_EXE'] = exe
         env['BB_RESTART_COMMAND'] = subprocess.list2cmdline([sys.executable, *this, '--after', str(os.getpid()), *args])
         command = [str(probe), str(out / 'boot-linked.bin'), '--content-profile', str(out / 'content.bin'),
                    '--app0', str(game), '--user', str(user_dir), '--timeout', env.get('BB_TIMEOUT', '0')]
+        # The code patches compiled for this game version (FPS, effects, startup
+        # resolution). Only passed when patches.py actually produced a file.
+        if env.get('BB_PATCHES_FILE'):
+            command += ['--patches', env['BB_PATCHES_FILE']]
         if guest_argv:
             command += ['--guest-argv', str(guest_argv)]
         loadexec.unlink(missing_ok=True)

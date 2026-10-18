@@ -1,16 +1,31 @@
-"""Driver discovery at the AppImage's GTK/game entry point, without a GPU."""
-from paths import ROOT
+"""Driver discovery at the AppImage's GTK/game entry point, without a GPU.
+
+This module is Linux-only: it inspects ELF manifests under /etc/vulkan/icd.d and
+resolves Linux library paths. On Windows neither the paths exist nor does
+Path.is_absolute() mean the same thing for a POSIX path, so the whole class is
+skipped there. The Windows build takes its Vulkan loader from the system.
+"""
+from paths import ROOT, requires_symlinks
 import importlib.util
 import json
+import os
 from pathlib import Path
+import sys
 import tempfile
 import unittest
+
+if os.name == 'nt':
+    skip_on_windows = unittest.skip('Linux ICD discovery (not applicable on Windows)')
+else:
+    def skip_on_windows(function):
+        return function
 
 spec = importlib.util.spec_from_file_location("bbport_vulkan", ROOT / "launcher/bbport_vulkan.py")
 vulkan = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(vulkan)
 
 
+@skip_on_windows
 class PackagedVulkanTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -54,6 +69,7 @@ class PackagedVulkanTests(unittest.TestCase):
                 self.assertEqual(self.env, before)
                 del self.env[key]
 
+    @requires_symlinks
     def test_host_nvidia_and_compiler_are_exposed_without_host_libc(self):
         driver = self.library("libGLX_nvidia.so.580.1")
         (self.libs / "libGLX_nvidia.so.0").symlink_to(driver.name)

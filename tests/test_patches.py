@@ -4,7 +4,9 @@ import tempfile
 import unittest
 import xml.etree.ElementTree as ET
 from pathlib import Path
+from unittest.mock import patch
 
+import patches
 from patches import (EBOOT_BASE, OUTPUT_SIZE, RESOLUTION_TEMPLATE, SCENE_HEIGHT,
                      SCENE_WIDTH, UI_HEIGHT, UI_WIDTH, compile_patches,
                      render_size, resolution_writes, scaled_sizes, effect_patches,
@@ -160,6 +162,31 @@ class ExternalPatchTests(unittest.TestCase):
 
     def test_built_in_file_is_not_external(self):
         self.assertEqual(external_patches(XML.parent), [])
+
+
+class PatchTargetTests(unittest.TestCase):
+    """A patch database must never be written into a game it does not belong to."""
+
+    def test_title_ids_are_read_from_the_database(self):
+        ids = patches.patch_title_ids(XML)
+        self.assertIn('CUSA03173', ids)          # Bloodborne
+        self.assertNotIn('CUSA02344', ids)       # Uncharted
+
+    def test_a_game_the_database_does_not_list_is_refused(self):
+        # Same APP_VER is not the same game: Bloodborne 01.09 and a hypothetical
+        # Uncharted 01.09 have different code at these addresses.
+        with patch.object(patches, 'game_title_id', return_value='CUSA02344'):
+            self.assertIsNotNone(patches.check_patch_target(XML, '/game'))
+
+    def test_the_game_the_database_is_for_is_allowed(self):
+        with patch.object(patches, 'game_title_id', return_value='CUSA03173'):
+            self.assertIsNone(patches.check_patch_target(XML, '/game'))
+
+    def test_an_unreadable_title_id_does_not_block(self):
+        # Nothing to compare against: the version check has to stand alone rather
+        # than refusing every game whose param.sfo cannot be read.
+        with patch.object(patches, 'game_title_id', return_value=None):
+            self.assertIsNone(patches.check_patch_target(XML, '/game'))
 
 
 if __name__ == '__main__':

@@ -1,5 +1,5 @@
 """Exercise run.sh across a re-exec with lightweight preparation/probe stand-ins."""
-from paths import ROOT
+from paths import ROOT, bash_executable, requires_bash, requires_symlinks
 import json
 import os
 from pathlib import Path
@@ -11,6 +11,7 @@ import tempfile
 import unittest
 
 
+@requires_bash
 class RestartResolutionTests(unittest.TestCase):
     def run_restarts(self, explicit=False, live=False, ini_extra='', caps=None, bare_path=False):
         with tempfile.TemporaryDirectory() as directory:
@@ -26,7 +27,10 @@ class RestartResolutionTests(unittest.TestCase):
             (out / 'eboot.elf').write_bytes(elf)
             (data / 'eboot.bin').touch()
             config = data / 'bbport.ini'
-            config.write_text('upscaler=fsr3\npreset=1\noutput_res=1280x720\n' + ini_extra)
+            # newline='\n': text mode would write CRLF on Windows, and run.sh reads
+            # bbport.ini line by line with a ^key=value$ match, so \r would break it.
+            config.write_text('upscaler=fsr3\npreset=1\noutput_res=1280x720\n' + ini_extra,
+                              newline='\n')
             if caps is not None:  # the GPU check next to the probe (live_resolution=auto)
                 tool = data / 'bb-gpu-capabilities'
                 tool.write_text(f'#!/bin/sh\necho {caps}\n')
@@ -48,7 +52,7 @@ class RestartResolutionTests(unittest.TestCase):
                 '("BB_RENDER_RES", "BB_OUTPUT_RES", "BB_AUTO_RENDER_RES")})+"\\n")\n'
                 'if stage<2:\n'
                 '    config.write_text("upscaler=fsr3\\npreset=4\\noutput_res="+'
-                '("1280x720" if stage==0 else "1920x1080")+"\\n")\n'
+                '("1280x720" if stage==0 else "1920x1080")+"\\n", newline="\\n")\n'
                 '    os.environ["BB_TEST_STAGE"]=str(stage+1)\n'
                 '    os.execlp("bash", "bash", "run.sh")\n')
             probe.chmod(0o755)
@@ -95,8 +99,10 @@ class RestartResolutionTests(unittest.TestCase):
         self.assertEqual(self.run_restarts(ini_extra='live_resolution=auto\n', caps=0)[0]['BB_RENDER_RES'],
                          '854x480')
 
+    @requires_symlinks
     def test_live_resolution_without_sed_or_grep(self):
         # A missing sed ended run.sh (exit 127) before the game in the AppImage on NixOS.
+        # The bare PATH is built from symlinks to the real tools.
         self.assertEqual(self.run_restarts(ini_extra='live_resolution=0\n', caps=1,
                                            bare_path=True)[0]['BB_RENDER_RES'], '854x480')
         self.assertIsNone(self.run_restarts(ini_extra='live_resolution=auto\n', caps=1,

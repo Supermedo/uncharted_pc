@@ -1,5 +1,11 @@
 # Нативный порт Bloodborne: что сделано и что дальше
 
+> **This is the Bloodborne roadmap, kept as history.** It describes the Linux port this project
+> was grown from. For how the current Uncharted port fits together, see
+> [ARCHITECTURE.md](ARCHITECTURE.md); for the graphics work that was carried over and is now
+> done, see [upscaler.md](upscaler.md) and [motion_vectors.md](motion_vectors.md). Several items
+> below are finished.
+
 Основной текст — состояние на 2026-09-26; ниже первым разделом — что изменилось к 30.09.
 Самый подробный срез: [CURRENT_STATUS_2026-09-29.md](history/CURRENT_STATUS_2026-09-29.md).
 Отчёт о работе 30.09–01.10 (конвейер GPU, апскейлер, падение, лаунчер, AppImage):

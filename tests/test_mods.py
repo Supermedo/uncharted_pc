@@ -1,4 +1,4 @@
-from paths import ROOT
+from paths import ROOT, bash_executable, requires_bash, requires_symlinks
 import importlib.util
 import json
 import os
@@ -74,6 +74,7 @@ class ModTests(unittest.TestCase):
         self.assertEqual((self.assets / 'b.dcx').read_bytes(), b'untouched')
         self.assertEqual(list((self.root / 'out').iterdir()), [])
 
+    @requires_symlinks
     def test_mod_symlinks_rejected(self):
         a = self.mod('A')
         (a / 'dvdroot_ps4/escape').symlink_to(self.assets, target_is_directory=True)
@@ -135,6 +136,7 @@ class ModTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             mods.selected(self.moddir, config)
 
+    @requires_bash
     def test_run_uses_overlay_propagates_exit_and_cleans_view(self):
         self.mod('A')
         python = self.root / 'python'

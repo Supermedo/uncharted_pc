@@ -224,6 +224,81 @@ def set_ini(key, value):
     path.write_text('\n'.join(out) + '\n', encoding='utf-8')
 
 
+def looks_like_pkg(folder):
+    """True when the folder holds PS4 .pkg files instead of an extracted game.
+
+    A .pkg is Sony's signed container: it has to be unpacked (and decrypted) with
+    one's own tooling before the folder holds eboot.bin and sce_sys. The launcher
+    only ever reads the extracted form, so when a folder carries .pkg files and no
+    game executable, say so instead of reporting a generic "wrong folder".
+
+    An unset folder is False: it is not "the current directory", and scanning that
+    would report on whatever happens to sit where the launcher was started.
+    """
+    if not folder:
+        return False
+    folder = Path(folder)
+    try:
+        if not folder.is_dir():
+            return False
+        if any((folder / exe).is_file() for _k, _t, _s, exe in GAMES):
+            return False
+        return any(entry.is_file() and entry.suffix.lower() == '.pkg' for entry in folder.iterdir())
+    except OSError:
+        return False
+
+
+def find_pkgs(folder):
+    """The .pkg files directly in a folder, sorted, as Paths."""
+    try:
+        return sorted(p for p in Path(folder).iterdir()
+                      if p.is_file() and p.suffix.lower() == '.pkg')
+    except OSError:
+        return []
+
+
+def unpack_pkgs(folder, log=None):
+    """Extract every .pkg in `folder` into a sibling folder named after it.
+
+    Returns the extracted game folder, or None when nothing was written (every
+    package was encrypted, or they were delta patches). scripts/pkg.py says why;
+    its output goes to `log` when one is given.
+
+    This unpacks containers only. A package downloaded from the PSN is encrypted
+    and cannot be turned into a playable folder here: that needs the console's
+    keys, so those entries are skipped and the reason is shown.
+    """
+    packages = find_pkgs(folder)
+    if not packages:
+        return None
+    if str(PORT_DIR / 'scripts') not in sys.path:
+        sys.path.insert(0, str(PORT_DIR / 'scripts'))
+    try:
+        import pkg as pkg_module
+    except ImportError as error:
+        if log:
+            log(f'Unpacking needs scripts/pkg.py: {error}\n')
+        return None
+
+    destination = None
+    for source in packages:
+        target = source.with_suffix('')
+        if log:
+            log(f'Unpacking {source.name}...\n')
+        report = (lambda message: log(message + '\n')) if log else None
+        try:
+            _info, written = pkg_module.extract(source.read_bytes(), target, report=report)
+        except (pkg_module.PkgError, ValueError, OSError) as error:
+            if log:
+                log(f'  {source.name}: {error}\n')
+            continue
+        if written:
+            if log:
+                log(f'  {written} files into {target}\n')
+            destination = destination or target
+    return destination
+
+
 def game_info(folder):
     """{'title', 'id', 'version', 'games': [keys present]} of a game folder, or None."""
     folder = Path(folder or '.')
@@ -609,6 +684,10 @@ class Launcher:
             chosen = self.filedialog.askdirectory(title=prompt, initialdir=var.get() or str(PORT_DIR))
             if chosen:
                 var.set(str(Path(chosen)))
+                # A folder holding .pkg files is the usual mistake: offer to unpack
+                # it here rather than leaving the failure for PLAY to report.
+                if looks_like_pkg(chosen):
+                    self.offer_unpack(chosen, var)
         self.pill(holder, _('Browse…'), browse, padding=(14, 6)).pack(side='left', padx=(8, 0))
         self.pill(holder, _('Open'), lambda: self.open_path(var.get(), key), kind='ghost',
                   padding=(12, 6)).pack(side='left', padx=(4, 0))
@@ -1300,6 +1379,16 @@ class Launcher:
             return
         self.collect()
         folder = game_folder(self.app, self.app['start'])
+        if folder and looks_like_pkg(folder):
+            unpacked = self.offer_unpack(folder)
+            if not unpacked:
+                self.show('game')
+                return
+            # Carry the extracted folder over so this run continues without the
+            # user having to set it again by hand.
+            self.app['game_dir'] = str(unpacked)
+            self.app.pop(f'game_dir_{self.app["start"]}', None)
+            folder = str(unpacked)
         if not folder or not Path(folder).is_dir():
             self.messagebox.showerror(NAME, _('Choose the game folder with eboot.bin.'))
             self.show('game')
@@ -1400,6 +1489,43 @@ class Launcher:
         self.log.delete('1.0', 'end')
         self.log.insert('end', text)
         self.log.configure(state='disabled')
+
+    def offer_unpack(self, folder, var=None):
+        """Ask whether to unpack the .pkg files in `folder`, and point the setting at
+        the result. Returns the extracted folder, or None."""
+        packages = find_pkgs(folder)
+        if not packages:
+            return None
+        answer = self.messagebox.askyesno(
+            NAME, _('This folder holds {} .pkg file(s), not an extracted game.\n\n'
+                    'Unpack them now into a new folder next to them?').format(len(packages)))
+        if not answer:
+            self.messagebox.showinfo(
+                NAME, _('Unpack the .pkg yourself, then choose the folder that contains '
+                        'eboot.bin and sce_sys.'))
+            return None
+        self.set_log('')
+        self.append(_('Unpacking...\n'))
+        self.root.update_idletasks()
+        folder_out = unpack_pkgs(folder, log=self.append)
+        if not folder_out:
+            self.messagebox.showerror(
+                NAME, _('No game could be unpacked.\n\n'
+                        'A .pkg from the PS Store, or ripped from a disc, is a retail package: '
+                        'its metadata is readable but the game itself is in an encrypted image, '
+                        'so unpacking cannot produce a playable folder. Point the launcher at '
+                        'your own decrypted game folder (eboot.bin, sce_sys, u1data...).\n\n'
+                        'See the log for details.'))
+            return None
+        if var is not None:
+            var.set(str(folder_out))
+        if not game_info(folder_out):
+            self.messagebox.showwarning(
+                NAME, _('Unpacked, but there is no eboot.bin in there.\n\n'
+                        'That package only held metadata (sce_sys, icons, trophies); the game '
+                        'data is in an encrypted part of it. Choose your decrypted game folder '
+                        'on the Game page instead.'))
+        return folder_out
 
     def copy_log(self):
         self.root.clipboard_clear()

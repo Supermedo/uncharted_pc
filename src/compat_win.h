@@ -8,6 +8,8 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <stdlib.h>
+#include <stdio.h>
+#include <string.h>
 #include <time.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -58,6 +60,19 @@ static inline int compat_fsync(int fd) { return _commit(fd); }
 #define fsync compat_fsync
 static inline char *compat_realpath(const char *path, char *out) { return _fullpath(out, path, PATH_MAX); }
 #define realpath compat_realpath
+/* setenv: the CRT has _putenv, which has no overwrite flag. */
+static inline int compat_setenv(const char *name, const char *value, int overwrite) {
+    if (!name || !value || !*name || strchr(name, '=')) return -1;
+    if (!overwrite && getenv(name)) return 0;
+    /* Put the copy on the heap: _putenv keeps the string. */
+    char *entry = (char *)malloc(strlen(name) + strlen(value) + 2);
+    if (!entry) return -1;
+    sprintf(entry, "%s=%s", name, value);
+    int rc = _putenv(entry);
+    if (rc) free(entry); /* the CRT freed or rejected it */
+    return rc;
+}
+#define setenv compat_setenv
 
 /* Seconds east of UTC at time t (struct tm has no tm_gmtoff on Windows). */
 long compat_utc_offset(time_t t);

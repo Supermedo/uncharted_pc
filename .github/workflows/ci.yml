@@ -1,0 +1,253 @@
+# Continuous integration.
+#
+# Three jobs, matching the three test layers:
+#   python-tests   the scripts and launcher settings tests (fastest, no build)
+#   c-tests-linux  the HLE runtime tests, built natively
+#   c-tests-win    the same tests under the MSYS2 CLANG64 toolchain that builds
+#                  the shipped Windows package
+#
+# None of this needs a GPU or game files: the C++ renderer tests are built
+# separately (see build-renderer-tests, opt-in) because they need the whole GPU
+# library, which takes far longer than this workflow's budget.
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  python-tests:
+    name: Python tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Run the suite
+        run: python -m unittest discover -s tests -v
+
+  c-tests-linux:
+    name: C tests (Linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential cmake ninja-build pkg-config \
+            libsdl3-dev libavcodec-dev libavformat-dev libavutil-dev \
+            nlohmann-json3-dev libminiz-dev
+
+      # The tests link the HLE runtime but not the GPU library, so the Vulkan,
+      # SDL3 and FFmpeg packages below are all that is needed here.
+      - name: Build and run
+        run: bash tests/build.sh
+
+  c-tests-win:
+    name: C tests (Windows / MSYS2 CLANG64)
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      # msys2/setup-msys2 installs CLANG64 and the packages named in
+      # packaging/windows/README.md. The extra ones are what the C tests link:
+      # SDL3 (runtime_pad.c) and FFmpeg (runtime_ajm.c).
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: CLANG64
+          update: true
+          install: >-
+            clang
+            cmake
+            ninja
+            pkgconf
+            git
+            SDL3
+            ffmpeg
+
+      - name: Build and run
+        run: bash tests/build.sh
+
+  build-windows:
+    name: Full build (Windows)
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: CLANG64
+          update: true
+          install: >-
+            clang
+            cmake
+            ninja
+            pkgconf
+            git
+            patch
+            SDL3
+            ffmpeg
+            vulkan-headers
+            vulkan-loader
+            vulkan-memory-allocator
+            glslang
+            boost
+            spirv-tools
+            spirv-headers
+            spirv-cross
+            xxhash
+            protobuf
+            openssl
+            zlib
+            miniupnpc
+            nlohmann-json
+            robin-map
+            zydis
+            fmt
+
+      # The runner defaults to core.autocrlf=true, which checks the FSR-Vulkan submodule
+      # out with CRLF and makes the patches fail to apply. Leaving git's default alone
+      # means this job exercises that path the way a fresh Windows clone hits it.
+      - name: Build bb-probe.exe and run the C tests
+        run: bash build.sh --test
+
+  licenses:
+    name: License set
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      # Every license in the manifest must resolve to a real file, so a renamed
+      # or removed third-party license fails the build instead of shipping a
+      # package with an incomplete set.
+      - name: Check the manifest
+        run: |
+          set -e
+          manifest=packaging/windows/licenses/MANIFEST.txt
+          missing=0
+          while IFS='|' read -r name source kind; do
+            [[ -z ${name// } || $name == \#* ]] && continue
+            [[ $kind == pkg ]] && continue   # resolved from MSYS2 at package time
+            [[ -z ${source// } ]] && continue
+            if [[ ! -f $source ]]; then
+              echo "missing: $name <- $source"
+              missing=1
+            fi
+          done < "$manifest"
+          exit $missing
+
+  # The loader plus the whole vendored renderer. Slow, and it does not fit the
+  # shortest signal, but it is the only job that catches a break in the GPU
+  # build or in the FSR-Vulkan patch application. Runs on push to main, on pull
+  # requests, and on demand; not on every branch push.
+  build-windows:
+    name: Full build (Windows)
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'pull_request'
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: CLANG64
+          update: true
+          install: >-
+            clang
+            cmake
+            ninja
+            pkgconf
+            git
+            patch
+            SDL3
+            ffmpeg
+            vulkan-headers
+            vulkan-loader
+            vulkan-memory-allocator
+            glslang
+            boost
+            spirv-tools
+            spirv-headers
+            spirv-cross
+            xxhash
+            protobuf
+            openssl
+            zlib
+            miniupnpc
+            nlohmann-json
+            robin-map
+            zydis
+            fmt
+
+      # The runner uses git's default core.autocrlf=true, which checks the FSR-Vulkan
+      # submodule out with CRLF and makes the patches fail to apply. Nothing overrides
+      # it here, so this job exercises the same path a fresh Windows clone hits.
+      - name: Build bb-probe.exe and run the C tests
+        run: bash build.sh --test
+
+      - name: Package
+        run: bash packaging/windows/package.sh
+
+  # The renderer tests are eight C++ targets in gpu/CMakeLists.txt. They need
+  # the full shadPS4 build (long) and no GPU, so they are opt-in rather than
+  # blocking every push.
+  build-renderer-tests:
+    name: Renderer tests (C++)
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential cmake ninja-build pkg-config git \
+            libvulkan-dev libsdl3-dev libavcodec-dev libavformat-dev libavutil-dev \
+            libavfilter-dev libswscale-dev libswresample-dev libxxhash-dev \
+            libboost-dev libfmt-dev nlohmann-json3-dev \
+            glslang-tools spirv-cross libminiz-dev libzydis-dev
+      - name: Configure
+        run: cmake -S gpu -B out/gpu -G Ninja -DCMAKE_BUILD_TYPE=Release -DBB_PGO=off -DBB_LTO=OFF
+      - name: Build the test targets
+        run: |
+          ninja -C out/gpu \
+            motion-history-test ui-composition-test scene-resolution-test \
+            motion-shader-test taa-shader-test camera-motion-test \
+            upscaler-support-test
+      - name: Run
+        run: |
+          for t in motion-history-test ui-composition-test scene-resolution-test \
+                   motion-shader-test taa-shader-test camera-motion-test \
+                   upscaler-support-test; do
+            echo "::group::$t"
+            ./out/gpu/$t
+            echo "::endgroup::"
+          done

@@ -1,0 +1,61 @@
+# Third-party licenses shipped with the Windows package.
+#
+# Each line: <destination file name>|<source path relative to the repo root>|<kind>
+#
+#   copied  the file is copied into licenses/ in the package as-is
+#   mstree  the file lives in a third-party source tree in this repo
+#   pkg     the license belongs to an MSYS2 package; source is resolved from
+#           /clang64/share/licenses/<package>/LICENSE at build time
+#
+# packaging/windows/check_licenses.sh verifies that every entry whose file can
+# be located actually ends up in the package, and fails the build when a
+# license the binary links is missing. Run it with no arguments to check the
+# current working tree (use --stage DIR to check an assembled package).
+#
+# Keep in sync with the credits list in README.md.
+
+# --- Renderer and runtime code linked into bb-probe.exe -------------------------
+shadPS4-GPL-2.0.txt|gpu/shadps4/LICENSE|copied
+sirit-BSD.txt|gpu/third_party/sirit/LICENSE.txt|copied
+half-MIT.txt|gpu/third_party/half/LICENSE.txt|copied
+cpp-httplib-MIT.txt|gpu/third_party/httplib/LICENSE|copied
+wepoll-MIT.txt|gpu/third_party/wepoll/LICENSE|copied
+nlohmann-json-MIT.txt|packaging/windows/licenses/nlohmann-json-LICENSE.txt|copied
+FSR-Vulkan-MIT.txt|gpu/third_party/fsr-vulkan/LICENSE.txt|copied
+imgui-MIT.txt|gpu/third_party/imgui/LICENSE.txt|copied
+magic_enum-MIT.txt|gpu/third_party/magic_enum/LICENSE|copied
+miniz-MIT.txt|gpu/third_party/miniz/LICENSE|copied
+LibAtrac9.txt|third_party/LibAtrac9/LICENSE|copied
+DejaVu-fonts.txt|gpu/third_party/fonts/LICENSE-DejaVu.txt|copied
+
+# --- Optional: present only when the DLSS bridge has been built ---------------
+bbport_dlss-MIT.txt|gpu/dlss_bridge/LICENSE.txt|optional
+
+# --- MSYS2 packages whose code or DLLs are redistributed ----------------------
+# One entry per find_package/pkg_check_modules in gpu/CMakeLists.txt. Header-only
+# packages are included too: their terms still apply to code compiled into the
+# binary. glslang and Boost are build-time only, so they are not shipped.
+#
+# Some of these MSYS2 packages install no license file at all, so their upstream
+# text is vendored beside this manifest instead. Everything under `pkg` is read
+# from /clang64/share/licenses at package time.
+abseil-cpp-LICENSE.txt|abseil-cpp|pkg
+fmt-LICENSE.txt|fmt|pkg
+miniupnpc-LICENSE.txt|miniupnpc|pkg
+openssl-LICENSE.txt|openssl|pkg
+protobuf-LICENSE.txt|protobuf|pkg
+robin-map-LICENSE.txt|robin-map|pkg
+sdl3-LICENSE.txt|sdl3|pkg
+zlib-LICENSE.txt|zlib|pkg
+zydis-LICENSE.txt|zydis|pkg
+
+# Vendored: the MSYS2 package for each of these ships no license file.
+ffmpeg-LGPL-2.1.txt|packaging/windows/licenses/ffmpeg-LGPL-2.1.txt|copied
+libxxhash-BSD-2-Clause.txt|packaging/windows/licenses/libxxhash-BSD-2-Clause.txt|copied
+vulkan-memory-allocator-MIT.txt|packaging/windows/licenses/vulkan-memory-allocator-MIT.txt|copied
+
+# --- Known gaps, checked so they cannot silently drift ------------------------
+# xbyak ships no license file in its repository. The headers state
+# "modified new BSD license", http://opensource.org/licenses/BSD-3-Clause, so
+# the BSD-3-Clause text is reproduced in xbyak-BSD-3-Clause.txt below.
+xbyak-BSD-3-Clause.txt|packaging/windows/licenses/xbyak-BSD-3-Clause.txt|copied

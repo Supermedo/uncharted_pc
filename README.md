@@ -31,6 +31,18 @@ code runs directly on your PC and the graphics are translated to Vulkan. Unpack 
   Anti-aliasing and Frame generation off.
 - About 8 GB of free memory (RAM + page file).
 
+## Your game files
+
+You need your own decrypted dump of the collection: the folder with `eboot.bin` /
+`big2-ps4_Shipping.elf` / `big3-ps4_Shipping.elf`, `sce_sys`, `u1data`, `u2data` and `u3data`.
+Point the launcher at that folder.
+
+If you have `.pkg` files instead, the launcher offers to unpack them for you. That opens the
+package container only: a `.pkg` downloaded from the PS Store is encrypted, and making it
+playable needs the console's keys, which this cannot and does not do. Only already-unencrypted
+packages extract. Patch packages are also refused rather than half-applied, because a partial
+merge produces a folder that looks fine and crashes later. See `docs/PKG.md` for the details.
+
 ## Known problems
 
 - **Uncharted 3, Cartagena square (chapter 2):** at high frame rates (240 Hz setting, ~80 FPS)
@@ -62,6 +74,13 @@ code runs directly on your PC and the graphics are translated to Vulkan. Unpack 
 MSYS2 CLANG64 on Windows: `bash build.sh` builds `out\bb-probe.exe`, and
 `bash packaging/windows/package.sh` makes `dist\uncharted-windows` and the zip.
 
+Clone with `--recursive`: the FSR-Vulkan, Dear ImGui, magic_enum, miniz, xbyak and LibAtrac9
+submodules are required to build. `bash build.sh --test` runs the C tests, and
+`python -m unittest discover -s tests` runs the Python ones.
+
+Building and the layout are in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md); the Windows build
+details are in [packaging/windows/README.md](packaging/windows/README.md).
+
 ## Credits
 
 Built on [bbport](https://github.com/deadinside28/bloodborne_pc), the native Linux port of
@@ -87,4 +106,6 @@ icon are original artwork; no official art is included.
 ## License
 
 GNU GPL v2 or later ([LICENSE](LICENSE)). Third-party components keep their own licenses
-(see `licenses\` in the download).
+(see `licenses\` in the download); the full set is declared in
+[`packaging/windows/licenses/MANIFEST.txt`](packaging/windows/licenses/MANIFEST.txt) and
+checked at packaging time, so a release cannot ship without them.
