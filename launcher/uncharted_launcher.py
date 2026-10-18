@@ -321,10 +321,7 @@ def write_input_ini(s):
 
 def game_environment(s, start=None):
     env = dict(os.environ)
-    try:
-        env['BB_INPUT_CONFIG'] = str(write_input_ini(s))
-    except OSError:
-        pass
+    env['BB_INPUT_CONFIG'] = str(write_input_ini(s))
     start = start or s['start']
     # The collection folder; with none, the folder of the game started. A game with a folder of its own
     # (Game page) is taken from it, also when another game of the collection starts it.
@@ -1309,7 +1306,13 @@ class Launcher:
             return
         self.set_log('')
         try:
-            self.process = subprocess.Popen(run_command(), cwd=PORT_DIR, env=game_environment(self.app),
+            env = game_environment(self.app)
+        except OSError as error:
+            self.messagebox.showerror(
+                NAME, _('Could not save the input configuration: {}').format(error))
+            return
+        try:
+            self.process = subprocess.Popen(run_command(), cwd=PORT_DIR, env=env,
                                             stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                                             stderr=subprocess.STDOUT, creationflags=NO_WINDOW)
         except OSError as error:
@@ -1652,7 +1655,17 @@ def play_without_window(settings):
     log_dir = Path(settings.get('user_dir') or DATA_DIR / 'user')
     log_dir.mkdir(parents=True, exist_ok=True)
     with open(log_dir / 'last_run.log', 'w', encoding='utf-8', buffering=1) as log:
-        process = subprocess.Popen(run_command(), cwd=PORT_DIR, env=game_environment(settings),
+        try:
+            env = game_environment(settings)
+        except OSError as error:
+            text = _('Could not save the input configuration: {}').format(error) + '\n'
+            log.write(text)
+            try:
+                sys.stderr.write(text)
+            except (OSError, ValueError):
+                pass
+            return 1
+        process = subprocess.Popen(run_command(), cwd=PORT_DIR, env=env,
                                    stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                                    stderr=subprocess.STDOUT, creationflags=NO_WINDOW)
         for raw in iter(process.stdout.readline, b''):
