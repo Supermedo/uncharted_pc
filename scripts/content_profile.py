@@ -9,6 +9,12 @@ from prepare import sfo
 def prepare(game, out, sku='full'):
     values=sfo((game/'sce_sys/param.sfo').read_bytes())
     params=[values.get(f'USER_DEFINED_PARAM_{i}',0) for i in range(1,5)]
+    # A dump without USER_DEFINED_PARAM_1 (Uncharted: The Nathan Drake Collection) answers
+    # sceAppContentAppParamGetInt(1) with its title number, as the console does (CUSA02320 -> 2320);
+    # with 0 the game's trophy and title-ID paths fall back to a placeholder.
+    if 'USER_DEFINED_PARAM_1' not in values:
+        digits=''.join(ch for ch in str(values.get('TITLE_ID') or '') if ch.isdigit())
+        params[0]=int(digits) if digits else 0
     if any(type(v) is not int or not 0<=v<=0xffffffff for v in params):
         raise ValueError('invalid user-defined parameter')
     profile=dict(title_id=values.get('TITLE_ID'),sku=sku,sku_source='explicit probe setting',
