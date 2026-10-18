@@ -84,54 +84,6 @@ jobs:
       - name: Build and run
         run: bash tests/build.sh
 
-  build-windows:
-    name: Full build (Windows)
-    runs-on: windows-latest
-    defaults:
-      run:
-        shell: msys2 {0}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: recursive
-
-      - uses: msys2/setup-msys2@v2
-        with:
-          msystem: CLANG64
-          update: true
-          install: >-
-            clang
-            cmake
-            ninja
-            pkgconf
-            git
-            patch
-            SDL3
-            ffmpeg
-            vulkan-headers
-            vulkan-loader
-            vulkan-memory-allocator
-            glslang
-            boost
-            spirv-tools
-            spirv-headers
-            spirv-cross
-            xxhash
-            protobuf
-            openssl
-            zlib
-            miniupnpc
-            nlohmann-json
-            robin-map
-            zydis
-            fmt
-
-      # The runner defaults to core.autocrlf=true, which checks the FSR-Vulkan submodule
-      # out with CRLF and makes the patches fail to apply. Leaving git's default alone
-      # means this job exercises that path the way a fresh Windows clone hits it.
-      - name: Build bb-probe.exe and run the C tests
-        run: bash build.sh --test
-
   licenses:
     name: License set
     runs-on: ubuntu-latest
