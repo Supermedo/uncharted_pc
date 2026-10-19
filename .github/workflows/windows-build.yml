@@ -86,7 +86,20 @@ jobs:
         run: |
           sdk="$(cygpath -u "$RUNNER_TEMP")/DLSS"
           git clone -q --depth 1 https://github.com/NVIDIA/DLSS "$sdk"
-          CMAKE_EXE="/c/Program Files/CMake/bin/cmake.exe" DLSS_SDK_ROOT="$sdk" bash packaging/windows/build_dlss.sh
+          # The Visual Studio the runner image has (2022 or newer), as a CMake generator name.
+          vswhere="/c/Program Files (x86)/Microsoft Visual Studio/Installer/vswhere.exe"
+          major=$("$vswhere" -latest -property installationVersion | tr -d '\r' | cut -d. -f1)
+          year=$("$vswhere" -latest -property catalog_productLineVersion | tr -d '\r')
+          echo "Visual Studio $major $year"
+          DLSS_GENERATOR="Visual Studio $major $year" CMAKE_EXE="/c/Program Files/CMake/bin/cmake.exe" \
+            DLSS_SDK_ROOT="$sdk" bash packaging/windows/build_dlss.sh
+
+      # The launcher's PNG icon is generated, not in the repository (*.png is ignored).
+      - name: Launcher icon
+        shell: pwsh
+        run: |
+          python -m pip install -q --disable-pip-version-check pillow
+          python packaging/windows/make_uncharted_icon.py "$env:RUNNER_TEMP\uncharted.ico" launcher/uncharted.png
 
       - name: Package
         env:
