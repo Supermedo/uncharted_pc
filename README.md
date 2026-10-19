@@ -55,6 +55,14 @@ code runs directly on your PC and the graphics are translated to Vulkan. Unpack 
   and older can't run the games yet; the game says so instead of crashing with 0xc000001d.
 - **Uncharted 2, train wreck:** `IsFinite(deltaTransform)` in character-leg-ik.cpp, fixed in 0.3.6
   for the EU 1.00 version.
+- **Uncharted 2: blur when aiming or on a turret, characters and grenades going through the
+  floor or floating** (issues #33, #360): the game reads results of GPU work back on the CPU,
+  among them the depth-of-field focus distance (a 1x1 render target) and physics results.
+  After 0.3.6, render targets of at most 8x8 pixels go back to guest memory
+  (`BB_READBACK_SMALL=0`: off), Uncharted 2 runs with accurate GPU memory (`BB_GPU_MERGE=1`
+  brings back the faster merging), and textures over memory written by read backs are reloaded.
+  On 0.3.6 itself, `BB_GPU_MERGE=0 BB_READBACK_LINEAR=1` under Advanced → Environment does the
+  first two, more slowly. Dropped weapons drawn as white boxes are not confirmed fixed yet.
 - Frame rates above 120 are experimental.
 
 ## Building
