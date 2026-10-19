@@ -13,6 +13,7 @@
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_platform.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
+#include "video_core/renderer_vulkan/vk_vram.h"
 
 #include <vk_mem_alloc.h>
 
@@ -138,6 +139,10 @@ void UniqueBuffer::Destroy() {
     if (bda_addr) {
         ForgetBda(bda_addr);
     }
+    if (vram_bytes) {
+        Vulkan::Vram::buffer_bytes.fetch_sub(vram_bytes, std::memory_order_relaxed);
+        vram_bytes = 0;
+    }
     if (allocation) {
         vmaDestroyBuffer(allocator, buffer, allocation);
     } else if (buffer) {
@@ -166,11 +171,34 @@ void UniqueBuffer::Create(vk::BufferCreateInfo& buffer_ci, MemoryType mem_type,
 
         const VkBufferCreateInfo buffer_ci_unsafe = static_cast<VkBufferCreateInfo>(buffer_ci);
         VkBuffer unsafe_buffer{};
-        VkResult result = vmaCreateBuffer(allocator, &buffer_ci_unsafe, &alloc_ci, &unsafe_buffer,
-                                          &allocation, out_alloc_info);
+        const bool wants_device = alloc_ci.usage == VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
+        VkResult result = VK_ERROR_OUT_OF_DEVICE_MEMORY;
+        if (!wants_device || Vulkan::Vram::Allows(buffer_ci.size)) {
+            result = vmaCreateBuffer(allocator, &buffer_ci_unsafe, &alloc_ci, &unsafe_buffer,
+                                     &allocation, out_alloc_info);
+        }
+        if (result != VK_SUCCESS && !Vulkan::Vram::Legacy()) {
+            // bbport: the card is full (driver budget): the buffer goes to system memory.
+            Vulkan::Vram::failed_allocs.fetch_add(1, std::memory_order_relaxed);
+            VmaAllocationCreateInfo host_ci = alloc_ci;
+            host_ci.flags &= ~VMA_ALLOCATION_CREATE_WITHIN_BUDGET_BIT;
+            host_ci.usage = VMA_MEMORY_USAGE_AUTO_PREFER_HOST;
+            allocation = nullptr;
+            result = vmaCreateBuffer(allocator, &buffer_ci_unsafe, &host_ci, &unsafe_buffer,
+                                     &allocation, out_alloc_info);
+            if (result == VK_SUCCESS) {
+                Vulkan::Vram::host_fallbacks.fetch_add(1, std::memory_order_relaxed);
+            }
+        }
         ASSERT_MSG(result == VK_SUCCESS, "Failed allocating buffer with error {}",
                    vk::to_string(vk::Result{result}));
         buffer = vk::Buffer{unsafe_buffer};
+        VkMemoryPropertyFlags placed{};
+        vmaGetAllocationMemoryProperties(allocator, allocation, &placed);
+        if (placed & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) {
+            vram_bytes = buffer_ci.size;
+            Vulkan::Vram::buffer_bytes.fetch_add(vram_bytes, std::memory_order_relaxed);
+        }
     } else {
         buffer_ci.flags |=
             vk::BufferCreateFlagBits::eSparseBinding | vk::BufferCreateFlagBits::eSparseResidency;
@@ -219,6 +247,12 @@ Buffer::Buffer(const Vulkan::Instance& instance, VAddr cpu_addr_, u64 size_bytes
         Vulkan::SetObjectName(device, Handle(), "Buffer {:#x}:{:#x}", cpu_addr, size_bytes);
     }
 
+    if (Vulkan::Vram::Log() && size_bytes >= (8u << 20)) {
+        std::printf("VRAM: buffer '%s' %s %llu MiB (vram counted %llu MiB)\n",
+                    debug_name.empty() ? "?" : std::string(debug_name).c_str(),
+                    std::string(BufferTypeName(mem_type)).c_str(), (unsigned long long)(size_bytes >> 20),
+                    (unsigned long long)(buffer.vram_bytes >> 20));
+    }
     if (mem_type != MemoryType::Sparse) {
         VkMemoryPropertyFlags property_flags{};
         vmaGetAllocationMemoryProperties(instance.GetAllocator(), buffer.allocation,

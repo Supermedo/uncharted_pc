@@ -495,6 +495,16 @@ public:
     /// (VK_EXT_memory_budget: what this process can use now, other processes included).
     [[nodiscard]] u64 GetDeviceMemoryBudgetNow() const;
 
+    /// bbport: the driver's usage and current budget of the counted heaps in one query.
+    void QueryMemory(u64& usage, u64& budget) const;
+
+    /// bbport: false when an allocation of `bytes` of device-local memory would go over the
+    /// simulated card (BB_TEST_VRAM_MB, hard limit); always true otherwise.
+    [[nodiscard]] bool VramAllows(u64 bytes) const;
+
+    /// bbport: one line with the memory split (BB_VRAM_LOG).
+    void ReportMemory(const char* why = "") const;
+
     /// Returns the total memory budget available to the device.
     [[nodiscard]] u64 GetTotalMemoryBudget() const {
         return total_memory_budget;

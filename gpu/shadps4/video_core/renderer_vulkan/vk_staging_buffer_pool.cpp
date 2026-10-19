@@ -14,6 +14,7 @@
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
 #include "video_core/renderer_vulkan/vk_staging_buffer_pool.h"
+#include "video_core/renderer_vulkan/vk_vram.h"
 
 namespace Vulkan {
 
@@ -161,20 +162,24 @@ void StagingBufferPool::FreeDeferred(const StagingBufferRef& ref) {
 
 void StagingBufferPool::TickFrame() {
     ++frame;
-    for (Ring& ring : rings) {
-        TrimRing(ring);
+    // bbport: the device-local rings (detiling scratch) hold video memory: on a small card idle
+    // blocks go after ~4 s instead of staying (up to 512 MiB) for 30 s.
+    const bool tight = instance.GetTotalMemoryBudget() < 5_GB && !Vram::Legacy();
+    for (size_t i = 0; i < rings.size(); ++i) {
+        TrimRing(rings[i], tight && i == u32(MemoryType::DeviceLocal));
     }
-    for (auto& cache : large_caches) {
-        TrimLarge(cache);
+    for (size_t i = 0; i < large_caches.size(); ++i) {
+        TrimLarge(large_caches[i], tight && i == u32(MemoryType::DeviceLocal));
     }
     PublishStats();
 }
 
-void StagingBufferPool::TrimRing(Ring& ring) {
+void StagingBufferPool::TrimRing(Ring& ring, bool eager) {
     auto& blocks = ring.blocks;
     for (size_t i = blocks.size(); i-- > 0;) {
         const Block& block = blocks[i];
-        if (blocks.size() <= keep_blocks || frame - block.last_used_frame < RING_IDLE_FRAMES ||
+        if (blocks.size() <= (eager ? 1 : keep_blocks) ||
+            frame - block.last_used_frame < (eager ? 240 : RING_IDLE_FRAMES) ||
             !scheduler.IsFree(block.buffer->LastTick())) {
             continue;
         }
@@ -190,9 +195,9 @@ void StagingBufferPool::TrimRing(Ring& ring) {
     }
 }
 
-void StagingBufferPool::TrimLarge(std::vector<LargeBuffer>& cache) {
-    std::erase_if(cache, [this](const LargeBuffer& entry) {
-        return !entry.held && frame - entry.last_used_frame >= LARGE_IDLE_FRAMES &&
+void StagingBufferPool::TrimLarge(std::vector<LargeBuffer>& cache, bool eager) {
+    std::erase_if(cache, [this, eager](const LargeBuffer& entry) {
+        return !entry.held && frame - entry.last_used_frame >= (eager ? 240 : LARGE_IDLE_FRAMES) &&
                scheduler.IsFree(entry.tick);
     });
 }

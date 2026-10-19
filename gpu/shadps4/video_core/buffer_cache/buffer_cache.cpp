@@ -22,6 +22,7 @@
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_runtime.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
+#include "video_core/renderer_vulkan/vk_vram.h"
 #include "video_core/texture_cache/texture_cache.h"
 
 #include <vk_mem_alloc.h>
@@ -134,6 +135,20 @@ BufferCache::BufferCache(const Vulkan::Instance& instance_, Vulkan::Scheduler& s
         FindMemoryType(instance.GetMemoryProperties(), vk::MemoryPropertyFlagBits::eDeviceLocal,
                        reqs.memoryTypeBits)
             .value();
+    {
+        // bbport: system memory for arena blocks when the card is full (EnsureResident).
+        const auto& mem_props = instance.GetMemoryProperties();
+        const auto wanted = vk::MemoryPropertyFlagBits::eHostVisible |
+                            vk::MemoryPropertyFlagBits::eHostCoherent;
+        for (u32 i = 0; i < mem_props.memoryTypeCount; ++i) {
+            const auto flags = mem_props.memoryTypes[i].propertyFlags;
+            if (((reqs.memoryTypeBits >> i) & 1) && (flags & wanted) == wanted &&
+                !(flags & vk::MemoryPropertyFlagBits::eDeviceLocal)) {
+                arena_host_memory_type_index = i;
+                break;
+            }
+        }
+    }
 
     const u64 bda_pagetable_size =
         (blocks_per_arena_page * num_arena_pages) * sizeof(vk::DeviceAddress);
@@ -997,6 +1012,93 @@ const Buffer* BufferCache::GetArena(u64 first_block, u64 last_block) {
     return new_arena;
 }
 
+u64 BufferCache::AllocateArenaMemory(u64 size, vk::DeviceMemory& memory) {
+    // bbport: one vkAllocateMemory per resident range ran into the driver's limit on the number
+    // of allocations (4096 on NVIDIA and AMD; over 2000 after a few minutes of U2's prologue):
+    // the ranges are carved out of larger chunks now (they are never freed, so a bump pointer
+    // does). When the card has no room (the driver's budget, BB_TEST_VRAM_MB) the chunks come
+    // from system memory instead of failing: the GPU reads them over PCIe, slower but alive.
+    const bool tight = Vulkan::Vram::TestLimit() != 0 || instance.GetTotalMemoryBudget() < 5_GB;
+    const u64 chunk_size = Vulkan::Vram::Legacy() ? size : tight ? 16_MB : 64_MB;
+    const auto carve = [&](bool host) -> std::optional<u64> {
+        for (ArenaChunk& chunk : arena_chunks) {
+            if (chunk.host == host && chunk.size - chunk.used >= size) {
+                memory = chunk.memory;
+                const u64 offset = chunk.used;
+                chunk.used += size;
+                return offset;
+            }
+        }
+        return std::nullopt;
+    };
+    if (const auto offset = carve(false)) {
+        return *offset;
+    }
+    if (host_arena_active) {
+        if (const auto offset = carve(true)) {
+            return *offset;
+        }
+    }
+    vk::MemoryAllocateInfo alloc_info = {
+        .allocationSize = std::max(size, chunk_size),
+        .memoryTypeIndex = arena_memory_type_index,
+    };
+    vk::Result result = vk::Result::eErrorOutOfDeviceMemory;
+    if (!host_arena_active) {
+        for (const u64 try_size : {std::max(size, chunk_size), size}) {
+            alloc_info.allocationSize = try_size;
+            if (!Vulkan::Vram::Allows(try_size)) {
+                continue;
+            }
+            const auto r = instance.GetDevice().allocateMemory(alloc_info);
+            result = r.result;
+            if (result == vk::Result::eSuccess) {
+                arena_chunks.push_back({r.value, try_size, size, false});
+                Vulkan::Vram::arena_bytes.fetch_add(try_size, std::memory_order_relaxed);
+                Vulkan::Vram::arena_count.fetch_add(1, std::memory_order_relaxed);
+                memory = r.value;
+                return 0;
+            }
+        }
+    }
+    Vulkan::Vram::failed_allocs.fetch_add(1, std::memory_order_relaxed);
+    Vulkan::Vram::urgent.store(true, std::memory_order_relaxed);
+    if (arena_host_memory_type_index == ~0u && !Vulkan::Vram::Strict() && !host_arena_active) {
+        // Sparse binds cannot use system memory on this driver (NVIDIA): go over the budget and
+        // let the driver page (the simulated card, BB_TEST_VRAM_MB, is let through here).
+        alloc_info.allocationSize = std::max(size, chunk_size);
+        const auto r = instance.GetDevice().allocateMemory(alloc_info);
+        if (r.result == vk::Result::eSuccess) {
+            arena_chunks.push_back({r.value, alloc_info.allocationSize, size, false});
+            Vulkan::Vram::arena_bytes.fetch_add(alloc_info.allocationSize,
+                                                std::memory_order_relaxed);
+            Vulkan::Vram::arena_count.fetch_add(1, std::memory_order_relaxed);
+            Vulkan::Vram::recovered_allocs.fetch_add(1, std::memory_order_relaxed);
+            memory = r.value;
+            return 0;
+        }
+        result = r.result;
+    }
+    ASSERT_MSG(arena_host_memory_type_index != ~0u && !Vulkan::Vram::Legacy(),
+               "Failed allocating arena memory: vk::Result={}", vk::to_string(result));
+    alloc_info.memoryTypeIndex = arena_host_memory_type_index;
+    alloc_info.allocationSize = std::max(size, chunk_size);
+    host_arena_active = true;
+    Vulkan::Vram::host_fallbacks.fetch_add(1, std::memory_order_relaxed);
+    Vulkan::Vram::urgent.store(true, std::memory_order_relaxed);
+    const auto host_memory = Vulkan::Check(instance.GetDevice().allocateMemory(alloc_info));
+    arena_chunks.push_back({host_memory, alloc_info.allocationSize, size, true});
+    const u64 host_total =
+        Vulkan::Vram::arena_host_bytes.fetch_add(alloc_info.allocationSize) +
+        alloc_info.allocationSize;
+    std::printf("Buffer cache: no video memory for %llu MiB of arena (%s), using system memory "
+                "(%llu MiB there so far)\n",
+                static_cast<unsigned long long>(size >> 20), vk::to_string(result).c_str(),
+                static_cast<unsigned long long>(host_total >> 20));
+    memory = host_memory;
+    return 0;
+}
+
 void BufferCache::EnsureResident(const Buffer* arena, u64 first_block, u64 last_block) {
     u32 resident_blocks{};
     IntervalList bind_ranges;
@@ -1010,11 +1112,9 @@ void BufferCache::EnsureResident(const Buffer* arena, u64 first_block, u64 last_
     }
     BbStats::Timer timer{BbStats::t_resident};
 
-    const vk::MemoryAllocateInfo alloc_info = {
-        .allocationSize = resident_blocks << block_shift,
-        .memoryTypeIndex = arena_memory_type_index,
-    };
-    const auto device_memory = Vulkan::Check(instance.GetDevice().allocateMemory(alloc_info));
+    const u64 needed = u64{resident_blocks} << block_shift;
+    vk::DeviceMemory device_memory{};
+    const u64 chunk_offset = AllocateArenaMemory(needed, device_memory);
     static const bool arena_log = [] {
         const char* env = std::getenv("BB_ARENA_LOG");
         return env && env[0] == '1';
@@ -1045,7 +1145,7 @@ void BufferCache::EnsureResident(const Buffer* arena, u64 first_block, u64 last_
     const auto staging =
         staging_pool.Request(resident_blocks * sizeof(vk::DeviceAddress), MemoryType::HostUncached);
 
-    u64 memory_offset{};
+    u64 memory_offset = chunk_offset;
     ArenaBinds* binds = BindsForArena(arena);
     auto* bda_addrs = reinterpret_cast<vk::DeviceAddress*>(staging.mapped);
     u64 offset = staging.offset;
