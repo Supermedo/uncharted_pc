@@ -751,10 +751,12 @@ static void install_game_callbacks(Segment *segments, uint64_t ns, uint64_t imag
         if (used+320>8192) break;
         unsigned char *t=thunks+used, *f=image+offset;
         size_t k=0;
-        /* pushfq; push rax rcx rdx r8-r11 rbx r12 r13 r15 (the RuntimeGuestRegs block); mov rbx, rsp;
+        /* lea rsp, [rsp-0x80] (a hook inside a leaf function must not touch the 128 bytes below rsp that the compiler uses as scratch);
+         * pushfq; push rax rcx rdx r8-r11 rbx r12 r13 r15 (the RuntimeGuestRegs block); mov rbx, rsp;
          * and rsp, -16; sub rsp, 0xb0 (shadow space, the fifth argument, 8 xmm saves): works at a
          * function's start and inside it */
-        static const unsigned char save[]={0x9c,0x50,0x51,0x52,0x41,0x50,0x41,0x51,0x41,0x52,0x41,0x53,0x53,
+        static const unsigned char save[]={0x48,0x8d,0x64,0x24,0x80,                 /* lea rsp, [rsp-0x80]: the red zone of a leaf function */
+                                           0x9c,0x50,0x51,0x52,0x41,0x50,0x41,0x51,0x41,0x52,0x41,0x53,0x53,
                                            0x41,0x54,0x41,0x55,0x41,0x57,
                                            0x48,0x89,0xe3,0x48,0x83,0xe4,0xf0,0x48,0x81,0xec,0xb0,0x00,0x00,0x00};
         memcpy(t+k,save,sizeof(save)); k+=sizeof(save);
@@ -778,7 +780,8 @@ static void install_game_callbacks(Segment *segments, uint64_t ns, uint64_t imag
         }
         /* mov rsp, rbx; pop r15 r13 r12 rbx r11-r8 rdx rcx rax; popfq */
         static const unsigned char restore[]={0x48,0x89,0xdc,0x41,0x5f,0x41,0x5d,0x41,0x5c,0x5b,
-                                              0x41,0x5b,0x41,0x5a,0x41,0x59,0x41,0x58,0x5a,0x59,0x58,0x9d};
+                                              0x41,0x5b,0x41,0x5a,0x41,0x59,0x41,0x58,0x5a,0x59,0x58,0x9d,
+                                              0x48,0x8d,0xa4,0x24,0x80,0x00,0x00,0x00};   /* lea rsp, [rsp+0x80] */
         memcpy(t+k,restore,sizeof(restore)); k+=sizeof(restore);
         memcpy(t+k,f,c->moved); k+=c->moved;                       /* the moved instructions */
         int32_t back=(int32_t)((int64_t)(uintptr_t)(f+c->moved)-(int64_t)(uintptr_t)(t+k+5));

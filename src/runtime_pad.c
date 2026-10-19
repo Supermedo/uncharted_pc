@@ -562,6 +562,23 @@ _Static_assert(sizeof(u2_leg_ik_zero_100)==51 && sizeof(u2_leg_ik_zero_102)==53,
 /* The camera code, the pad code and the assertion are found by their instructions, so a build of the
  * game that has them works (version 1.00 and 1.02 are known; "build" below). RIP-relative
  * displacements and call targets are wildcards. Entries with one name are variants for the builds. */
+/* U1/U2/U3 (both versions): Naughty Dog's constant-update-engine code keeps a table of the resources a shader uses
+ * (header, then 0x30-byte entries) and fills it in a leaf function that holds its running entry indices in the
+ * 128 bytes below rsp (the compiler's red zone). A table placed across a page boundary takes a GPU-tracking write
+ * fault inside that function when the next page is write-protected, and the red zone comes out of the exception
+ * zeroed: one entry then gets the wrong index, its word is garbage, and the draw that walks the table calls a
+ * null member pointer (issue cluster C5). The pages the table covers are written once before the function starts,
+ * so the fault, if there is one, happens while no red-zone data is live. */
+static void __attribute__((ms_abi)) cue_table_pretouch(uint64_t table, uint64_t slots, uint64_t image, uint64_t r14, const RuntimeGuestRegs *regs) {
+    (void)slots; (void)image; (void)r14;
+    const uint32_t count=(uint32_t)regs->rdx;
+    if (!count || count>64) return;
+    const uint64_t end=table+0x28+0x30ull*count;
+    for (uint64_t page=table&~0xfffull;page<end;page+=0x1000) {
+        const uint8_t *at=(const uint8_t *)(uintptr_t)(page<table ? table : page);
+        __asm__ volatile("lock orb $0, (%0)" : : "r"(at) : "memory","cc");
+    }
+}
 static const RuntimeGuestCallback guest_callbacks[]={
     /* U1 follow camera, build 100 */
     {"U1 follow camera (mouse)",
@@ -714,6 +731,11 @@ static const RuntimeGuestCallback guest_callbacks[]={
       "41 b8 4d 04 00 00 45 31 c9 ff d0 cd 41 c5 f8 28 45 d0",
       0x0, 58, NULL, u2_focus_reset_102},
 
+    /* The 7 bytes after the mov r9 are `mov qword [rdi], 0`: link_modules.py (patches/redzone.json, PR #403) replaces that
+     * store with a jump to a red-zone-safe copy on Windows, so they are masked and the hook is found either way. */
+    {"CUE table fill",
+      "55 41 57 41 56 41 55 41 54 53 49 b9 00 24 00 0d 10 00 00 00 ?? ?? ?? ?? ?? ?? ?? 45 31 f6",
+      0, 5, cue_table_pretouch, NULL},
 };
 const RuntimeGuestCallback *runtime_guest_callbacks(size_t *count) {
     *count=sizeof(guest_callbacks)/sizeof(*guest_callbacks);
