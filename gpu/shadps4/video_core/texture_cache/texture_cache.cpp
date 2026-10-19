@@ -69,6 +69,24 @@ void TextureCache::ProcessDownloadImages() {
         DownloadImageMemory(image_id, true);
     }
     download_images.clear();
+    // bbport: tiny render targets the CPU reads, downloaded without waiting (they reach guest
+    // memory when the GPU gets there, a frame late at most).
+    for (const ImageId image_id : small_download_images) {
+        DownloadImageMemory(image_id, false);
+    }
+    small_download_images.clear();
+}
+
+/// bbport: BB_READBACK_SMALL (default 1; 0 off): render targets of at most 8x8 pixels go back
+/// to guest memory after the GPU writes them. Uncharted 2 reduces the scene depth to a 1x1
+/// focus distance the CPU reads for the turret's depth of field; without it the focus stays
+/// stale and the whole picture blurs.
+static bool ReadbackSmallTargets() {
+    static const bool value = [] {
+        const char* env = std::getenv("BB_READBACK_SMALL");
+        return !(env && env[0] == '0');
+    }();
+    return value;
 }
 
 void TextureCache::DownloadImageMemory(ImageId image_id, bool sync) {
@@ -732,6 +750,10 @@ ImageView& TextureCache::FindRenderTarget(ImageId image_id, const ImageDesc& des
     if (readback_linear_images && (!image.info.props.is_tiled || image.info.size.width <= 8)) {
         std::unique_lock lk{download_images_mutex};
         download_images.emplace(image_id);
+    } else if (ReadbackSmallTargets() && image.info.size.width <= 8 &&
+               image.info.size.height <= 8 && image.info.guest_address != 0) {
+        std::unique_lock lk{download_images_mutex};
+        small_download_images.emplace(image_id);
     }
     image.usage.render_target = 1u;
     UpdateImage(image_id);
@@ -1233,6 +1255,7 @@ void TextureCache::DeleteImage(ImageId image_id) {
         if (download_images.contains(image_id)) {
             download_images.erase(image_id);
         }
+        small_download_images.erase(image_id);
     }
 
     // Reclaim image and any image views it references.
