@@ -107,6 +107,11 @@ public:
     /// Invalidates any image in the logical page range.
     void InvalidateMemory(VAddr addr, size_t size);
 
+    /// gow3 (#138): guest memory written through the backing view (readbacks, buffer
+    /// downloads), which bypasses page tracking. Any lock may be held: images over the range
+    /// are marked CPU-dirty at the next UpdateImage or GC tick (ApplyBackingWrites).
+    void NoteBackingWrite(VAddr address, u64 size);
+
     /// Marks an image as dirty if it exists at the provided address.
     /// whole_range (bbport): the GPU wrote exactly [address, address + max_size), so every image
     /// overlapping it is dirty, not only one starting at the address (copies moving textures).
@@ -151,6 +156,7 @@ public:
         constexpr u32 Dirty = static_cast<u32>(ImageFlagBits::Dirty);
         constexpr u32 Registered = static_cast<u32>(ImageFlagBits::Registered);
         return (flags & (Dirty | Registered)) == Registered &&
+               !has_backing_writes.load(std::memory_order_acquire) &&
                image.track_addr == image.guest_begin && image.track_addr_end == image.guest_end &&
                image.lru_touched_tick == gc_tick;
     }
@@ -168,12 +174,14 @@ public:
             constexpr u32 Dirty = static_cast<u32>(ImageFlagBits::Dirty);
             constexpr u32 Registered = static_cast<u32>(ImageFlagBits::Registered);
             if ((flags & (Dirty | Registered)) == Registered &&
+                !has_backing_writes.load(std::memory_order_acquire) &&
                 image.track_addr == image.guest_begin && image.track_addr_end == image.guest_end &&
                 image.lru_touched_tick == gc_tick) {
                 return;
             }
         }
         std::scoped_lock lock{mutex};
+        ApplyBackingWrites();
         Image& image = slot_images[image_id];
         TrackImage(image_id);
         TouchImage(image);
@@ -429,6 +437,11 @@ private:
     const bool readback_linear_images;
     PageTable page_table;
     std::mutex mutex;
+    /// gow3 (#138): under `mutex`. GPU-modified images hold the written data themselves.
+    void ApplyBackingWrites();
+    std::mutex backing_writes_mutex;
+    std::vector<std::pair<VAddr, u64>> backing_writes;
+    std::atomic<bool> has_backing_writes{false};
     // bbport: FindImage results for unchanged image registrations (guarded by `mutex`).
     struct FindImageCacheEntry {
         VAddr address = 0;
