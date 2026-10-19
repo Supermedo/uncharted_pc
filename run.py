@@ -144,7 +144,16 @@ def main():
     loadexec = out_root / 'loadexec.txt'
     env['BB_LOADEXEC_FILE'] = str(loadexec)
     guest_argv = None
+    # Uncharted 2 reads the results of GPU work (grenade explosions, vehicle damage, the convoy
+    # of chapter 21) from memory it also writes: merging leaves them on the GPU, so it runs with
+    # accurate GPU memory (BB_GPU_MERGE=0) unless the player chose otherwise.
+    player_merge = env.get('BB_GPU_MERGE')
     while True:
+        if player_merge is None:
+            if exe == EXECUTABLES['u2']:
+                env['BB_GPU_MERGE'] = '0'
+            else:
+                env.pop('BB_GPU_MERGE', None)
         game, file = locate(env, exe)
         if not game:
             fail('Set BB_GAME_DIR to the game folder (the one with eboot.bin).')

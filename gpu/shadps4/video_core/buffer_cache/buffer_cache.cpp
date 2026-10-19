@@ -174,6 +174,32 @@ bool BufferCache::DownloadOnSideQueue(VAddr page, u64 length) {
         arena->cpu_addr + arena->size_bytes);
     boost::container::small_vector<VAddr, 16> pages;
     u64 write_tick = 0;
+    // bbport: without merging (BB_GPU_MERGE=0) a faulting page whose GPU work is submitted but
+    // not done is waited for here, by its own tick, instead of the full read back waiting for
+    // everything queued (the current frame too). BB_SIDE_WAIT=0: off.
+    static const bool wait_writes = [] {
+        const char* env = std::getenv("BB_GPU_MERGE");
+        const char* side = std::getenv("BB_SIDE_WAIT");
+        return env && env[0] == '0' && !(side && side[0] == '0');
+    }();
+    if (wait_writes) {
+        u64 fault_tick = 0;
+        {
+            std::scoped_lock lk{shadow_mutex};
+            for (VAddr at = page; at < page + length; at += TRACKER_BYTES_PER_PAGE) {
+                if (memory_tracker->IsRegionGpuModified(at, TRACKER_BYTES_PER_PAGE)) {
+                    fault_tick = std::max(fault_tick, memory_tracker->LatestGpuWriteTick(
+                                                          at, TRACKER_BYTES_PER_PAGE));
+                }
+            }
+        }
+        // Only work already submitted: a tick still being recorded would need a flush from
+        // here, which deadlocks with the recording thread (loading screen hang); the full read
+        // back below handles those.
+        if (fault_tick && !scheduler.IsFree(fault_tick) && fault_tick < scheduler.CurrentTick()) {
+            scheduler.Wait(fault_tick);
+        }
+    }
     {
         std::scoped_lock lk{shadow_mutex};
         for (VAddr at = window_start; at < window_end; at += TRACKER_BYTES_PER_PAGE) {
