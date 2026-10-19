@@ -8,11 +8,14 @@ function (host contracts first) and otherwise binds the native export.
 Exports are matched by (NID, library identity, module identity). Imports of
 libSceLibcInternal are served by libc.prx's same-NID exports: the internal
 library is not shipped with the game and exposes the same functions.
+On Windows the executable's red-zone leaf stores then run red-zone-safe (patches/redzone.json).
 Output: out/boot-linked.bin (format BBPROBE5) and out/link.json.
 """
+import bisect
 import collections
 import hashlib
 import json
+import os
 from pathlib import Path
 import struct
 from prepare import parse_self, span, unpack
@@ -20,6 +23,9 @@ from link_libc import encode_id
 
 DEFAULT_MODULES = ('libc.prx', 'libSceFios2.prx')
 FS_LOAD = bytes.fromhex('64488b042500000000')  # mov rax, fs:[0]
+RED_ZONE_SITES = Path(__file__).resolve().parent.parent / 'patches' / 'redzone.json'
+LEA_DOWN = bytes.fromhex('488d642480')        # lea rsp, [rsp-0x80]
+LEA_UP = bytes.fromhex('488da42480000000')    # lea rsp, [rsp+0x80]
 
 # Library/module codes are assigned per executable. The host runtime spells imports with the
 # codes of the executable it was first written for (Bloodborne CUSA03173); every game's
@@ -117,6 +123,71 @@ def patch_fs_loads(image, ph, base):
             patched += 1
             at = image.find(FS_LOAD, at + len(FS_LOAD), end)
     return patched
+
+
+def red_zones_enabled():
+    """Windows only (Linux signal frames skip the red zone); BB_RED_ZONE=0/1 overrides."""
+    override = os.environ.get('BB_RED_ZONE')
+    return override == '1' if override is not None else os.name == 'nt'
+
+
+def protect_red_zones(image, sites, base, skip=()):
+    """Run guest stores of red-zone leaf functions with rsp 128 bytes lower (Windows).
+
+    Windows writes an exception's frame right below rsp, over the System V red zone where leaf
+    functions keep live locals (PS4 and Linux leave those 128 bytes alone). A store that faults
+    on a page the GPU tracker write-protected is resumed with the locals overwritten: U1's
+    resource-offset table builder (0x63df10) then wrote its entries with clobbered counters and
+    pointers, and the next draw read a garbage index at 0x63f5d0. Each site
+    (tools/redzone_sites.py: offset, original bytes, instruction lengths, negative = store)
+    jumps to a copy at `base` where the stores run below the red zone. Sites whose bytes
+    differ or that overlap a relocation (`skip`: sorted targets) stay as they are. Returns
+    the copies and the number of sites redirected. From the Bloodborne port."""
+    code = bytearray()
+    applied = 0
+    for offset, original, lengths in sites:
+        original = bytes.fromhex(original)
+        end = offset + len(original)
+        near = bisect.bisect_right(skip, offset - 8)
+        if image[offset:end] != original or (near < len(skip) and skip[near] < end):
+            continue
+        here = base + len(code)
+        pos = offset
+        for length in lengths:
+            body = image[pos:pos + abs(length)]
+            code += LEA_DOWN + body + LEA_UP if length < 0 else body
+            pos += abs(length)
+        code += b'\xe9' + struct.pack('<i', end - (base + len(code) + 5))
+        code += b'\xcc' * (-len(code) % 16)
+        image[offset:end] = b'\xe9' + struct.pack('<i', here - (offset + 5)) + b'\xcc' * (len(original) - 5)
+        applied += 1
+    return bytes(code), applied
+
+
+def protect_image(image, segments, relocs, text_sha256, path=RED_ZONE_SITES):
+    """Apply the red-zone sites of the executable whose code segment hashes to `text_sha256`
+    (other games and versions have no table yet: their image stays as it is)."""
+    report = dict(enabled=red_zones_enabled(), table=None, sites=0, available=0, trampoline_bytes=0, segment=None)
+    if not report['enabled'] or not path.is_file():
+        return report
+    table = next((t for t in json.loads(path.read_bytes())['tables'] if t['text_sha256'] == text_sha256), None)
+    if not table:
+        return report
+    base = (len(image) + 65535) & ~65535
+    code, applied = protect_red_zones(image, table['sites'], base, sorted(r[0] for r in relocs))
+    if code:
+        size = (len(code) + 4095) & ~4095
+        image.extend(bytes(base - len(image)) + code + b'\xcc' * (size - len(code)))
+        segments.append((base, size, 5))
+        report['segment'] = hex(base)
+    report.update(table=table['executable'], sites=applied, available=len(table['sites']), trampoline_bytes=len(code))
+    return report
+
+
+def text_sha256(m):
+    """The executable's code segment as in the file (tools/redzone_sites.py keys its tables by it)."""
+    text = next(p for p in m['ph'] if p['type'] == 1 and p['flags'] & 1)
+    return hashlib.sha256(m['elf'][text['offset']:text['offset'] + text['filesz']]).hexdigest()
 
 
 def link(game, out, module_names=DEFAULT_MODULES, exe='eboot.bin'):
@@ -237,6 +308,7 @@ def link(game, out, module_names=DEFAULT_MODULES, exe='eboot.bin'):
                      or main_tls['vaddr'] + main_tls['filesz'] > size):
         raise ValueError('unsupported eboot TLS layout')
     procparam = next(p for p in main['ph'] if p['type'] == 0x61000001)
+    red_zone = protect_image(image, segments, relocs, text_sha256(main))
     with (out / 'boot-linked.bin').open('wb') as f:
         f.write(struct.pack('<8s6Q', b'BBPROBE5', len(image), entry, len(segments), len(relocs), len(names), flags))
         f.write(struct.pack('<Q', procparam['vaddr']))
@@ -260,8 +332,11 @@ def link(game, out, module_names=DEFAULT_MODULES, exe='eboot.bin'):
     report = dict(modules=[{k: (hex(v) if k in ('base', 'init', 'tls_address') else v) for k, v in t.items()} for t in table],
                   bindings=len(bindings), imports=len(names), fs_loads_patched=fs_patched,
                   main_tls=dict(zip(('vaddr', 'filesz', 'memsz', 'align'), main_tls_values)),
-                  unresolved_imports=unresolved)
+                  unresolved_imports=unresolved, red_zone=red_zone)
     (out / 'link.json').write_text(json.dumps(report, indent=2) + '\n', encoding='utf-8')
+    if red_zone['enabled']:
+        print(f"Red zone: {red_zone['sites']}/{red_zone['available']} guest store sites run red-zone-safe "
+              f"({red_zone['table'] or 'no table for this executable'}; BB_RED_ZONE=0 disables)")
     summary = ', '.join(f"{t['file']}@{t['base']:#x}" for t in table)
     print(f'Linked modules: {summary}; {len(bindings)} native bindings, {len(unresolved)} imports left to the host runtime, '
           f'fs->gs patched={fs_patched}')
