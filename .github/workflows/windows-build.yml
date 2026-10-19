@@ -1,0 +1,101 @@
+# Windows package of this branch, for players without an MSYS2 setup: the same steps as
+# packaging/windows/README.md (bash build.sh, then bash packaging/windows/package.sh) on a GitHub
+# runner. The zip is kept as the run's artifact "uncharted-windows-<commit>" for 14 days.
+# Needs no GPU or game files. On a fork, Actions must be enabled once (Actions tab).
+name: Windows build
+
+on:
+  push:
+    branches: ['claude/**', main]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  package:
+    name: Build and package (Windows)
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      # With git's default core.autocrlf=true the FSR-Vulkan submodule checks out with CRLF and
+      # build.sh cannot apply gpu/patches/fsr-vulkan.
+      - name: Keep line endings
+        shell: pwsh
+        run: git config --global core.autocrlf false
+
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      # package.sh freezes the launcher with a python.org-style Windows Python (WINPYTHON).
+      - uses: actions/setup-python@v5
+        id: python
+        with:
+          python-version: '3.12'
+
+      # release: false uses the runner's C:\msys64, the path msys2-env.sh and build_dlss.sh expect.
+      # Full arch-qualified names: setup-msys2 does not expand short ones. patch is an MSYS package.
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: CLANG64
+          release: false
+          update: true
+          install: >-
+            git
+            patch
+            mingw-w64-clang-x86_64-toolchain
+            mingw-w64-clang-x86_64-cmake
+            mingw-w64-clang-x86_64-ninja
+            mingw-w64-clang-x86_64-pkgconf
+            mingw-w64-clang-x86_64-python
+            mingw-w64-clang-x86_64-vulkan-headers
+            mingw-w64-clang-x86_64-vulkan-loader
+            mingw-w64-clang-x86_64-vulkan-memory-allocator
+            mingw-w64-clang-x86_64-glslang
+            mingw-w64-clang-x86_64-sdl3
+            mingw-w64-clang-x86_64-fmt
+            mingw-w64-clang-x86_64-boost
+            mingw-w64-clang-x86_64-robin-map
+            mingw-w64-clang-x86_64-xxhash
+            mingw-w64-clang-x86_64-ffmpeg
+            mingw-w64-clang-x86_64-zydis
+            mingw-w64-clang-x86_64-spirv-tools
+            mingw-w64-clang-x86_64-spirv-headers
+            mingw-w64-clang-x86_64-spirv-cross
+            mingw-w64-clang-x86_64-protobuf
+            mingw-w64-clang-x86_64-openssl
+            mingw-w64-clang-x86_64-zlib
+            mingw-w64-clang-x86_64-miniupnpc
+            mingw-w64-clang-x86_64-nlohmann-json
+
+      - name: Build bb-probe.exe
+        run: |
+          if ! bash build.sh; then
+            tail -200 out/gpu-build.log || true
+            exit 1
+          fi
+
+      # DLSS (RTX): the MSVC-built bridge and NVIDIA's runtimes. Optional: without them the package
+      # works and only the DLSS options stay unavailable.
+      - name: DLSS bridge
+        continue-on-error: true
+        run: |
+          sdk="$(cygpath -u "$RUNNER_TEMP")/DLSS"
+          git clone -q --depth 1 https://github.com/NVIDIA/DLSS "$sdk"
+          CMAKE_EXE="/c/Program Files/CMake/bin/cmake.exe" DLSS_SDK_ROOT="$sdk" bash packaging/windows/build_dlss.sh
+
+      - name: Package
+        env:
+          PYTHON_EXE: ${{ steps.python.outputs.python-path }}
+        run: WINPYTHON="$(cygpath -u "$PYTHON_EXE")" bash packaging/windows/package.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: uncharted-windows-${{ github.sha }}
+          path: dist/uncharted-windows.zip
+          compression-level: 0
+          retention-days: 14
