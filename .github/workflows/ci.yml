@@ -127,7 +127,9 @@ jobs:
             mingw-w64-clang-x86_64-ninja
             mingw-w64-clang-x86_64-pkgconf
             mingw-w64-clang-x86_64-git
-            mingw-w64-clang-x86_64-patch
+            # patch is an MSYS package; there is no mingw-w64-clang-x86_64-patch,
+            # and one unknown name aborts the whole pacman transaction.
+            patch
             mingw-w64-clang-x86_64-sdl3
             mingw-w64-clang-x86_64-ffmpeg
             mingw-w64-clang-x86_64-vulkan-headers
