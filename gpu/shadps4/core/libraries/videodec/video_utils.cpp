@@ -12,9 +12,10 @@
 
 namespace Libraries::Videodec {
 
-void CopyNV12Data(u8* dst, u64 max_size, const AVFrame& src) {
-    const auto dst_pitch = Common::AlignUp<u32>(src.width, 64);
-    const auto dst_height = Common::AlignUp<u32>(src.height, 16);
+void CopyNV12Data(u8* dst, u64 max_size, const AVFrame& src, u32 height_alignment,
+                  u32 pitch_alignment) {
+    const auto dst_pitch = Common::AlignUp<u32>(src.width, pitch_alignment);
+    const auto dst_height = Common::AlignUp<u32>(src.height, height_alignment);
 
     ASSERT(((dst_pitch * dst_height * 3) / 2) <= max_size);
 

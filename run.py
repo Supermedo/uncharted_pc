@@ -96,6 +96,51 @@ def prepare(game, exe, out):
     stamp.write_text(source, encoding='utf-8')
 
 
+# Render target memory the games need per extra 1080p worth of pixels (measured; docs/resolution.md), and
+# how much the GPU pool (2988 MiB, 3052 in Uncharted 3) can grow before its 32-bit size overflows 4 GiB.
+RT_MIB_PER_1080P = 300
+RT2_MIB_PER_1080P = 150
+POOL_HEADROOM_MIB = 1000
+
+
+def game_res(env):
+    """BB_GAME_RES=WxH: the game renders and displays at that size (runtime_display.c patches its
+    display configuration). Its render target heaps grow with the pixel count: BB_GAME_RT_MB and
+    BB_GAME_RT2_MB are the extra MiB of the two heaps, BB_GAME_FREE_MB the unreserved GPU memory
+    given up to keep the pool below the 4 GiB the game's arena can address, BB_DMEM_MB the system
+    direct memory (retail PS4: 5056 MiB) that holds the bigger pool. All can be set by hand."""
+    value = env.get('BB_GAME_RES', '').lower().replace('×', 'x')
+    try:
+        width, height = (int(part) for part in value.split('x'))
+    except ValueError:
+        env.pop('BB_GAME_RES', None)
+        return
+    if not (640 <= width <= 7680 and 360 <= height <= 4320) or (width, height) == (1920, 1080):
+        env.pop('BB_GAME_RES', None)
+        return
+    env['BB_GAME_RES'] = f'{width}x{height}'
+    scale = max(0.0, width * height / (1920 * 1080) - 1)
+
+    def grow(name, per_pixel_mib):
+        if not env.get(name, '').lstrip('-').isdigit():
+            env[name] = str(-(-int(scale * per_pixel_mib) // 64) * 64)   # the game wants its heaps in multiples of 2 MiB
+        return int(env[name])
+    rt, rt2 = grow('BB_GAME_RT_MB', RT_MIB_PER_1080P), grow('BB_GAME_RT2_MB', RT2_MIB_PER_1080P)
+    if not env.get('BB_GAME_FREE_MB', '').isdigit():
+        env['BB_GAME_FREE_MB'] = '0'   # the game's later 144 MiB allocation needs the unreserved remainder
+    # The movie player's four frame buffers (4 MiB each for 1920x1088): a movie frame is fitted into the game's
+    # size, luma rows padded to 64, plus the picture info.
+    if not env.get('BB_GAME_MOVIE_MB', '').isdigit():
+        frame_bytes = (-(-width // 16) * 16) * (-(-height // 64) * 64) * 3 // 2 + 65536
+        env['BB_GAME_MOVIE_MB'] = str(max(4, -(-frame_bytes // (2 << 20)) * 2))
+    pool = rt + rt2 - int(env['BB_GAME_FREE_MB'])
+    if not env.get('BB_DMEM_MB') and pool > 0:
+        env['BB_DMEM_MB'] = str(min(16384, 5056 + pool))
+    print(f"Game resolution {width}x{height}: render target heaps +{rt} +{rt2} MiB, unreserved GPU memory -"
+          f"{env['BB_GAME_FREE_MB']} MiB, direct memory {env.get('BB_DMEM_MB', 5056)} MiB"
+          + ('; above what the game can address (4 GiB GPU pool)' if pool > POOL_HEADROOM_MIB else ''), flush=True)
+
+
 def main():
     args = sys.argv[1:]
     if len(args) >= 2 and args[0] == '--after':
@@ -135,6 +180,7 @@ def main():
         if clang64.is_dir():
             env['PATH'] = f'{clang64}{os.pathsep}{env.get("PATH", "")}'
 
+    game_res(env)
     exe = executable_name(env.get('BB_EXE', ''))
     user_dir = Path(env.get('BB_USER_DIR', data / 'user')).resolve()
     user_dir.mkdir(parents=True, exist_ok=True)

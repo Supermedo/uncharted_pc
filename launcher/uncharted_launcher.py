@@ -64,12 +64,24 @@ PRESENT_MODES = [('Mailbox', 'Mailbox (low latency, no tearing)'), ('Fifo', 'FIF
 # the prerecorded cutscenes keep 60 frames per second at every setting.
 FRAME_RATES = [('60', '60 FPS (as on PS4)'), ('120', '120 FPS'), ('144', '144 FPS (experimental)'),
                ('165', '165 FPS (experimental)'), ('240', '240 FPS (experimental)')]
-# The games render 1920x1080; the window (or the screen in fullscreen) gets that image scaled
-# to its size: FSR 1 (EASU) or bilinear, then RCAS sharpening (BB_RCAS_ATTENUATION, lower
-# is sharper).
+# The window (or the screen in fullscreen) shows the game's picture at its size: FSR 1 (EASU) or
+# bilinear when the picture is smaller, then RCAS sharpening (BB_RCAS_ATTENUATION, lower is sharper).
 WINDOW_SIZES = [('1280x720', '1280 × 720'), ('1600x900', '1600 × 900'),
-                ('1920x1080', "1920 × 1080 (the games' own)"), ('2560x1440', '2560 × 1440'),
-                ('3840x2160', '3840 × 2160 (4K)')]
+                ('1920x1080', '1920 × 1080'), ('2560x1440', '2560 × 1440'),
+                ('3840x2160', '3840 × 2160 (4K)'), ('2560x1080', '2560 × 1080 (21:9)'),
+                ('3440x1440', '3440 × 1440 (21:9)'), ('3840x1600', '3840 × 1600 (21:9)'),
+                ('5120x1440', '5120 × 1440 (32:9)')]
+# The size the games themselves render and show (BB_GAME_RES: run.py, src/runtime_display.c): a real
+# higher resolution, not an enlarged 1080p picture. The height here and the shape below make the
+# width; the games keep their memory for it, so the sizes stop where it runs out.
+RENDER_HEIGHTS = [('1080', "1080p (the games' own)"), ('1440', '1440p'), ('1620', '1620p'), ('2160', '2160p (4K)')]
+ASPECTS = [('16:9', "16:9 (the games' own)"), ('21:9', '21:9 ultrawide'), ('32:9', '32:9 super ultrawide'),
+           ('window', "The shape of the window or screen")]
+ASPECT_RATIOS = {'16:9': 16 / 9, '21:9': 64 / 27, '32:9': 32 / 9}
+# Widths the screens of these shapes really have at each height (21:9 is 64:27 at 1080p and 43:18 at 1440p).
+SCREEN_WIDTHS = {('21:9', 1080): 2560, ('21:9', 1440): 3440, ('21:9', 1600): 3840, ('21:9', 1620): 3840,
+                 ('21:9', 2160): 5120, ('32:9', 1080): 3840, ('32:9', 1440): 5120, ('32:9', 2160): 7680}
+MAX_RENDER_PIXELS = 5_800_000   # what the games' GPU memory holds: 3200x1800 starts, 4K does not (docs/resolution.md)
 SCALERS = [('fsr1', 'FSR 1 (AMD FidelityFX, sharp)'), ('bilinear', 'Smooth (bilinear)')]
 SHARPENING = [('off', 'Off'), ('1000', 'Low'), ('500', 'Medium'), ('250', 'High'), ('0', 'Maximum')]
 # Temporal anti-aliasing at the games' 1920x1080 (BB_UPSCALER): it takes the scene before the
@@ -135,7 +147,7 @@ RESERVED_KEYS = {'Insert': 'Insert opens the in-game settings menu.',
 
 APP_DEFAULTS = {'game_dir': '', 'game_dir_u1': '', 'game_dir_u2': '', 'game_dir_u3': '', 'user_dir': '', 'start': 'u1', 'language': '1', 'player_name': '',
                 'fullscreen': False, 'present_mode': 'Mailbox', 'frame_rate': '60', 'show_fps': False,
-                'window_size': '1920x1080', 'scaler': 'fsr1', 'sharpening': '500',
+                'window_size': '1920x1080', 'render_height': '1080', 'aspect': '16:9', 'scaler': 'fsr1', 'sharpening': '500',
                 'anti_aliasing': 'off', 'aa_sharpness': '0.2', 'frame_generation': 'off',
                 'frame_gen_multiplier': '2', 'extra_env': '', 'close_on_play': False,
                 'mouse_look': True, 'mouse_sensitivity': '1.0', 'mouse_invert_y': False,
@@ -319,6 +331,44 @@ def write_input_ini(s):
     return path
 
 
+def screen_size():
+    """(width, height) of the main display in pixels, or None."""
+    try:
+        user32 = ctypes.windll.user32
+        return int(user32.GetSystemMetrics(0)), int(user32.GetSystemMetrics(1))
+    except (AttributeError, OSError):
+        return None
+
+
+def parse_size(text):
+    try:
+        width, height = (int(part) for part in str(text).lower().replace('×', 'x').split('x'))
+    except ValueError:
+        return None
+    return (width, height) if width > 0 and height > 0 else None
+
+
+def game_resolution(s, screen=None):
+    """The size the games render at, 'WxH' (even numbers, the pixel count within what their GPU memory holds), or ''
+    for their own 1920x1080."""
+    height = int(s.get('render_height') or 1080) if str(s.get('render_height') or '1080').isdigit() else 1080
+    shape = s.get('aspect') or '16:9'
+    if shape == 'window':
+        size = screen if s.get('fullscreen') else parse_size(s.get('window_size'))
+        size = size or screen or (1920, 1080)
+        ratio = size[0] / size[1]
+    else:
+        ratio = ASPECT_RATIOS.get(shape, 16 / 9)
+    ratio = min(max(ratio, 1.0), 4.0)
+    for height in sorted({height, 2160, 1800, 1620, 1440, 1260, 1080, 900, 720}, reverse=True):
+        if height > int(s.get('render_height') or 1080) if str(s.get('render_height') or '1080').isdigit() else height > 1080:
+            continue
+        width = SCREEN_WIDTHS.get((shape, height)) or int(round(height * ratio / 2)) * 2
+        if width * height <= MAX_RENDER_PIXELS:   # the next smaller height of the same shape
+            break
+    return '' if (width, height) == (1920, 1080) else f'{width}x{height}'
+
+
 def game_environment(s, start=None):
     env = dict(os.environ)
     try:
@@ -342,6 +392,14 @@ def game_environment(s, start=None):
     env['BB_PRESENT_MODE'] = s['present_mode']
     env['BB_VBLANK_HZ'] = str(s.get('frame_rate') or '60')
     env['BB_WINDOW_SIZE'] = str(s.get('window_size') or '1920x1080')
+    resolution = game_resolution(s, screen_size())
+    if resolution:
+        env['BB_GAME_RES'] = resolution
+    window = parse_size(s.get('window_size'))
+    if not s.get('fullscreen') and resolution and window and s.get('aspect', '16:9') != '16:9':
+        shape = parse_size(resolution)
+        # A window of another shape than the picture would show bars: keep its height, take the picture's width.
+        env['BB_WINDOW_SIZE'] = f'{round(window[1] * shape[0] / shape[1] / 2) * 2}x{window[1]}'
     env['BB_FSR1'] = '1' if s.get('scaler', 'fsr1') == 'fsr1' else '0'
     sharpening = str(s.get('sharpening') or 'off')
     env['BB_RCAS'] = '0' if sharpening == 'off' else '1'
@@ -1013,9 +1071,17 @@ class Launcher:
             hint += ' ' + _('Your display runs at {} Hz.').format(refresh)
         self.row(f, _('Frame rate'), self.choice(f, 'frame_rate', FRAME_RATES, 34), hint)
         self.section(f, _('Resolution'))
+        self.row(f, _('Render resolution'), self.choice(f, 'render_height', RENDER_HEIGHTS, 34),
+                 _('The size the games draw at, so a 1440p or 4K screen gets a sharper picture, not an enlarged '
+                   '1080p one. It needs more graphics memory and a faster GPU; the games\' GPU memory limits the '
+                   'largest size.'))
+        self.row(f, _('Aspect ratio'), self.choice(f, 'aspect', ASPECTS, 34),
+                 _('Ultrawide screens: the games draw a wider view (more at the sides) instead of stretching the '
+                   '16:9 picture. "The shape of the window or screen" follows the window size below, or the '
+                   'screen in fullscreen.'))
         self.row(f, _('Window size'), self.choice(f, 'window_size', WINDOW_SIZES, 34),
-                 _('The games render at 1920 × 1080. A larger window, or fullscreen on a 1440p or 4K '
-                   'screen, gets the image upscaled to fit.'))
+                 _('The window the picture is shown in; fullscreen uses the screen. A picture of another size is '
+                   'scaled to fit (FSR 1 below when it is enlarged).'))
         self.row(f, _('Upscaling'), self.choice(f, 'scaler', SCALERS, 34),
                  _('FSR 1 keeps edges sharp when the image is enlarged; bilinear is softer.'))
         self.row(f, _('Sharpening'), self.choice(f, 'sharpening', SHARPENING, 34),

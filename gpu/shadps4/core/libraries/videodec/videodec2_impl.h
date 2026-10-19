@@ -15,6 +15,10 @@ extern "C" {
 
 namespace Libraries::Videodec2 {
 
+/// BB_GAME_RES (WxH): the games read decoded movie frames at their display size, so frames are
+/// fitted (aspect kept, black bars) into a canvas of that size. 0 when the game runs at 1920x1080.
+void GameResolution(s32& width, s32& height);
+
 class VdecDecoder {
 public:
     VdecDecoder(const OrbisVideodec2DecoderConfigInfo& configInfo,
@@ -28,10 +32,13 @@ public:
 
 private:
     AVFrame* ConvertNV12Frame(AVFrame& frame);
+    /// The frame fitted into the game's display size (frame is consumed), or the frame itself.
+    AVFrame* FitToDisplay(AVFrame* frame);
 
 private:
     AVCodecContext* m_codec_context = nullptr;
     SwsContext* m_sws_context = nullptr;
+    SwsContext* m_fit_context = nullptr;
 };
 
 } // namespace Libraries::Videodec2

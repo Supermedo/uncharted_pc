@@ -404,13 +404,26 @@ void Rasterizer::PrepareRenderState(const GraphicsPipeline* pipeline) {
         // is depth-only (U1's prepass) or draws RGBA16F color (U2's first scene pass) holds the
         // scene depth.
         const auto& depth = texture_cache.GetImage(db_desc.first);
+        // The game's render size: 1920x1080, or BB_GAME_RES (src/runtime_display.c).
+        static const auto game_size = [] {
+            unsigned w = 1920, h = 1080;
+            if (const char* res = std::getenv("BB_GAME_RES")) {
+                unsigned pw = 0, ph = 0;
+                if (std::sscanf(res, "%ux%u", &pw, &ph) == 2 && pw >= 640 && ph >= 360) {
+                    w = pw & ~1u;
+                    h = ph & ~1u;
+                }
+            }
+            return std::pair<u32, u32>{w, h};
+        }();
+        const u32 game_w = game_size.first, game_h = game_size.second;
         bool scene_pass = !cb_descs[0].first;
         if (cb_descs[0].first) {
             const auto& color = texture_cache.GetImage(cb_descs[0].first);
             scene_pass = color.info.pixel_format == vk::Format::eR16G16B16A16Sfloat &&
-                         color.info.size.width == 1920 && color.info.size.height == 1080;
+                         color.info.size.width == game_w && color.info.size.height == game_h;
         }
-        if (scene_pass && depth.info.size.width == 1920 && depth.info.size.height == 1080 &&
+        if (scene_pass && depth.info.size.width == game_w && depth.info.size.height == game_h &&
             (depth.info.pixel_format == vk::Format::eD32SfloatS8Uint ||
              depth.info.pixel_format == vk::Format::eD32Sfloat)) {
             camera_motion->OnGBufferPass(db_desc.first);

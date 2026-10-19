@@ -1,6 +1,9 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <algorithm>
+#include <cstdio>
+
 #include "common/alignment.h"
 #include "common/assert.h"
 #include "common/logging/log.h"
@@ -20,7 +23,7 @@ static u64 ComputeFrameSizeBytes(s32 width, s32 height) {
     }
 
     const u32 aligned_width = Common::AlignUp<u32>((u32)width, 64);
-    const u32 aligned_height = Common::AlignUp<u32>((u32)height, 16);
+    const u32 aligned_height = Common::AlignUp<u32>((u32)height, 64);
 
     const u64 pixels = (u64)aligned_width * (u64)aligned_height;
     return (pixels * 3) / 2;
@@ -39,6 +42,10 @@ static void ComputeWorstCaseDimensions(const OrbisVideodec2DecoderConfigInfo& cf
     if (cfg.max_frame_width > 0 && cfg.max_frame_height > 0) {
         out_width = cfg.max_frame_width;
         out_height = cfg.max_frame_height;
+        s32 game_w = 0, game_h = 0;
+        GameResolution(game_w, game_h);
+        out_width = std::max(out_width, game_w);   // movies are fitted into the display size
+        out_height = std::max(out_height, game_h);
         return;
     }
 

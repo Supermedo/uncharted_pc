@@ -415,7 +415,10 @@ static ABI int32_t direct_allocate(int64_t low, int64_t high, uint64_t size,
     if (!out || low < 0 || high < 0 || !size || size % PAGE || !valid_alignment(alignment) || type < 0 || type > 10)
         return INVALID;
     uint64_t end = (uint64_t)high < POOL_SIZE ? (uint64_t)high : POOL_SIZE;
-    if ((uint64_t)low >= end || size > end - (uint64_t)low) return NO_SPACE;
+    if ((uint64_t)low >= end || size > end - (uint64_t)low) {
+        printf("Runtime: direct allocation of %" PRIu64 " bytes in [%#" PRIx64 ", %#" PRIx64 ") refused: no space (pool %" PRIu64 " bytes)\n",size,(uint64_t)low,(uint64_t)high,(uint64_t)POOL_SIZE);
+        return NO_SPACE;
+    }
     write_lock();
     if (pool()) { write_unlock(); return NO_MEMORY; }
     uint64_t start = align_up((uint64_t)low, alignment);
