@@ -70,6 +70,7 @@ FRAME_RATES = [('60', '60 FPS (as on PS4)'), ('120', '120 FPS'), ('144', '144 FP
 WINDOW_SIZES = [('1280x720', '1280 × 720'), ('1600x900', '1600 × 900'),
                 ('1920x1080', "1920 × 1080 (the games' own)"), ('2560x1440', '2560 × 1440'),
                 ('3840x2160', '3840 × 2160 (4K)')]
+SPEAKERS = [('auto', 'Automatic (the Windows speaker setup)'), ('2', 'Stereo'), ('6', '5.1 surround'), ('8', '7.1 surround')]
 SCALERS = [('fsr1', 'FSR 1 (AMD FidelityFX, sharp)'), ('bilinear', 'Smooth (bilinear)')]
 SHARPENING = [('off', 'Off'), ('1000', 'Low'), ('500', 'Medium'), ('250', 'High'), ('0', 'Maximum')]
 # Temporal anti-aliasing at the games' 1920x1080 (BB_UPSCALER): it takes the scene before the
@@ -135,7 +136,7 @@ RESERVED_KEYS = {'Insert': 'Insert opens the in-game settings menu.',
 
 APP_DEFAULTS = {'game_dir': '', 'game_dir_u1': '', 'game_dir_u2': '', 'game_dir_u3': '', 'user_dir': '', 'start': 'u1', 'language': '1', 'player_name': '',
                 'fullscreen': False, 'present_mode': 'Mailbox', 'frame_rate': '60', 'show_fps': False,
-                'window_size': '1920x1080', 'scaler': 'fsr1', 'sharpening': '500',
+                'window_size': '1920x1080', 'speakers': 'auto', 'scaler': 'fsr1', 'sharpening': '500',
                 'anti_aliasing': 'off', 'aa_sharpness': '0.2', 'frame_generation': 'off',
                 'frame_gen_multiplier': '2', 'extra_env': '', 'close_on_play': False,
                 'mouse_look': True, 'mouse_sensitivity': '1.0', 'mouse_invert_y': False,
@@ -342,6 +343,8 @@ def game_environment(s, start=None):
     env['BB_PRESENT_MODE'] = s['present_mode']
     env['BB_VBLANK_HZ'] = str(s.get('frame_rate') or '60')
     env['BB_WINDOW_SIZE'] = str(s.get('window_size') or '1920x1080')
+    if str(s.get('speakers') or 'auto') != 'auto':
+        env['BB_SPEAKERS'] = str(s['speakers'])
     env['BB_FSR1'] = '1' if s.get('scaler', 'fsr1') == 'fsr1' else '0'
     sharpening = str(s.get('sharpening') or 'off')
     env['BB_RCAS'] = '0' if sharpening == 'off' else '1'
@@ -1039,6 +1042,11 @@ class Launcher:
                  _('FSR 3 makes one frame (2×). DLSS makes up to three on a GeForce RTX 50 (4×), '
                    'one on an RTX 40.'))
         self.check(f, 'show_fps', _('Show the FPS counter'))
+        self.section(f, _('Audio'))
+        self.row(f, _('Speakers'), self.choice(f, 'speakers', SPEAKERS, 34),
+                 _('What the games are told the speakers are, which sets the choices in their Audio Output '
+                   'menu (stereo, 5.1, 7.1). Automatic follows the Windows speaker configuration of the '
+                   'default playback device; set it to 5.1 or 7.1 when the games only offer stereo.'))
 
     def build_controls(self):
         f = self.page('controls', _('Controls'),
