@@ -31,7 +31,7 @@
 enum { REGION_ITEMS=6, REGION_MAX=256, CHUNK=1<<20 };
 
 typedef struct { uint64_t start, end; int lsda; } Function;
-typedef struct { uint64_t thunk, end, site; } Region;
+typedef struct { uint64_t thunk, end, site; unsigned char seen; } Region;
 /* access: a memory access that can fault, run with rsp lowered; rsp: the instruction uses rsp. */
 typedef struct { uint64_t at; ZydisDecodedInstruction in; ZydisDecodedOperand ops[ZYDIS_MAX_OPERAND_COUNT]; int access, rsp; } Item;
 typedef struct { unsigned char *p; size_t n; } Code;
@@ -47,6 +47,20 @@ static Region *regions;
 static size_t region_count, region_capacity;
 static uint64_t faults_kept;
 static int listing;                         /* BB_RED_ZONE=list: each function and access */
+/* What keeps data below rsp and was not rewritten (functions left alone, accesses left as they
+ * were), sorted by start: a fault there is reported. */
+typedef struct { uint64_t start, end; const char *why; } Unprotected;
+static Unprotected *unprotected;
+static size_t unprotected_count, unprotected_capacity;
+static uint64_t unprotected_faults;
+static void note_unprotected(uint64_t start, uint64_t end, const char *why) {
+    if (unprotected_count==unprotected_capacity) {
+        Unprotected *more=realloc(unprotected,(unprotected_capacity=unprotected_capacity ? unprotected_capacity*2 : 256)*sizeof(*more));
+        if (!more) return;
+        unprotected=more;
+    }
+    unprotected[unprotected_count++]=(Unprotected){start,end,why};
+}
 
 static const RedZoneSegment *segment_of(uint64_t offset) {
     for (size_t i=0;i<segment_count;++i)
@@ -269,7 +283,7 @@ static unsigned char *emit_thunk(const Item *items, size_t n) {
         if (!more) return NULL;
         regions=more;
     }
-    regions[region_count++]=(Region){(uint64_t)(uintptr_t)t,(uint64_t)(uintptr_t)(t+c.n),items[0].at};
+    regions[region_count++]=(Region){(uint64_t)(uintptr_t)t,(uint64_t)(uintptr_t)(t+c.n),items[0].at,0};
     chunk_used+=(c.n+15)&~(size_t)15;
     return t;
 }
@@ -317,9 +331,10 @@ static void patch_function(const Function *f, const unsigned char *targets, Item
     if (!red) return;
     ++st->red;
     if (f->lsda || calls || indirect || undecoded) {
-        if (listing) printf("Red zone: function %#" PRIx64 "-%#" PRIx64 ": left alone (%s)\n",f->start,f->end,
-                            f->lsda ? "exception table" : calls ? "calls" : indirect ? "indirect jump" : "data in its code");
+        const char *why=f->lsda ? "exception table" : calls ? "calls" : indirect ? "indirect jump" : "data in its code";
+        if (listing) printf("Red zone: function %#" PRIx64 "-%#" PRIx64 ": left alone (%s)\n",f->start,f->end,why);
         if (f->lsda) ++st->lsda; else if (calls) ++st->calls; else if (indirect) ++st->indirect; else ++st->undecodable;
+        note_unprotected(f->start,f->end,why);
         return;
     }
     const unsigned accesses=st->accesses, left=st->left;
@@ -330,6 +345,7 @@ static void patch_function(const Function *f, const unsigned char *targets, Item
         if (v[i].rsp || !movable(&v[i])) {
             if (listing) printf("Red zone:   access at %#" PRIx64 " left (%s)\n",v[i].at,v[i].rsp ? "uses rsp" : "not movable");
             ++st->left;
+            note_unprotected(v[i].at,v[i].at+v[i].in.length,v[i].rsp ? "an access that uses rsp" : "an access that cannot move");
             continue;
         }
         /* The access and the instructions after it, else the one or two before it. */
@@ -349,11 +365,12 @@ static void patch_function(const Function *f, const unsigned char *targets, Item
         if (length<5) {
             if (listing) printf("Red zone:   access at %#" PRIx64 " left (no room for a jump)\n",v[i].at);
             ++st->left;
+            note_unprotected(v[i].at,v[i].at+v[i].in.length,"an access without room for a jump");
             continue;
         }
         for (size_t k=a;k<b;++k) if (v[k].rsp) v[k].access=0;           /* moved, not under the lowered rsp */
         unsigned char *thunk=emit_thunk(v+a,b-a);
-        if (!thunk) { ++st->left; continue; }
+        if (!thunk) { ++st->left; note_unprotected(v[i].at,v[i].at+v[i].in.length,"an access without thunk memory"); continue; }
         unsigned char *site=image+v[a].at;
         const int32_t to=(int32_t)((int64_t)(uintptr_t)thunk-(int64_t)(uintptr_t)(site+5));
         site[0]=0xe9; memcpy(site+1,&to,4); memset(site+5,0xcc,length-5);
@@ -392,6 +409,10 @@ static void branch_targets(uint64_t start, uint64_t end, int stop, unsigned char
     }
 }
 
+static int by_start(const void *a, const void *b) {
+    const uint64_t x=((const Unprotected *)a)->start, y=((const Unprotected *)b)->start;
+    return x<y ? -1 : x>y;
+}
 static int by_thunk(const void *a, const void *b) {
     const uint64_t x=((const Region *)a)->thunk, y=((const Region *)b)->thunk;
     return x<y ? -1 : x>y;
@@ -417,6 +438,7 @@ void red_zone_patch(unsigned char *base, uint64_t size, const RedZoneSegment *se
     size_t capacity=0;
     for (size_t i=0;i<function_count;++i) patch_function(&functions[i],targets,&items,&capacity,&st);
     qsort(regions,region_count,sizeof(*regions),by_thunk);
+    qsort(unprotected,unprotected_count,sizeof(*unprotected),by_start);
     printf("Red zone: %u of %u guest functions keep data below rsp; %u memory accesses in them run with rsp "
            "128 bytes lower (%u jumps, %u moved neighbours), %u left as they were; skipped: %u with calls, "
            "%u with indirect jumps, %u with exception tables, %u with data in their code\n",
@@ -427,21 +449,41 @@ void red_zone_patch(unsigned char *base, uint64_t size, const RedZoneSegment *se
     segments=NULL; segment_count=0;                                      /* the caller's */
 }
 
-int red_zone_site(uint64_t address, uint64_t *site) {
+static size_t region_of(uint64_t address) {
     size_t low=0, high=region_count;
     while (low<high) {
         const size_t middle=(low+high)/2;
         if (regions[middle].end<=address) low=middle+1; else high=middle;
     }
-    if (low==region_count || address<regions[low].thunk) return 0;
-    *site=regions[low].site;
+    return low<region_count && address>=regions[low].thunk ? low : SIZE_MAX;
+}
+int red_zone_site(uint64_t address, uint64_t *site) {
+    const size_t r=region_of(address);
+    if (r==SIZE_MAX) return 0;
+    *site=regions[r].site;
     return 1;
 }
+/* A fault in a thunk: its data was kept (each thunk's first, then counts). A fault at an access
+ * left as it was, or in a function left alone: its data may be lost. */
 void red_zone_fault_handled(uint64_t rip) {
-    uint64_t site;
-    if (!red_zone_site(rip,&site)) return;
-    const uint64_t n=__atomic_add_fetch(&faults_kept,1,__ATOMIC_RELAXED);
-    if (n<=3 || n==10 || n==100 || n==1000 || n==10000 || n==100000)
-        printf("Red zone: guest page fault %" PRIu64 " inside a function that keeps data below rsp (guest offset "
-               "%#" PRIx64 "); the data was kept\n",n,site);
+    const size_t r=region_of(rip);
+    if (r!=SIZE_MAX) {
+        const uint64_t n=__atomic_add_fetch(&faults_kept,1,__ATOMIC_RELAXED);
+        if (!__atomic_exchange_n(&regions[r].seen,1,__ATOMIC_RELAXED) || n==1000 || n==10000 || n==100000)
+            printf("Red zone: guest page fault %" PRIu64 " inside a function that keeps data below rsp (guest offset "
+                   "%#" PRIx64 "); the data was kept\n",n,regions[r].site);
+        return;
+    }
+    const uint64_t offset=rip-(uint64_t)(uintptr_t)image;
+    if (!image || offset>=image_size) return;
+    size_t low=0, high=unprotected_count;
+    while (low<high) {
+        const size_t middle=(low+high)/2;
+        if (unprotected[middle].end<=offset) low=middle+1; else high=middle;
+    }
+    if (low==unprotected_count || offset<unprotected[low].start) return;
+    const uint64_t n=__atomic_add_fetch(&unprotected_faults,1,__ATOMIC_RELAXED);
+    if (n<=50 || n==100 || n==1000 || n==10000)
+        printf("Red zone: guest page fault %" PRIu64 " at guest offset %#" PRIx64 ", in a function that keeps data "
+               "below rsp, at %s (not rewritten): its data may be lost\n",n,offset,unprotected[low].why);
 }
