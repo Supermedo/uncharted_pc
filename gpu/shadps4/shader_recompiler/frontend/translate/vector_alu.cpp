@@ -1409,11 +1409,14 @@ void Translator::V_CMP_CLASS_F32(const GcnInst& inst) {
     if (src1.IsImmediate()) {
         // bbport: masks the shortcuts below test only in part, once per mask in the log (the
         // shader cache hides them after the first run: BB_CMP_CLASS_EXACT recompiles all).
+        // Exact are NaN, Inf and x <= 0 (the negative classes with +0, 0x7c; a flushed +denorm
+        // aside); the negative classes alone (0x3c) are tested as x <= 0 too, which +0 passes.
         const u32 mask = src1.U32();
         const auto nan = static_cast<u32>(IR::FloatClassFunc::NaN);
         const auto inf = static_cast<u32>(IR::FloatClassFunc::Infinity);
         const auto negative = static_cast<u32>(IR::FloatClassFunc::Negative);
-        if (mask != nan && mask != inf && mask != negative) {
+        const auto non_positive = negative | static_cast<u32>(IR::FloatClassFunc::PositiveZero);
+        if (mask != nan && mask != inf && mask != non_positive) {
             static std::mutex logged_mutex;
             static std::set<u32> logged;
             std::scoped_lock lk{logged_mutex};
@@ -1425,7 +1428,7 @@ void Translator::V_CMP_CLASS_F32(const GcnInst& inst) {
                                 : ((mask & nan) == nan ? "tested as NaN only"
                                    : (mask & inf) == inf ? "tested as Inf only"
                                    : (mask & negative) == negative
-                                       ? "tested as <= 0 (+0 included)"
+                                       ? "tested as x <= 0 (+0 passes, positive classes fail)"
                                        : "unsupported"));
             }
         }

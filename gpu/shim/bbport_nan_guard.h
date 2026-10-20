@@ -71,8 +71,8 @@ inline bool HalfRoundTowardZero() {
 
 /// BB_NONFINITE_MARK=1 (diagnosis): a colour output with a NaN component becomes magenta, +Inf
 /// green, -Inf blue, and (float targets narrower than 32 bits only) a finite value beyond
-/// +-65504 yellow (8.0 in those channels), before the NaN guard, so the draw that writes a
-/// non-finite colour shows at its own pixels.
+/// +-65504 yellow (8.0 in those channels of the target, after its swizzle), before the NaN
+/// guard, so the draw that writes a non-finite colour shows at its own pixels.
 inline bool NonFiniteMark() {
     static const bool enabled = EnvFlag("BB_NONFINITE_MARK");
     return enabled;

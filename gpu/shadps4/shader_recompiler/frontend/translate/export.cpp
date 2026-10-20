@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: Copyright 2024 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <array>
+#include <optional>
 #include "bbport_nan_guard.h"
 #include "shader_recompiler/frontend/translate/translate.h"
 #include "shader_recompiler/ir/position.h"
@@ -98,7 +100,10 @@ void Translator::ExportRenderTarget(const GcnInst& inst) {
     // component is non-finite or beyond the half-float range: NaN magenta, +Inf green, -Inf
     // blue, finite beyond +-65504 yellow. Before the NaN guard (which runs at the store).
     // Yellow only for float targets narrower than 32 bits, where the host turns such a value
-    // into Inf; 32-bit float targets hold it (depth, sky distances) and stay unmarked.
+    // into Inf; 32-bit float targets hold it (depth, sky distances) and stay unmarked. The
+    // colours go to the target's channels, after the swizzle (BGRA targets keep blue blue).
+    // Order: NaN, +Inf, -Inf, beyond the half-float range.
+    std::optional<std::array<IR::U1, 4>> mark_flags;
     if (BbNanGuard::NonFiniteMark() && color_buffer.num_format != AmdGpu::NumberFormat::Uint &&
         color_buffer.num_format != AmdGpu::NumberFormat::Sint) {
         const bool mark_huge = color_buffer.num_format == AmdGpu::NumberFormat::Float &&
@@ -130,22 +135,15 @@ void Translator::ExportRenderTarget(const GcnInst& inst) {
                                   ir.FPGreaterThan(ir.FPAbs(comp), ir.Imm32(65504.0f))));
             }
         }
-        static constexpr std::array<std::array<f32, 4>, 4> marks{{
-            {8.0f, 0.0f, 8.0f, 1.0f}, // NaN: magenta
-            {0.0f, 8.0f, 0.0f, 1.0f}, // +Inf: green
-            {0.0f, 0.0f, 8.0f, 1.0f}, // -Inf: blue
-            {8.0f, 8.0f, 0.0f, 1.0f}, // beyond the half-float range: yellow
-        }};
-        for (u32 i = 0; i < 4; ++i) {
-            if (components[i].IsEmpty()) {
-                continue;
-            }
-            IR::F32 marked{ir.Select(any_huge, ir.Imm32(marks[3][i]), components[i])};
-            marked = IR::F32{ir.Select(any_neg_inf, ir.Imm32(marks[2][i]), marked)};
-            marked = IR::F32{ir.Select(any_pos_inf, ir.Imm32(marks[1][i]), marked)};
-            components[i] = IR::F32{ir.Select(any_nan, ir.Imm32(marks[0][i]), marked)};
-        }
+        mark_flags = std::array<IR::U1, 4>{any_nan, any_pos_inf, any_neg_inf, any_huge};
     }
+    // Per target channel (R, G, B, A).
+    static constexpr std::array<std::array<f32, 4>, 4> marks{{
+        {8.0f, 0.0f, 8.0f, 1.0f}, // NaN: magenta
+        {0.0f, 8.0f, 0.0f, 1.0f}, // +Inf: green
+        {0.0f, 0.0f, 8.0f, 1.0f}, // -Inf: blue
+        {8.0f, 8.0f, 0.0f, 1.0f}, // beyond the half-float range: yellow
+    }};
 
     // Metal seems to have an issue where 8-bit unorm/snorm/sRGB outputs to render target
     // need a bias applied to round correctly; detect and set the flag for that here.
@@ -159,9 +157,15 @@ void Translator::ExportRenderTarget(const GcnInst& inst) {
 
     // Swizzle components and export
     for (u32 i = 0; i < 4; ++i) {
-        const auto swizzled_comp = components[color_buffer.swizzle.Map(i)];
+        auto swizzled_comp = components[color_buffer.swizzle.Map(i)];
         if (swizzled_comp.IsEmpty()) {
             continue;
+        }
+        if (mark_flags) {
+            const auto& flags = *mark_flags;
+            for (s32 m = 3; m >= 0; --m) { // NaN last: it wins
+                swizzled_comp = IR::F32{ir.Select(flags[m], ir.Imm32(marks[m][i]), swizzled_comp)};
+            }
         }
         auto converted = ApplyWriteNumberConversion(ir, swizzled_comp, color_buffer.num_conversion);
         if (needs_unorm_fixup) {

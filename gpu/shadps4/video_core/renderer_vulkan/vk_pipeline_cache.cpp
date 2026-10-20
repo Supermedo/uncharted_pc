@@ -608,14 +608,18 @@ bool PipelineCache::RefreshGraphicsKey(PipelineSelection& sel) {
     // coverage (host dithering). Only when the pixel shader exports MRT0, so that it declares the
     // location 0 output Vulkan reads the alpha from (VUID-VkGraphicsPipelineCreateInfo-
     // alphaToCoverageEnable-08891). mrt_mask, not Info::stores: only the former is kept with
-    // shaders loaded from the cache, and the key must come out the same for them.
+    // shaders loaded from the cache, and the key must come out the same for them. Nor when the
+    // export format drops MRT0's alpha (R_32, GR_32): Vulkan would read an undefined alpha.
     if (BbNanGuard::AlphaToCoverage() && !skip_cb_binding) {
         constexpr u32 DbAlphaToMask = 0xA2DC;
-        key.alpha_to_coverage =
-            (regs.reg_array[DbAlphaToMask] & 1u) != 0 &&
-            !regs.depth_shader_control.alpha_to_mask_disable && regs.color_buffers[0] &&
-            regs.color_target_mask.GetMask(0) != 0 && (key.mrt_mask & 1u) != 0 &&
-            key.color_buffers[0].export_format != AmdGpu::ShaderExportFormat::Zero;
+        const auto mrt0_export = key.color_buffers[0].export_format;
+        key.alpha_to_coverage = (regs.reg_array[DbAlphaToMask] & 1u) != 0 &&
+                                !regs.depth_shader_control.alpha_to_mask_disable &&
+                                regs.color_buffers[0] && regs.color_target_mask.GetMask(0) != 0 &&
+                                (key.mrt_mask & 1u) != 0 &&
+                                mrt0_export != AmdGpu::ShaderExportFormat::Zero &&
+                                mrt0_export != AmdGpu::ShaderExportFormat::R_32 &&
+                                mrt0_export != AmdGpu::ShaderExportFormat::GR_32;
     }
 
     // Second pass to mask out render targets not written by shader and fill remaining info
