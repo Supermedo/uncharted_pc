@@ -74,6 +74,8 @@ code runs directly on your PC and the graphics are translated to Vulkan. Unpack 
   the synthetic occlusion query counts. Each shader switch builds its own shader cache once.
 - **Frame rate:** idle Naughty Dog job workers sleep instead of spinning (`BB_JOB_SLEEP=0`: off),
   and `BB_FRAME_STATS=1` prints where the GPU thread waits (in `last_run.log`, every 5 s).
+  `BB_ASC_FENCES=1` (experiment, off by default) stops the compute queues' fences from stalling
+  the GPU command thread.
 - Frame rates above 120 are experimental.
 
 ## Building
