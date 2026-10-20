@@ -459,6 +459,91 @@ void RunEventWriteEos(Vulkan::Rasterizer& rasterizer, const u8* data) {
         *event_eos.Address() = value;
     }
 }
+
+/// bbport: a compute queue's ReleaseMem as handed to the draw recording thread, with the
+/// queue's interrupt (RunInOrder copies it).
+struct ReleaseMemTask {
+    PM4CmdReleaseMem packet;
+    u32 pipe_id;
+};
+
+/// Writes the fence of a compute queue's ReleaseMem and raises the queue's interrupt. Through
+/// the backing view, as SignalEop: it may run on a copy thread (SignalAfterHostCopies), where a
+/// protection fault would wait for the GPU command thread, which may be waiting for it.
+/// Known risk (BB_ASC_FENCES=1 only): a label written through TryWriteBacking skips page
+/// tracking, as the graphics end-of-pipe labels already do. No protection fault invalidates the
+/// buffer or texture cache over it (TryWriteBacking reports only writes over 8 bytes to the
+/// texture cache), so a GPU copy of a page holding a compute label can keep the old value. With
+/// the experiment on this holds on every path, RunInOrder running the task inline included; off,
+/// PM4CmdReleaseMem::SignalFence stores directly on the GPU command thread, where a write to a
+/// tracked page faults and invalidates those copies.
+void SignalReleaseMem(const ReleaseMemTask& task) {
+    const auto& release_mem = task.packet;
+    u64 data = 0;
+    u32 num_bytes = sizeof(u64);
+    switch (release_mem.data_sel.Value()) {
+    case DataSelect::Data32Low:
+        data = release_mem.DataDWord();
+        num_bytes = sizeof(u32);
+        break;
+    case DataSelect::Data64:
+        data = release_mem.DataQWord();
+        break;
+    case DataSelect::GpuClock64:
+        data = GetGpuClock64();
+        break;
+    case DataSelect::PerfCounter:
+        data = GetGpuPerfCounter();
+        break;
+    case DataSelect::GdsMemStore:
+        num_bytes = 0; // copied on the GPU by RunReleaseMem
+        break;
+    default:
+        UNREACHABLE();
+    }
+    if (num_bytes != 0) {
+        auto* address = release_mem.Address<void*>();
+        BbWriteLog::Note(reinterpret_cast<u64>(address), &data, num_bytes, BbWriteLog::Fence);
+        if (!Core::Memory::Instance()->TryWriteBacking(address, &data, num_bytes)) {
+            std::memcpy(address, &data, num_bytes);
+        }
+    }
+    switch (release_mem.int_sel.Value()) {
+    case InterruptSelect::None:
+        break;
+    case InterruptSelect::IrqUndocumented:
+    case InterruptSelect::IrqWhenWriteConfirm:
+        Platform::IrqC::Instance()->Signal(static_cast<Platform::InterruptId>(task.pipe_id));
+        break;
+    default:
+        UNREACHABLE();
+    }
+}
+
+// bbport: a compute queue's ReleaseMem in order with the draws and dispatches before it, like
+// the graphics end-of-pipe fences (RunEventWriteEop).
+void RunReleaseMem(Vulkan::Rasterizer& rasterizer, const u8* data) {
+    const auto task = *reinterpret_cast<const ReleaseMemTask*>(data);
+    const auto& release_mem = task.packet;
+    rasterizer.ProcessDownloadImages();
+    rasterizer.GetBufferCache().CheckStableBindings();
+    rasterizer.CheckConstants();
+    const bool gds = release_mem.data_sel.Value() == DataSelect::GdsMemStore;
+    if (!gds && Vulkan::DrawPipe::OnStageB() && !BbToggle::Disabled(BbToggle::RecorderFences)) {
+        // The draw recording thread does not wait: the Vulkan recording thread signals the
+        // fence after the guest memory copies queued before it.
+        rasterizer.SignalAfterHostCopies([task] { SignalReleaseMem(task); });
+        return;
+    }
+    // Labels are written in order: not before the copies and the fences deferred earlier.
+    rasterizer.WaitHostCopies();
+    rasterizer.WaitDeferredSignals();
+    if (gds) {
+        rasterizer.CopyBuffer(release_mem.Address<VAddr>(), release_mem.gds_index,
+                              release_mem.num_dw * sizeof(u32), false, true);
+    }
+    SignalReleaseMem(task);
+}
 } // namespace
 
 void Liverpool::NotePendingFences(const auto& event) {
@@ -1547,6 +1632,22 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
 }
 
 namespace {
+/// bbport: pipelined compute queue fences, an opt-in experiment, off by default for every game
+/// (BB_ASC_FENCES unset, =0 or anything but 1). BB_ASC_FENCES=1: a compute ReleaseMem or
+/// WriteData runs in order on the draw recording thread (RunInOrder) instead of after a drain,
+/// a compute WaitRegMem takes a fence still on its way there as written (PendingFenceValue) and
+/// drains only while unmet, and EventWrite (nothing to do on a compute queue) does not drain.
+/// Off, the compute queue drains before all four and signals its fences here, as before.
+/// Known risk with it on: SignalReleaseMem writes the labels through the backing view, which
+/// skips page tracking (as the graphics end-of-pipe labels, SignalEop, already do).
+bool AscFencesPipelined() {
+    static const bool enabled = [] {
+        const char* env = std::getenv("BB_ASC_FENCES");
+        return env != nullptr && std::string_view{env} == "1";
+    }();
+    return enabled;
+}
+
 /// Linux fork: compute queue packets that must not run before the draw pipe ran dry. The others
 /// hand their work to the pipe (dispatches), drain it themselves (DMA: CopyBuffer, FillBuffer),
 /// or only write registers.
@@ -1568,10 +1669,23 @@ bool AscPacketNeedsDrain(PM4ItOpcode opcode) {
     case PM4ItOpcode::DmaData:
     case PM4ItOpcode::IndirectBuffer: // its own packets decide
         return false;
+    case PM4ItOpcode::ReleaseMem:
+    case PM4ItOpcode::WriteData:
+    case PM4ItOpcode::WaitRegMem: // pipelined: drains itself, only while unmet
+    case PM4ItOpcode::EventWrite:
+        return !AscFencesPipelined(); // off (the default): drained, as every other packet
     default:
         return true;
     }
 }
+
+/// bbport, GPU command thread (BB_ASC_FENCES=1 only, never set otherwise): a compute ReleaseMem
+/// went to the draw recording thread (its label is written later, by the Vulkan recording or a
+/// copy thread), or a compute WaitRegMem took a fence still on its way there as written, and no
+/// WaitDeferredSignals came since. A later drained compute packet or compute DMA to memory
+/// drains the pipe and waits for those labels first: drained, the compute queue wrote them in
+/// queue order.
+bool asc_fence_deferred = false;
 } // namespace
 
 template <bool is_indirect>
@@ -1634,9 +1748,26 @@ Liverpool::Task Liverpool::ProcessCompute(std::span<const u32> acb, u32 vqid) {
         // drained first. Linux fork: not for packets that are pipelined or drain themselves
         // (dispatches, DMA, register writes): Uncharted 1 drained ~10000 times a second here,
         // 20% of the GPU thread at 60 FPS on the Steam Deck. BB_ASC_DRAIN=all: every packet.
-        if (rasterizer && AscPacketNeedsDrain(opcode)) {
+        const bool drained = rasterizer && AscPacketNeedsDrain(opcode);
+        if (drained) {
             // The opcode as the reason: the frame stats name what the compute queue drains for.
             rasterizer->DrainDrawPipe(static_cast<u32>(opcode));
+        }
+        // bbport, BB_ASC_FENCES=1: this ReleaseMem, WriteData or WaitRegMem takes the pipelined
+        // path below. Always false with the experiment off (the default), and with
+        // BB_ASC_DRAIN=all: those packets were drained above and run as before.
+        const bool pipelined_fence = rasterizer && !drained && AscFencesPipelined();
+        if (asc_fence_deferred && rasterizer &&
+            (drained || (opcode == PM4ItOpcode::DmaData &&
+                         (reinterpret_cast<const PM4DmaData*>(header)->dst_sel ==
+                              DmaDataDst::Memory ||
+                          reinterpret_cast<const PM4DmaData*>(header)->dst_sel ==
+                              DmaDataDst::MemoryUsingL2)))) {
+            // bbport: not before the compute fences handed to the draw recording thread earlier
+            // (asc_fence_deferred); the drain makes that thread issue them.
+            rasterizer->DrainDrawPipe(static_cast<u32>(opcode));
+            rasterizer->WaitDeferredSignals();
+            asc_fence_deferred = false;
         }
 
         const auto* it_body = reinterpret_cast<const u32*>(header) + 1;
@@ -1790,15 +1921,30 @@ Liverpool::Task Liverpool::ProcessCompute(std::span<const u32> acb, u32 vqid) {
             break;
         }
         case PM4ItOpcode::WriteData: {
+            const auto* write_data = reinterpret_cast<const PM4CmdWriteData*>(header);
+            ASSERT(write_data->dst_sel.Value() == 2 || write_data->dst_sel.Value() == 5);
+            const u32 data_size = (header->type3.count.Value() - 2) * 4;
+            if (pipelined_fence) {
+                // bbport, BB_ASC_FENCES=1: in order with the work before it, on the draw
+                // recording thread when in use (as the graphics WriteData). Off (the default):
+                // drained and written here, as before.
+                ASSERT(!write_data->wr_one_addr.Value());
+                BbWriteLog::NoteIntent(write_data->Address<u64>(), write_data->data, data_size,
+                                       BbWriteLog::WriteDataIntent);
+                if (rasterizer->RunInOrder(&RunWriteData, header,
+                                           (header->type3.NumWords() + 1) * sizeof(u32),
+                                           BbToggle::PipelinedMemoryWrites)) {
+                    NotePendingWrite(*write_data, data_size);
+                    rasterizer->NotePendingGpuWrite(write_data->Address<VAddr>(), data_size);
+                }
+                break;
+            }
             // bbport: copies deferred to the recording thread precede writes the guest sees, and
             // so do graphics fences deferred to it (the pipe was drained before this packet).
             if (rasterizer) {
                 rasterizer->WaitHostCopies();
                 rasterizer->WaitDeferredSignals();
             }
-            const auto* write_data = reinterpret_cast<const PM4CmdWriteData*>(header);
-            ASSERT(write_data->dst_sel.Value() == 2 || write_data->dst_sel.Value() == 5);
-            const u32 data_size = (header->type3.count.Value() - 2) * 4;
             if (!write_data->wr_one_addr.Value()) {
                 std::memcpy(write_data->Address<void*>(), write_data->data, data_size);
             } else {
@@ -1808,6 +1954,15 @@ Liverpool::Task Liverpool::ProcessCompute(std::span<const u32> acb, u32 vqid) {
         }
         case PM4ItOpcode::MemSemaphore: {
             const auto* mem_semaphore = reinterpret_cast<const PM4CmdMemSemaphore*>(header);
+            // bbport, BB_ASC_FENCES=1: the guest-visible write made here (Signal or Decrement):
+            // not before the fences deferred earlier, this queue's own ReleaseMem among them.
+            // Waited for here, where the draw pipe ran dry (MemSemaphore always drains), not
+            // after the wait below: while this queue yields, other queues hand the draw
+            // recording thread new work, and WaitDeferredSignals kicks the recording that
+            // thread owns. Off: as before.
+            if (rasterizer && AscFencesPipelined()) {
+                rasterizer->WaitDeferredSignals();
+            }
             if (mem_semaphore->IsSignaling()) {
                 mem_semaphore->Signal();
             } else {
@@ -1821,12 +1976,59 @@ Liverpool::Task Liverpool::ProcessCompute(std::span<const u32> acb, u32 vqid) {
         case PM4ItOpcode::WaitRegMem: {
             const auto* wait_reg_mem = reinterpret_cast<const PM4CmdWaitRegMem*>(header);
             ASSERT(wait_reg_mem->engine.Value() == PM4CmdWaitRegMem::Engine::Me);
+            // bbport, BB_ASC_FENCES=1: as the graphics WaitRegMem: a fence handed to the draw
+            // recording thread counts as written, and that thread is drained only while the
+            // wait is unmet. Off (the default): drained above before every wait, met or not,
+            // and no pending fence counts, as before.
+            if (u32 value; pipelined_fence &&
+                           wait_reg_mem->mem_space.Value() == PM4CmdWaitRegMem::MemSpace::Memory &&
+                           !BbToggle::Disabled(BbToggle::PendingFenceWaits) &&
+                           PendingFenceValue(wait_reg_mem->Address<VAddr>(), value) &&
+                           wait_reg_mem->TestValue(value)) {
+                asc_fence_deferred = true;
+                break;
+            }
             while (!wait_reg_mem->Test(regs.reg_array)) {
+                if (pipelined_fence && !rasterizer->DrawPipeIdle()) {
+                    rasterizer->DrainDrawPipe(static_cast<u32>(opcode));
+                    continue;
+                }
                 YIELD_ASC(vqid);
             }
             break;
         }
         case PM4ItOpcode::ReleaseMem: {
+            if (pipelined_fence) {
+                // bbport, BB_ASC_FENCES=1: in order with the draws and dispatches before it, on
+                // the draw recording thread (RunReleaseMem), like the graphics end-of-pipe
+                // fences: the compute queue waited for that thread to run dry at every fence
+                // (Uncharted on the Steam Deck: 2000-22000 a second). Off (the default): drained
+                // and signalled here, as before.
+                const auto* release_mem = reinterpret_cast<const PM4CmdReleaseMem*>(header);
+                const ReleaseMemTask task{*release_mem, queue.pipe_id};
+                if (rasterizer->RunInOrder(&RunReleaseMem, &task, sizeof(task))) {
+                    asc_fence_deferred = true;
+                    // Pending until that thread writes it: WaitRegMem reads it from here, and
+                    // constants over it are not copied early (NotePendingGpuWrite).
+                    while (!pending_fences.empty() &&
+                           rasterizer->DrawPipeReached(pending_fences.front().position)) {
+                        pending_fences.pop_front();
+                    }
+                    const VAddr address = release_mem->Address<VAddr>();
+                    const auto data_sel = release_mem->data_sel.Value();
+                    if (data_sel == DataSelect::Data32Low || data_sel == DataSelect::Data64) {
+                        pending_fences.push_back(
+                            {address, release_mem->DataQWord(),
+                             data_sel == DataSelect::Data32Low ? 4u : 8u,
+                             rasterizer->DrawPipeHead()});
+                    }
+                    rasterizer->NotePendingGpuWrite(
+                        address, data_sel == DataSelect::GdsMemStore
+                                     ? release_mem->num_dw * sizeof(u32)
+                                     : sizeof(u64));
+                }
+                break;
+            }
             // bbport: copies deferred to the recording thread precede writes the guest sees, and
             // so do graphics fences deferred to it (the pipe was drained before this packet).
             if (rasterizer) {
