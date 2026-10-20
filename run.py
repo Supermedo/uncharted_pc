@@ -180,6 +180,9 @@ def apply_patches(game, out, env, caps):
         env.setdefault('BB_DMEM_MB', '9152')
         print(f'Output {scaled_output}: scene {scaled_render} (startup patch)')
 
+    # patches.py --external-only appends to patches.bin: a file left by an earlier launch would
+    # be part of this one.
+    (out / 'patches.bin').unlink(missing_ok=True)
     run_script('patches.py', '--out', out, '--fps', fps,
                '--extra', env.get('BB_PATCHES', ''), '--settings', env['BB_CONFIG'],
                '--game-dir', game, '--render-res', env.get('BB_RENDER_RES', ''),

@@ -4,6 +4,7 @@ import importlib.util
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 spec = importlib.util.spec_from_file_location('bbrun', ROOT / 'run.py')
 run = importlib.util.module_from_spec(spec)
@@ -26,6 +27,25 @@ class PatchArguments(unittest.TestCase):
     def test_no_patch_folder_means_no_patches(self):
         self.assertEqual(run.patch_arguments({}, 'eboot.bin', Path('.'), Path('.')), [])
         self.assertEqual(run.patch_arguments({'BB_PATCHES_DIR': '/nonexistent'}, 'eboot.bin', Path('.'), Path('.')), [])
+
+
+class StalePatchFile(unittest.TestCase):
+    def test_a_patch_file_from_an_earlier_launch_is_not_kept(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            out = root / 'out'; out.mkdir()
+            (out / 'patches.bin').write_bytes(b'junk from the last launch')
+            seen = []
+
+            def compiler(name, *args, **kwargs):
+                seen.append((out / 'patches.bin').exists())  # patches.py appends to what it finds
+                (out / 'patches.bin').write_bytes(b'fresh')
+
+            env = {'BB_CONFIG': str(root / 'bbport.ini'), 'BB_RENDER_RES': '1920x1080'}
+            with patch.object(run, 'run_script', compiler):
+                run.apply_patches(root, out, env, root / 'caps')
+            self.assertEqual(seen, [False])
+            self.assertEqual((out / 'patches.bin').read_bytes(), b'fresh')
 
 
 if __name__ == '__main__':

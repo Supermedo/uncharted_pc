@@ -1,5 +1,6 @@
 from paths import ROOT
 import struct
+import sys
 import tempfile
 import unittest
 import xml.etree.ElementTree as ET
@@ -237,6 +238,101 @@ class PatchTargetTests(unittest.TestCase):
         # than refusing every game whose param.sfo cannot be read.
         with patch.object(patches, 'game_title_id', return_value=None):
             self.assertIsNone(patches.check_patch_target(XML, '/game'))
+
+
+def synthetic_sfo(fields):
+    """A minimal param.sfo with these string fields (synthetic, no game data)."""
+    keys = b''.join(k.encode() + b'\0' for k in fields)
+    values = b''.join(v.encode().ljust(16, b'\0') for v in fields.values())
+    entries, key_at, value_at = b'', 0, 0
+    for key, value in fields.items():
+        entries += struct.pack('<HHIII', key_at, 0x204, len(value) + 1, 16, value_at)
+        key_at += len(key) + 1
+        value_at += 16
+    keys_offset = 20 + 16 * len(fields)
+    values_offset = (keys_offset + len(keys) + 3) & ~3
+    keys = keys.ljust(values_offset - keys_offset, b'\0')
+    return struct.pack('<4sIIII', b'\0PSF', 0x101, keys_offset, values_offset, len(fields)) \
+        + entries + keys + values
+
+
+def dump_with(root, fields):
+    (root / 'sce_sys').mkdir(parents=True, exist_ok=True)
+    (root / 'sce_sys/param.sfo').write_bytes(synthetic_sfo(fields))
+    return root
+
+
+def one_patch_file(app_ver, ids=('CUSA02320',)):
+    listed = ''.join(f'<ID>{i}</ID>' for i in ids)
+    return f"""<?xml version="1.0"?>
+<Patch>
+  <TitleID>{listed}</TitleID>
+  <Metadata Title="T" Name="P" Author="x" PatchVer="1.0" AppVer="{app_ver}" AppElf="eboot.bin" isEnabled="true">
+    <PatchList><Line Type="bytes" Address="0x00401000" Value="90"/></PatchList>
+  </Metadata>
+</Patch>"""
+
+
+class ExecutableVersionTests(unittest.TestCase):
+    """The build a patch is for is param.sfo's APP_VER; VERSION is the content base version."""
+
+    def found(self, fields, app_ver):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            dump = dump_with(root / 'dump', fields)
+            folder = root / 'patches'
+            folder.mkdir()
+            (folder / 'p.xml').write_text(one_patch_file(app_ver))
+            return external_patches(folder, patches.game_versions(dump), app_elf='eboot.bin')
+
+    def test_app_ver_is_what_a_patch_must_name(self):
+        fields = {'APP_VER': '01.02', 'VERSION': '01.00'}
+        self.assertEqual(self.found(fields, '01.00'), [])  # the content base version: not the build
+        self.assertEqual(len(self.found(fields, '01.02')), 1)
+
+    def test_version_is_the_fallback_when_app_ver_is_missing(self):
+        self.assertEqual(len(self.found({'VERSION': '01.02'}, '01.02')), 1)
+        self.assertEqual(self.found({'VERSION': '01.02'}, '01.00'), [])
+
+
+class PatchGameTests(unittest.TestCase):
+    def folder_with(self, directory, ids):
+        folder = Path(directory)
+        (folder / 'p.xml').write_text(one_patch_file('01.09', ids))
+        return folder
+
+    def test_collection_title_ids_are_not_offered_to_bloodborne(self):
+        with tempfile.TemporaryDirectory() as directory:
+            ndc_only = self.folder_with(directory, ('CUSA02320', 'CUSA02343'))
+            self.assertEqual(external_patches(ndc_only, {'01.09'}, game='bloodborne'), [])
+            self.assertEqual(len(external_patches(ndc_only, {'01.09'}, game='ndc')), 1)
+        with tempfile.TemporaryDirectory() as directory:
+            bb_only = self.folder_with(directory, ('CUSA03173',))
+            self.assertEqual(len(external_patches(bb_only, {'01.09'}, game='bloodborne')), 1)
+            self.assertEqual(external_patches(bb_only, {'01.09'}, game='ndc'), [])
+
+    def test_unreadable_title_id_fails_closed_on_the_collection_path(self):
+        with tempfile.TemporaryDirectory() as directory:
+            listed = self.folder_with(directory, ('CUSA02320',))
+            self.assertEqual(external_patches(listed, {'01.09'}, fail_closed=True), [])
+            self.assertEqual(len(external_patches(listed, {'01.09'}, title_id='CUSA02320',
+                                                  fail_closed=True)), 1)
+            (listed / 'p.xml').write_text(one_patch_file('01.09', ()))  # lists no title IDs
+            self.assertEqual(len(external_patches(listed, {'01.09'}, fail_closed=True)), 1)
+
+    def test_the_collection_path_asks_for_the_title_filter_to_fail_closed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            out = root / 'out'
+            out.mkdir()
+            (out / 'eboot.elf').write_bytes(b'')
+            argv = ['patches.py', '--external-only', '--patches-dir', str(root),
+                    '--game-dir', str(root / 'no-dump'), '--out', str(out)]
+            with patch.object(sys, 'argv', argv), \
+                 patch.object(patches, 'eboot_segments', return_value=SEGMENTS), \
+                 patch.object(patches, 'external_patches', return_value=[]) as called:
+                patches.main()
+            self.assertTrue(called.call_args.kwargs.get('fail_closed'))
 
 
 if __name__ == '__main__':

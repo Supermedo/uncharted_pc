@@ -101,14 +101,17 @@ def check_patch_target(xml, game):
 
 
 def game_versions(game):
-    """The versions a patch's AppVer may name for this dump: param.sfo's VERSION (the update,
-    "01.02") and APP_VER ("01.00"); empty when it cannot be read."""
+    """The version a patch's AppVer must name for this dump, as a set of one: param.sfo's
+    APP_VER ("01.02", the build that runs), or its VERSION (the content base version, "01.00")
+    only when APP_VER is missing. Never both: a patch for the base version would be written
+    into the running build's code. Empty when param.sfo cannot be read."""
     try:
         from prepare import sfo
         values = sfo((Path(game) / 'sce_sys/param.sfo').read_bytes())
     except (OSError, ValueError, ImportError):
         return set()
-    return {v for v in (values.get('VERSION'), values.get('APP_VER')) if v}
+    version = values.get('APP_VER') or values.get('VERSION')
+    return {version} if version else set()
 
 
 def validate_patch_requirements(names, game):
@@ -266,11 +269,17 @@ NDC_ELFS=('eboot.bin','big2-ps4_Shipping.elf','big3-ps4_Shipping.elf')
 
 
 def external_patches(directory, app_version='01.09', exclude=Path(__file__).resolve().parent.parent/'patches/Bloodborne.xml',
-                     app_elf='eboot.bin', title_id=None):
+                     app_elf='eboot.bin', title_id=None, game=None, fail_closed=False):
     """[(key, file, metadata)] of patches for this executable and version in directory/*.xml.
     key is "<file name>/<patch name>" (the launcher's selection, patches.json). app_version may
-    be one version or a set of them (the dump's VERSION and APP_VER). With title_id (the dump's
-    TITLE_ID), a file that lists title IDs must list that one."""
+    be one version or a set of them. With title_id (the dump's TITLE_ID), a file that lists title
+    IDs must list that one. game ('bloodborne' or 'ndc'; inferred from title_id when not given)
+    limits the files to those listing an ID of that game, so the collection's IDs are not offered
+    to Bloodborne nor Bloodborne's to the collection. With fail_closed, an unknown title_id skips
+    every file that lists title IDs instead of applying it."""
+    if game is None and title_id:
+        game='bloodborne' if title_id in BLOODBORNE_IDS else 'ndc' if title_id in NDC_IDS else None
+    family={'bloodborne':BLOODBORNE_IDS,'ndc':NDC_IDS}.get(game,BLOODBORNE_IDS|NDC_IDS)
     versions={app_version} if isinstance(app_version,str) else set(app_version)
     found=[]
     directory=Path(directory)
@@ -282,7 +291,8 @@ def external_patches(directory, app_version='01.09', exclude=Path(__file__).reso
             print(f'Patches: {path.name}: {error}',file=sys.stderr)
             continue
         ids={e.text.strip() for e in root.iter('ID') if e.text}
-        if ids and not ids&(BLOODBORNE_IDS|NDC_IDS): continue
+        if ids and not ids&family: continue
+        if ids and fail_closed and not title_id: continue  # unknown game: never guess
         if title_id and ids and title_id not in ids: continue
         for meta in root.iter('Metadata'):
             if meta.get('AppVer') in versions and meta.get('AppElf','eboot.bin')==app_elf:
@@ -362,7 +372,7 @@ def main():
     if a.external_only:
         writes=[]
         if a.patches_dir:
-            found=external_patches(a.patches_dir,game_versions(a.game_dir),a.xml,a.app_elf,game_title_id(a.game_dir))
+            found=external_patches(a.patches_dir,game_versions(a.game_dir),a.xml,a.app_elf,game_title_id(a.game_dir),fail_closed=True)
             writes=compile_external(external_selection(found,a.patches_config),
                                     eboot_segments((a.out/'eboot.elf').read_bytes()))
         # After the built-in patch set run.py compiled (apply_patches, empty for a game it does
@@ -423,7 +433,8 @@ def main():
         print(f'Patches: scene {size[0]}x{size[1]}; UI {ui[0]}x{ui[1]}')
     if a.patches_dir:
         # After the built-in ones: an external patch of the same bytes wins.
-        writes+=compile_external(external_selection(external_patches(a.patches_dir,a.app_version,a.xml),
+        writes+=compile_external(external_selection(external_patches(a.patches_dir,a.app_version,a.xml,
+                                                          title_id=game_title_id(a.game_dir),game='bloodborne'),
                                                     a.patches_config),segments)
     # BBPATCH2: the patch base, so the loader can rebase pointers the patches write into
     # relocated slots (60/90 FPS++ replace function pointers).
