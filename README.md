@@ -62,7 +62,18 @@ code runs directly on your PC and the graphics are translated to Vulkan. Unpack 
   (`BB_READBACK_SMALL=0`: off), Uncharted 2 runs with accurate GPU memory (`BB_GPU_MERGE=1`
   brings back the faster merging), and textures over memory written by read backs are reloaded.
   On 0.3.6 itself, `BB_GPU_MERGE=0 BB_READBACK_LINEAR=1` under Advanced → Environment does the
-  first two, more slowly. Dropped weapons drawn as white boxes are not confirmed fixed yet.
+  first two, but slowly: `BB_READBACK_LINEAR` waited for the whole GPU at every fence (20-40 FPS
+  with the GPU half idle). Builds after 0.3.6 need neither variable.
+- **Uncharted 2: dropped weapons drawn as white boxes** (issue #360; black cubes with
+  `BB_READBACKS=0`): likely a colour that is finite on the PS4 and +Inf on PC, which the bloom
+  spreads into blocks. Half-float colour packs now round toward zero as on the PS4 for Uncharted
+  2 (`BB_F16_RTZ=1`, set by run.py; `BB_F16_RTZ=0` to compare). Not confirmed in game yet. To
+  find out more: `BB_NONFINITE_MARK=1` paints non-finite colours (NaN magenta, +Inf green,
+  beyond the half range yellow), `BB_CMP_UNORDERED=1` and `BB_CMP_CLASS_EXACT=1` give NaN and
+  Inf compares the GCN results, `BB_OCCLUSION_LOG=1` / `BB_OCCLUSION_PIXELS=<n>` show and change
+  the synthetic occlusion query counts. Each shader switch builds its own shader cache once.
+- **Frame rate:** idle Naughty Dog job workers sleep instead of spinning (`BB_JOB_SLEEP=0`: off),
+  and `BB_FRAME_STATS=1` prints where the GPU thread waits (in `last_run.log`, every 5 s).
 - Frame rates above 120 are experimental.
 
 ## Building
