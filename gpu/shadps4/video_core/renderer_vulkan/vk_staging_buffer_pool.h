@@ -5,6 +5,7 @@
 
 #include <array>
 #include <memory>
+#include <mutex>
 #include <vector>
 
 #include "common/types.h"
@@ -84,6 +85,10 @@ private:
     std::array<Ring, NUM_TYPES> rings;
     u64 keep_blocks = 0; ///< bbport: ring blocks never trimmed
     std::array<std::vector<LargeBuffer>, NUM_TYPES> large_caches;
+    /// bbport: guards large_caches and writes of frame. FreeDeferred runs on the scheduler's
+    /// priority thread (the asynchronous image downloads of BB_READBACK_SMALL) while the GPU
+    /// threads request and trim.
+    mutable std::mutex large_mutex;
     u64 frame = 0;
 };
 
