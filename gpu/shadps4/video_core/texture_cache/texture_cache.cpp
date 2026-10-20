@@ -1,6 +1,10 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <algorithm>
+#include <string>
+#include <string_view>
+#include <unordered_map>
 #include <xxhash.h>
 
 #include "bbport_toggles.h"
@@ -24,6 +28,170 @@ namespace VideoCore {
 
 static constexpr u64 PageShift = 12;
 static constexpr u64 NumFramesBeforeRemoval = 32;
+
+namespace {
+bool EnvFlag(const char* name, bool fallback) {
+    const char* env = std::getenv(name);
+    return env && env[0] ? env[0] != '0' : fallback;
+}
+
+/// bbport (#360, from the Linux fork 4f5a95a + e0baa3b): MaybeCpuDirty checks hash the same
+/// guest range at marking and at refresh, and uploads of images the GPU may write record the
+/// guest memory they saw, so a later CPU write elsewhere in their pages no longer reloads stale
+/// guest memory over GPU-written contents. BB_TEX_GPU_HASH=0: the old hashing (A/B tests).
+bool GpuHashFix() {
+    static const bool value = EnvFlag("BB_TEX_GPU_HASH", true);
+    return value;
+}
+
+/// bbport diagnosis (#360): BB_TEX_KEEP_GPU=1: a GPU-modified image that no GPU buffer write
+/// made dirty is never reloaded from guest memory, whatever the CPU wrote there. If dropped
+/// weapons look right with it, a reload over GPU-written contents is what made them white
+/// (black without read backs). Not for normal play: a texture the game streams into memory a
+/// render target used before keeps the render target's contents.
+bool KeepGpuImages() {
+    static const bool value = EnvFlag("BB_TEX_KEEP_GPU", false);
+    return value;
+}
+
+/// bbport (#360): BB_GC_KEEP_GPU=1 (run.py sets it for Uncharted 2): GPU-modified images a
+/// CPU write made dirty (not safe to write back) were evicted by the collector like any
+/// texture, unused for 16 submissions, and their contents were lost: the next use rebuilt them
+/// from guest memory, where the mip hashes would have kept the mips the CPU did not change.
+/// They stay while VRAM is not under pressure; under pressure they go as before, tiled ones too
+/// (kept for good, they would only ever grow VRAM: memory the game reuses for other data never
+/// makes them clean again). GPU-dirty ones go as before too: their next use reloads them whole
+/// from the buffer cache, as a new image would. Off: evicted as before.
+bool GcKeepGpuImages() {
+    static const bool value = EnvFlag("BB_GC_KEEP_GPU", false);
+    return value;
+}
+
+/// bbport diagnosis (#360): BB_TEX_DIAG=1 prints how GPU-written data reaches textures (events
+/// below); BB_TEX_DIAG=<hex address>[:<hex size>] only for images overlapping that range. A
+/// line names the image (address+size, format, size, tile mode, pitch, flags: c CPU-dirty,
+/// m maybe CPU-dirty, g GPU-dirty, G GPU-modified; usage: t texture, s storage, r render
+/// target, d depth). Each event prints at most 3 lines per image, 3000 in all, and a count of
+/// every event each 5 s.
+struct TexDiagState {
+    bool on = false;
+    VAddr begin = 0;
+    VAddr end = ~VAddr{0};
+};
+const TexDiagState& TexDiagConfig() {
+    static const TexDiagState state = [] {
+        TexDiagState config{};
+        const char* env = std::getenv("BB_TEX_DIAG");
+        if (!env || !env[0] || std::string_view{env} == "0") {
+            return config;
+        }
+        config.on = true;
+        if (std::string_view{env} != "1") {
+            char* end = nullptr;
+            config.begin = std::strtoull(env, &end, 16);
+            const u64 size = end && *end == ':' ? std::strtoull(end + 1, nullptr, 16) : 1;
+            config.end = config.begin + std::max<u64>(size, 1);
+        }
+        return config;
+    }();
+    return state;
+}
+bool TexDiagFor(VAddr address, u64 size) {
+    const auto& config = TexDiagConfig();
+    return config.on && address < config.end && config.begin < address + size;
+}
+enum TexDiagEvent : u32 {
+    UploadOverGpu, ///< guest memory or a GPU buffer reloaded over a GPU-modified image
+    UploadFill,    ///< the guest bytes uploaded to an image are all 0xff or all zero
+    AliasMiss,     ///< an image created over a GPU-modified one it did not reuse
+    StorageMiss,   ///< a storage-buffer write over an image that does not start at the buffer
+    RangeSkip,     ///< a GPU buffer write over part of a GPU-modified image left it as it was
+    FillGpu,       ///< a DMA fill on the GPU made an image reload
+    BackingDirty,  ///< read back data written under an image made it reload (960e0d0)
+    GcDrop,        ///< the collector evicted a GPU-modified image without writing it back
+    GcKeep,        ///< the collector kept a GPU-modified dirty image (BB_GC_KEEP_GPU)
+    NumTexDiagEvents,
+};
+constexpr std::array<const char*, NumTexDiagEvents> TexDiagNames = {
+    "upload over GPU-written image", "upload of fill-like guest bytes",
+    "new image over a GPU-written one", "storage write missed image",
+    "partial GPU write left image", "DMA fill reloads image", "read back reloads image",
+    "GC dropped GPU contents", "GC kept GPU-written dirty image",
+};
+std::array<std::atomic<u64>, NumTexDiagEvents> tex_diag_counts{};
+
+/// Counts the event; true when a line may be printed for it (key: an image uid or address).
+bool TexDiagNote(TexDiagEvent event, u64 key) {
+    tex_diag_counts[event].fetch_add(1, std::memory_order_relaxed);
+    static std::mutex diag_mutex;
+    static std::unordered_map<u64, u32> printed;
+    static u32 lines = 0;
+    std::scoped_lock lk{diag_mutex};
+    if (lines >= 3000) {
+        return false;
+    }
+    u32& count = printed[key * NumTexDiagEvents + event];
+    if (count >= 3) {
+        return false;
+    }
+    ++count;
+    ++lines;
+    return true;
+}
+
+void TexDiagSummary() {
+    static std::atomic<s64> last{0};
+    const s64 now = std::chrono::duration_cast<std::chrono::seconds>(
+                        std::chrono::steady_clock::now().time_since_epoch())
+                        .count();
+    s64 previous = last.load(std::memory_order_relaxed);
+    if (now - previous < 5 || !last.compare_exchange_strong(previous, now)) {
+        return;
+    }
+    std::string text;
+    for (u32 event = 0; event < NumTexDiagEvents; ++event) {
+        if (const u64 count = tex_diag_counts[event].load(std::memory_order_relaxed)) {
+            text += fmt::format("; {} {}", TexDiagNames[event], count);
+        }
+    }
+    if (!text.empty()) {
+        std::printf("Texture diag: totals%s\n", text.c_str());
+    }
+}
+
+std::string TexDiagImage(const Image& image) {
+    const auto& info = image.info;
+    const auto flag = [&](ImageFlagBits bit, const char* name) {
+        return True(image.flags & bit) ? name : "";
+    };
+    return fmt::format("{:#x}+{:#x} {} {}x{}x{} mips {} layers {} tile {} pitch {} flags "
+                       "{}{}{}{} usage {}{}{}{} uid {}",
+                       info.guest_address, info.guest_size, vk::to_string(info.pixel_format),
+                       info.size.width, info.size.height, info.size.depth, info.resources.levels,
+                       info.resources.layers, static_cast<u32>(info.tile_mode), info.pitch,
+                       flag(ImageFlagBits::CpuDirty, "c"), flag(ImageFlagBits::MaybeCpuDirty, "m"),
+                       flag(ImageFlagBits::GpuDirty, "g"), flag(ImageFlagBits::GpuModified, "G"),
+                       image.usage.texture ? "t" : "", image.usage.storage ? "s" : "",
+                       image.usage.render_target ? "r" : "", image.usage.depth_target ? "d" : "",
+                       image.image_uid);
+}
+
+/// "all ff" or "all 00" when the first 4 KiB of guest memory at address are, else nullptr.
+/// Only for memory the upload reads from the guest (not GPU-modified: never read-protected).
+const char* TexDiagFillKind(VAddr address, u64 size) {
+    const u64 length = Core::Memory::Instance()->ClampRangeSize(address, std::min<u64>(size, 4096));
+    if (length == 0) {
+        return nullptr;
+    }
+    const auto* bytes = reinterpret_cast<const u8*>(address);
+    bool all_ff = true, all_zero = true;
+    for (u64 i = 0; i < length && (all_ff || all_zero); ++i) {
+        all_ff &= bytes[i] == 0xff;
+        all_zero &= bytes[i] == 0;
+    }
+    return all_ff ? "all ff" : all_zero ? "all 00" : nullptr;
+}
+} // namespace
 
 TextureCache::TextureCache(const Vulkan::Instance& instance_, Vulkan::Scheduler& scheduler_,
                            Vulkan::Runtime& runtime_, AmdGpu::Liverpool* liverpool_,
@@ -183,11 +351,30 @@ void TextureCache::DownloadImageMemory(ImageId image_id, bool sync) {
     }
 }
 
+/// bbport: the guest memory a MaybeCpuDirty check compares, the same at marking and at
+/// refresh (they hashed different ranges, the whole image and its first 8x8 pixels, so the
+/// first check never matched). Such an image lies within the faulting page: cheap to hash
+/// whole, and a CPU write past its first pixels still counts. (Linux fork 4f5a95a.)
+u64 TextureCache::MaybeDirtyHash(const Image& image) {
+    return XXH3_64bits(std::bit_cast<const u8*>(image.info.guest_address), image.info.guest_size);
+}
+
 void TextureCache::MarkAsMaybeDirty(ImageId image_id, Image& image) {
     if (image.hash == 0) {
         // Initialize hash
         const u8* addr = std::bit_cast<u8*>(image.info.guest_address);
         image.hash = XXH3_64bits(addr, image.info.guest_size);
+        // bbport (#360): from UntrackImageHead/Tail (an image over two pages) its other page
+        // was made writable at an earlier fault, and the guest may have written the image
+        // there since without one: this first reference can already hold that write, and with
+        // the same-range hash it would match. It reloads once instead, as the 8x8 check always
+        // did at its first check (the mip hashes still keep unchanged GPU-written mips).
+        const bool fully_tracked =
+            image.track_addr == image.info.guest_address &&
+            image.track_addr_end == image.info.guest_address + image.info.guest_size;
+        if (GpuHashFix() && !fully_tracked) {
+            image.flags |= ImageFlagBits::CpuDirty;
+        }
     }
     image.flags |= ImageFlagBits::MaybeCpuDirty;
     UntrackImage(image_id);
@@ -248,6 +435,12 @@ void TextureCache::ApplyBackingWrites() {
             if (True(image.flags & ImageFlagBits::GpuModified)) {
                 return;
             }
+            if (TexDiagFor(image.info.guest_address, image.info.guest_size) &&
+                TexDiagNote(BackingDirty, image.image_uid)) {
+                std::printf("Texture diag: read back data at %#llx+%#llx reloads %s\n",
+                            static_cast<unsigned long long>(address),
+                            static_cast<unsigned long long>(size), TexDiagImage(image).c_str());
+            }
             image.flags |= ImageFlagBits::CpuDirty;
             UntrackImage(image_id);
         });
@@ -261,9 +454,47 @@ void TextureCache::InvalidateMemoryFromGPU(VAddr address, size_t max_size, bool 
         // overlapping the written range.
         // TODO: Maybe also consider subresources
         if (whole_range ? !image.Overlaps(address, max_size) : image.info.guest_address != address) {
+            if (!whole_range && image.Overlaps(address, max_size) &&
+                TexDiagFor(image.info.guest_address, image.info.guest_size) &&
+                TexDiagNote(StorageMiss, image.image_uid)) {
+                std::printf("Texture diag: storage buffer %#llx+%#llx written, not invalidating "
+                            "%s\n",
+                            static_cast<unsigned long long>(address),
+                            static_cast<unsigned long long>(max_size), TexDiagImage(image).c_str());
+            }
             return;
         }
         // Ensure image is reuploaded when accessed again.
+        image.flags |= ImageFlagBits::GpuDirty;
+    });
+}
+
+void TextureCache::InvalidateMemoryFromGpuRange(VAddr address, size_t size,
+                                                bool covered_gpu_images) {
+    std::scoped_lock lock{mutex};
+    ForEachImageInRegion(address, size, [&](ImageId image_id, Image& image) {
+        if (!image.Overlaps(address, size)) {
+            return;
+        }
+        const bool diag = TexDiagFor(image.info.guest_address, image.info.guest_size);
+        if (True(image.flags & ImageFlagBits::GpuModified)) {
+            const bool covered = address <= image.info.guest_address &&
+                                 image.info.guest_address + image.info.guest_size <= address + size;
+            if (covered_gpu_images ? !covered : image.info.guest_address != address) {
+                if (diag && TexDiagNote(RangeSkip, image.image_uid)) {
+                    std::printf("Texture diag: GPU buffer write %#llx+%#llx over part of %s, "
+                                "left as it is\n",
+                                static_cast<unsigned long long>(address),
+                                static_cast<unsigned long long>(size), TexDiagImage(image).c_str());
+                }
+                return;
+            }
+        }
+        if (diag && covered_gpu_images && TexDiagNote(FillGpu, image.image_uid)) {
+            std::printf("Texture diag: DMA fill %#llx+%#llx on the GPU reloads %s\n",
+                        static_cast<unsigned long long>(address),
+                        static_cast<unsigned long long>(size), TexDiagImage(image).c_str());
+        }
         image.flags |= ImageFlagBits::GpuDirty;
     });
 }
@@ -644,6 +875,18 @@ ImageId TextureCache::FindImage(ImageDesc& desc, bool exact_fmt) {
     ImageIds image_ids;
     ForEachImageInRegion(info.guest_address, info.guest_size,
                          [&](ImageId image_id, Image& image) { image_ids.push_back(image_id); });
+    // bbport diagnosis (#360): GPU-modified images here, described before ResolveOverlap may
+    // free them, for the report when a new image is created beside them.
+    boost::container::small_vector<std::string, 2> diag_gpu_images;
+    if (desc.type != BindingType::RenderTarget && desc.type != BindingType::DepthTarget &&
+        TexDiagFor(info.guest_address, info.guest_size)) {
+        for (const ImageId cache_id : image_ids) {
+            const Image& cache_image = slot_images[cache_id];
+            if (True(cache_image.flags & ImageFlagBits::GpuModified)) {
+                diag_gpu_images.push_back(TexDiagImage(cache_image));
+            }
+        }
+    }
 
     ImageId image_id{};
 
@@ -704,6 +947,18 @@ ImageId TextureCache::FindImage(ImageDesc& desc, bool exact_fmt) {
     if (!image_id) {
         image_id = slot_images.insert(instance, runtime, slot_image_views, info);
         RegisterImage(image_id);
+        if (!diag_gpu_images.empty() && TexDiagNote(AliasMiss, info.guest_address)) {
+            std::printf("Texture diag: new %s image %#llx+%#llx %s %ux%ux%u mips %u layers %u "
+                        "tile %u pitch %u uploaded from memory, beside GPU-written %s%s\n",
+                        desc.type == BindingType::Storage ? "storage" : "texture",
+                        static_cast<unsigned long long>(info.guest_address),
+                        static_cast<unsigned long long>(info.guest_size),
+                        vk::to_string(info.pixel_format).c_str(), info.size.width,
+                        info.size.height, info.size.depth, info.resources.levels,
+                        info.resources.layers, static_cast<u32>(info.tile_mode), info.pitch,
+                        diag_gpu_images[0].c_str(),
+                        diag_gpu_images.size() > 1 ? " (and more)" : "");
+        }
     }
 
     Image& image = slot_images[image_id];
@@ -879,20 +1134,30 @@ void TextureCache::RefreshImage(Image& image) {
 
     if (True(image.flags & ImageFlagBits::MaybeCpuDirty) &&
         False(image.flags & ImageFlagBits::CpuDirty)) {
-        // The image size should be less than page size to be considered MaybeCpuDirty
-        // So this calculation should be very uncommon and reasonably fast
-        // For now we'll just check up to 64 first pixels
-        const auto addr = std::bit_cast<u8*>(image.info.guest_address);
-        const u32 w = std::min(image.info.size.width, u32(8));
-        const u32 h = std::min(image.info.size.height, u32(8));
+        u64 hash;
+        if (GpuHashFix()) {
+            hash = MaybeDirtyHash(image);
+        } else {
+            // The image size should be less than page size to be considered MaybeCpuDirty
+            // So this calculation should be very uncommon and reasonably fast
+            // For now we'll just check up to 64 first pixels
+            const auto addr = std::bit_cast<u8*>(image.info.guest_address);
+            const u32 w = std::min(image.info.size.width, u32(8));
+            const u32 h = std::min(image.info.size.height, u32(8));
 
-        const u32 s_w = image.info.props.is_block ? Common::DivCeil(w, 4u) : w;
-        const u32 s_h = image.info.props.is_block ? Common::DivCeil(h, 4u) : h;
-        const u32 size = s_w * s_h * (image.info.num_bits / 8);
-        const u64 hash = XXH3_64bits(addr, size);
+            const u32 s_w = image.info.props.is_block ? Common::DivCeil(w, 4u) : w;
+            const u32 s_h = image.info.props.is_block ? Common::DivCeil(h, 4u) : h;
+            const u32 size = s_w * s_h * (image.info.num_bits / 8);
+            hash = XXH3_64bits(addr, size);
+        }
         if (image.hash == hash) {
             image.flags &= ~ImageFlagBits::MaybeCpuDirty;
-            return;
+            // bbport (#360): a GPU buffer write marked the image too (GpuDirty): it reloads
+            // from the buffer cache now, not one binding later. The same-range hash matches
+            // from the first check on, where the 8x8 one never did.
+            if (!GpuHashFix() || False(image.flags & ImageFlagBits::GpuDirty)) {
+                return;
+            }
         }
         image.hash = hash;
     }
@@ -901,6 +1166,19 @@ void TextureCache::RefreshImage(Image& image) {
     const u32 num_mips = image.info.resources.levels;
     const bool is_gpu_modified = True(image.flags & ImageFlagBits::GpuModified);
     const bool is_gpu_dirty = True(image.flags & ImageFlagBits::GpuDirty);
+    const bool diag = TexDiagFor(image.info.guest_address, image.info.guest_size);
+    const ImageFlagBits flags_before = image.flags;
+    const bool had_reference =
+        diag && std::ranges::any_of(image.mip_hashes, [](u64 hash) { return hash != 0; });
+
+    if (KeepGpuImages() && is_gpu_modified && !is_gpu_dirty) {
+        if (diag && TexDiagNote(UploadOverGpu, image.image_uid)) {
+            std::printf("Texture diag: kept GPU-written %s (BB_TEX_KEEP_GPU)\n",
+                        TexDiagImage(image).c_str());
+        }
+        image.flags &= ~ImageFlagBits::Dirty;
+        return;
+    }
 
     BbStats::image_upload_bytes.fetch_add(image.info.guest_size, std::memory_order_relaxed);
     boost::container::small_vector<vk::BufferImageCopy, 14> image_copies;
@@ -912,7 +1190,27 @@ void TextureCache::RefreshImage(Image& image) {
         const auto [mip_size, mip_pitch, mip_height, mip_offset] = image.info.mips_layout[m];
 
         // Protect GPU modified resources from accidental CPU reuploads.
-        if (is_gpu_modified && !is_gpu_dirty) {
+        if (GpuHashFix()) {
+            // bbport (Linux fork 4f5a95a + e0baa3b): uploads of images the GPU writes or may
+            // write (GPU-modified ones, GPU-dirty too; small ones, targets, storage images)
+            // record the guest memory they saw, not only uploads of images the GPU had already
+            // written. An image the GPU writes after an upload from the buffer cache (GpuDirty)
+            // or from a plain texture otherwise had no reference, and the first CPU write
+            // anywhere in its pages replaced the GPU's contents with stale guest memory. A
+            // storage image's first binding counts through GpuModified: FindTexture marks it
+            // before the upload, BindTextures sets usage.storage only after. Streamed textures
+            // are not hashed: their whole size again on the GPU thread.
+            const bool track = is_gpu_modified || mip_size <= 64_KB || image.usage.storage ||
+                               image.usage.render_target || image.usage.depth_target;
+            if (track) {
+                const u8* mip_addr = std::bit_cast<u8*>(image.info.guest_address) + mip_offset;
+                const u64 mip_hash = XXH3_64bits(mip_addr, mip_size);
+                if (is_gpu_modified && !is_gpu_dirty && image.mip_hashes[m] == mip_hash) {
+                    continue;
+                }
+                image.mip_hashes[m] = mip_hash;
+            }
+        } else if (is_gpu_modified && !is_gpu_dirty) {
             const u8* addr = std::bit_cast<u8*>(image.info.guest_address);
             const u64 hash = XXH3_64bits(addr + mip_offset, mip_size);
             if (image.mip_hashes[m] == hash) {
@@ -941,6 +1239,33 @@ void TextureCache::RefreshImage(Image& image) {
     if (image_copies.empty()) {
         image.flags &= ~ImageFlagBits::Dirty;
         return;
+    }
+
+    if (diag) {
+        // A new image has every dirty bit (Image's initial flags); later reasons come one by one.
+        const bool fresh = (flags_before & ImageFlagBits::Dirty) == ImageFlagBits::Dirty;
+        const bool from_gpu =
+            buffer_cache.IsRegionGpuModified(image.info.guest_address, image.info.guest_size);
+        const char* fill =
+            from_gpu ? nullptr : TexDiagFillKind(image.info.guest_address, image.info.guest_size);
+        const char* reason = fresh ? "new image"
+                             : True(flags_before & ImageFlagBits::GpuDirty) ? "GPU buffer write"
+                             : True(flags_before & ImageFlagBits::CpuDirty)
+                                 ? "CPU write or read back"
+                                 : "CPU write in its page";
+        if (is_gpu_modified && !fresh && TexDiagNote(UploadOverGpu, image.image_uid)) {
+            std::printf("Texture diag: upload over GPU-written %s: %s, %u of %u mips, reference "
+                        "%s, from %s%s%s\n",
+                        TexDiagImage(image).c_str(), reason, u32(image_copies.size()), num_mips,
+                        had_reference ? "yes" : "no", from_gpu ? "a GPU buffer" : "guest memory",
+                        fill ? ", " : "", fill ? fill : "");
+        } else if (fill && (std::string_view{fill} == "all ff" || !is_gpu_modified) &&
+                   TexDiagNote(UploadFill, image.image_uid)) {
+            // All-0xff always; all-zero only for images the GPU did not write (new render
+            // targets over cleared memory are common).
+            std::printf("Texture diag: upload of %s guest memory to %s: %s\n", fill,
+                        TexDiagImage(image).c_str(), reason);
+        }
     }
 
     scheduler.EndRendering();
@@ -1166,10 +1491,22 @@ void TextureCache::GarbageCollectImages() {
         if (num_deletions == 0) {
             return true;
         }
-        --num_deletions;
         auto& image = slot_images[image_id];
         const bool download = image.SafeToDownload();
         const bool tiled = image.info.IsTiled();
+        const bool gpu_written = True(image.flags & ImageFlagBits::GpuModified);
+        const bool diag = TexDiagFor(image.info.guest_address, image.info.guest_size);
+        if (gpu_written && !download && False(image.flags & ImageFlagBits::GpuDirty) &&
+            !pressured && GcKeepGpuImages()) {
+            // Kept images neither use up a deletion nor stay first in line (a run of them
+            // stopped the collector, Linux fork 7511492/0680e7c): back of the list.
+            lru_cache.Touch(image.lru_id, gc_tick);
+            if (diag && TexDiagNote(GcKeep, image.image_uid)) {
+                std::printf("Texture diag: GC kept %s\n", TexDiagImage(image).c_str());
+            }
+            return false;
+        }
+        --num_deletions;
         if (tiled && download) {
             // This is a workaround for now. We can't handle non-linear image downloads.
             return false;
@@ -1183,6 +1520,9 @@ void TextureCache::GarbageCollectImages() {
             // had meanwhile stored there (e.g. its heap after unloading an area).
             DownloadImageMemory(image_id, true);
             ++gc_downloads;
+        } else if (gpu_written && diag && TexDiagNote(GcDrop, image.image_uid)) {
+            std::printf("Texture diag: GC evicts %s without writing it back\n",
+                        TexDiagImage(image).c_str());
         }
         ++gc_evictions;
         FreeImage(image_id);
@@ -1274,6 +1614,9 @@ void TextureCache::RunGarbageCollector() {
     {
         std::scoped_lock lock{mutex};
         ApplyBackingWrites();
+    }
+    if (TexDiagConfig().on) {
+        TexDiagSummary();
     }
 
     GarbageCollectImages();

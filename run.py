@@ -152,6 +152,11 @@ def main():
     # (a finite value beyond +-65504 stays finite, not +-Inf on NVIDIA; BB_F16_RTZ=1, its own
     # shader cache) unless the player chose otherwise.
     player_rtz = env.get('BB_F16_RTZ')
+    # Uncharted 2's dropped weapons, texture side (#360): DMA fills on the GPU reload the images
+    # they cover (BB_FILL_INVALIDATE=1), and GPU-written textures a CPU write made dirty stay in
+    # VRAM below the pressure mark instead of being rebuilt from stale guest memory
+    # (BB_GC_KEEP_GPU=1), unless the player chose otherwise.
+    player_tex = {name: env.get(name) for name in ('BB_FILL_INVALIDATE', 'BB_GC_KEEP_GPU')}
     while True:
         if player_merge is None:
             if exe == EXECUTABLES['u2']:
@@ -163,6 +168,12 @@ def main():
                 env['BB_F16_RTZ'] = '1'
             else:
                 env.pop('BB_F16_RTZ', None)
+        for name, value in player_tex.items():
+            if value is None:
+                if exe == EXECUTABLES['u2']:
+                    env[name] = '1'
+                else:
+                    env.pop(name, None)
         game, file = locate(env, exe)
         if not game:
             fail('Set BB_GAME_DIR to the game folder (the one with eboot.bin).')

@@ -117,6 +117,13 @@ public:
     /// overlapping it is dirty, not only one starting at the address (copies moving textures).
     void InvalidateMemoryFromGPU(VAddr address, size_t max_size, bool whole_range = false);
 
+    /// bbport (#360): the GPU wrote guest memory in [address, address + size) as a buffer. Images
+    /// whose contents come from memory (not GPU-modified) reload from it. A GPU-modified image
+    /// holds its contents itself, and a reload would put the buffer's copy of the whole image
+    /// over them: it reloads only when the write covers it whole (`covered_gpu_images`, DMA
+    /// fills), else only when it starts at `address` (the storage-buffer rule).
+    void InvalidateMemoryFromGpuRange(VAddr address, size_t size, bool covered_gpu_images);
+
     /// Evicts any images that overlap the unmapped range.
     void UnmapMemory(VAddr cpu_addr, size_t size);
 
@@ -394,6 +401,7 @@ private:
     void UntrackImageTail(ImageId image_id);
 
     void MarkAsMaybeDirty(ImageId image_id, Image& image);
+    static u64 MaybeDirtyHash(const Image& image);
 
     /// Removes the image and any views/surface metas that reference it.
     void DeleteImage(ImageId image_id);

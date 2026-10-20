@@ -72,6 +72,12 @@ code runs directly on your PC and the graphics are translated to Vulkan. Unpack 
   beyond the half range yellow), `BB_CMP_UNORDERED=1` and `BB_CMP_CLASS_EXACT=1` give NaN and
   Inf compares the GCN results, `BB_OCCLUSION_LOG=1` / `BB_OCCLUSION_PIXELS=<n>` show and change
   the synthetic occlusion query counts. Each shader switch builds its own shader cache once.
+  A second suspect is a GPU-written texture reloaded from stale guest memory: in all games,
+  GPU-written contents that a CPU write left unchanged are now kept (`BB_TEX_GPU_HASH=0` to
+  compare), and for Uncharted 2 run.py also sets `BB_FILL_INVALIDATE=1` (DMA fills done on the
+  GPU reload the textures they overwrite) and `BB_GC_KEEP_GPU=1` (GPU-written textures a CPU
+  write made dirty stay in VRAM below the pressure mark); `BB_TEX_DIAG=1` logs how GPU-written
+  data reaches textures.
 - **Frame rate:** idle Naughty Dog job workers sleep instead of spinning (`BB_JOB_SLEEP=0`: off),
   and `BB_FRAME_STATS=1` prints where the GPU thread waits (in `last_run.log`, every 5 s).
   `BB_ASC_FENCES=1` (experiment, off by default) stops the compute queues' fences from stalling

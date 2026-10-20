@@ -2750,6 +2750,17 @@ VAddr WatchedGpuWrite() {
     }();
     return value;
 }
+
+/// bbport diagnosis (#360): BB_STORAGE_INVALIDATE=1: a storage-buffer write (up to 64 MiB)
+/// makes every image over the buffer that the GPU did not write reload, not only one starting
+/// at the buffer's address. Costs uploads: a test for textures the GPU fills through buffers.
+bool StorageInvalidatesRange() {
+    static const bool value = [] {
+        const char* env = std::getenv("BB_STORAGE_INVALIDATE");
+        return env && env[0] == '1';
+    }();
+    return value;
+}
 } // namespace
 
 void Rasterizer::BindBuffers(const Shader::Info& stage, const PreparedStage* prepared,
@@ -2933,7 +2944,12 @@ void Rasterizer::BindBuffers(const Shader::Info& stage, const PreparedStage* pre
                 }
                 if (desc.is_written) {
                     // Raw storage-buffer writes can also make an aliased cached image stale.
-                    texture_cache.InvalidateMemoryFromGPU(vsharp.base_address, size);
+                    if (StorageInvalidatesRange() && size <= (u64{64} << 20)) {
+                        texture_cache.InvalidateMemoryFromGpuRange(vsharp.base_address, size,
+                                                                   false);
+                    } else {
+                        texture_cache.InvalidateMemoryFromGPU(vsharp.base_address, size);
+                    }
                 }
                 needs_barrier |= runtime.IsBufferAccessed(buffer, offset, size, desc.is_written);
                 if (const VAddr watch = WatchedGpuWrite();
@@ -3910,6 +3926,34 @@ void Rasterizer::DepthStencilCopy(bool is_depth, bool is_stencil) {
     ScopeMarkerEnd();
 }
 
+namespace {
+/// bbport (#360): BB_FILL_INVALIDATE=1 (run.py sets it for Uncharted 2): a DMA fill done on
+/// the GPU (its range holds GPU data) makes the cached images over it reload, GPU-written ones
+/// only when it covers them whole. Off (as before): it wrote the buffer cache only, textures
+/// there kept their old contents, and rebuilt from memory later they showed the fill (or,
+/// without read backs, stale guest memory).
+bool FillInvalidatesImages() {
+    static const bool value = [] {
+        const char* env = std::getenv("BB_FILL_INVALIDATE");
+        return env && env[0] == '1';
+    }();
+    return value;
+}
+
+/// bbport diagnosis (#360): BB_DMA_WAIT_COPIES=1: DMA fills and copies done in guest memory
+/// first wait for the guest memory copies already queued (texture and buffer uploads on the
+/// recording and copy threads), as WriteData does. Otherwise a fill can overtake the upload of
+/// a texture an earlier draw samples, which then sees the fill.
+bool DmaWaitsForHostCopies() {
+    static const bool value = [] {
+        const char* env = std::getenv("BB_DMA_WAIT_COPIES");
+        return env && env[0] == '1';
+    }();
+    return value;
+}
+
+} // namespace
+
 void Rasterizer::FillBuffer(VAddr address, u32 num_bytes, u32 value, bool is_gds) {
     DrainDrawPipe();
     ASSERT_MSG(address % 4 == 0 && num_bytes % 4 == 0,
@@ -3917,9 +3961,15 @@ void Rasterizer::FillBuffer(VAddr address, u32 num_bytes, u32 value, bool is_gds
     if (!is_gds) {
         texture_cache.ClearMeta(address);
         if (!buffer_cache.IsRegionGpuModified(address, num_bytes)) {
+            if (DmaWaitsForHostCopies()) {
+                scheduler.WaitHostCopies();
+            }
             u32* buffer = std::bit_cast<u32*>(address);
             std::fill(buffer, buffer + (num_bytes / sizeof(u32)), value);
             return;
+        }
+        if (FillInvalidatesImages()) {
+            texture_cache.InvalidateMemoryFromGpuRange(address, num_bytes, true);
         }
     }
     const auto [buffer, offset] = [&] -> std::pair<const VideoCore::Buffer*, u64> {
@@ -3946,6 +3996,9 @@ void Rasterizer::CopyBuffer(VAddr dst, VAddr src, u32 num_bytes, bool dst_gds, b
     if (!dst_gds && !buffer_cache.IsRegionGpuModified(dst, num_bytes)) {
         if (!src_gds && !buffer_cache.IsRegionGpuModified(src, num_bytes) &&
             !texture_cache.FindImageFromRange(src, num_bytes)) {
+            if (DmaWaitsForHostCopies()) {
+                scheduler.WaitHostCopies();
+            }
             // Both buffers were not transferred to GPU yet. Can safely copy in host memory.
             std::memcpy(std::bit_cast<void*>(dst), std::bit_cast<void*>(src), num_bytes);
             return;
