@@ -83,8 +83,11 @@ done
 find "$dest" -name __pycache__ -prune -exec rm -r {} +
 mkdir -p dist
 rm -f dist/uncharted-windows.zip
-(cd out/stage && powershell -NoProfile -Command \
-    "Compress-Archive -Path uncharted-windows -DestinationPath ../../dist/uncharted-windows.zip")
+# Not Compress-Archive, which writes backslashes that Linux tools keep in the file names (#246).
+(cd out/stage && ../pyenv/Scripts/python.exe -c "
+import pathlib, zipfile
+with zipfile.ZipFile('../../dist/uncharted-windows.zip', 'w', zipfile.ZIP_DEFLATED, compresslevel=9) as z:
+    for p in sorted(pathlib.Path('uncharted-windows').rglob('*')): z.write(p)")
 
 # Refresh dist/uncharted-windows, keeping what players create there (saves, settings), and only
 # while nothing runs from it: deleting a running launcher's files breaks it.
