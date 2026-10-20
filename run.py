@@ -148,12 +148,21 @@ def main():
     # of chapter 21) from memory it also writes: merging leaves them on the GPU, so it runs with
     # accurate GPU memory (BB_GPU_MERGE=0) unless the player chose otherwise.
     player_merge = env.get('BB_GPU_MERGE')
+    # Uncharted 2's dropped weapons: half-float colour packs round toward zero as on the PS4
+    # (a finite value beyond +-65504 stays finite, not +-Inf on NVIDIA; BB_F16_RTZ=1, its own
+    # shader cache) unless the player chose otherwise.
+    player_rtz = env.get('BB_F16_RTZ')
     while True:
         if player_merge is None:
             if exe == EXECUTABLES['u2']:
                 env['BB_GPU_MERGE'] = '0'
             else:
                 env.pop('BB_GPU_MERGE', None)
+        if player_rtz is None:
+            if exe == EXECUTABLES['u2']:
+                env['BB_F16_RTZ'] = '1'
+            else:
+                env.pop('BB_F16_RTZ', None)
         game, file = locate(env, exe)
         if not game:
             fail('Set BB_GAME_DIR to the game folder (the one with eboot.bin).')
