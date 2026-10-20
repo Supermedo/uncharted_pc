@@ -128,6 +128,9 @@ TK_KEYS = {'space': 'Space', 'Return': 'Return', 'Escape': 'Escape', 'Tab': 'Tab
            'KP_Insert': 'Keypad 0', 'KP_End': 'Keypad 1', 'KP_Down': 'Keypad 2', 'KP_Next': 'Keypad 3',
            'KP_Left': 'Keypad 4', 'KP_Begin': 'Keypad 5', 'KP_Right': 'Keypad 6', 'KP_Home': 'Keypad 7',
            'KP_Up': 'Keypad 8', 'KP_Prior': 'Keypad 9'}
+# Tk on Windows names numpad keys like the main ones ("8", "plus"), only the keycode tells them apart (#224).
+WIN_NUMPAD = {**{0x60 + n: f'Keypad {n}' for n in range(10)},
+              0x6A: 'Keypad *', 0x6B: 'Keypad +', 0x6D: 'Keypad -', 0x6E: 'Keypad .', 0x6F: 'Keypad /'}
 MOUSE_SENS_MIN, MOUSE_SENS_MAX = 0.1, 10.0  # the Controls page slider (the game's default pace is 1)
 # Insert opens the in-game settings menu; Left Alt frees the mouse cursor.
 RESERVED_KEYS = {'Insert': 'Insert opens the in-game settings menu.',
@@ -1176,7 +1179,8 @@ class Launcher:
         if sym in RESERVED_KEYS:
             self.status.configure(text=_(RESERVED_KEYS[sym]), fg=GOLD)
             return 'break'
-        name = TK_KEYS.get(sym)
+        name = WIN_NUMPAD.get(event.keycode) if sys.platform == 'win32' else None
+        name = name or TK_KEYS.get(sym)
         if not name and len(sym) == 1 and sym.isalnum():
             name = sym.upper()
         if not name and sym.startswith('F') and sym[1:].isdigit():
