@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include "bbport_nan_guard.h"
 #include "shader_recompiler/frontend/translate/translate.h"
 #include "shader_recompiler/ir/position.h"
 #include "shader_recompiler/ir/reinterpret.h"
@@ -90,6 +91,59 @@ void Translator::ExportRenderTarget(const GcnInst& inst) {
                 continue;
             }
             components[i] = ir.GetVectorReg<IR::F32>(IR::VectorReg(inst.src[i].code));
+        }
+    }
+
+    // bbport diagnosis: BB_NONFINITE_MARK=1 (bbport_nan_guard.h) paints the pixel when a
+    // component is non-finite or beyond the half-float range: NaN magenta, +Inf green, -Inf
+    // blue, finite beyond +-65504 yellow. Before the NaN guard (which runs at the store).
+    // Yellow only for float targets narrower than 32 bits, where the host turns such a value
+    // into Inf; 32-bit float targets hold it (depth, sky distances) and stay unmarked.
+    if (BbNanGuard::NonFiniteMark() && color_buffer.num_format != AmdGpu::NumberFormat::Uint &&
+        color_buffer.num_format != AmdGpu::NumberFormat::Sint) {
+        const bool mark_huge = color_buffer.num_format == AmdGpu::NumberFormat::Float &&
+                               color_buffer.data_format != AmdGpu::DataFormat::Format32 &&
+                               color_buffer.data_format != AmdGpu::DataFormat::Format32_32 &&
+                               color_buffer.data_format != AmdGpu::DataFormat::Format32_32_32 &&
+                               color_buffer.data_format != AmdGpu::DataFormat::Format32_32_32_32;
+        IR::U1 any_nan{ir.Imm1(false)};
+        IR::U1 any_pos_inf{ir.Imm1(false)};
+        IR::U1 any_neg_inf{ir.Imm1(false)};
+        IR::U1 any_huge{ir.Imm1(false)};
+        const IR::F32 zero{ir.Imm32(0.0f)};
+        for (const auto& comp : components) {
+            if (comp.IsEmpty()) {
+                continue;
+            }
+            const IR::U1 is_nan{ir.FPIsNan(comp)};
+            const IR::U1 is_inf{ir.FPIsInf(comp)};
+            any_nan = ir.LogicalOr(any_nan, is_nan);
+            any_pos_inf =
+                ir.LogicalOr(any_pos_inf, ir.LogicalAnd(is_inf, ir.FPGreaterThan(comp, zero)));
+            any_neg_inf =
+                ir.LogicalOr(any_neg_inf, ir.LogicalAnd(is_inf, ir.FPLessThan(comp, zero)));
+            // Ordered compare: false for NaN and, with the Inf test, finite values only.
+            if (mark_huge) {
+                any_huge = ir.LogicalOr(
+                    any_huge,
+                    ir.LogicalAnd(ir.LogicalNot(is_inf),
+                                  ir.FPGreaterThan(ir.FPAbs(comp), ir.Imm32(65504.0f))));
+            }
+        }
+        static constexpr std::array<std::array<f32, 4>, 4> marks{{
+            {8.0f, 0.0f, 8.0f, 1.0f}, // NaN: magenta
+            {0.0f, 8.0f, 0.0f, 1.0f}, // +Inf: green
+            {0.0f, 0.0f, 8.0f, 1.0f}, // -Inf: blue
+            {8.0f, 8.0f, 0.0f, 1.0f}, // beyond the half-float range: yellow
+        }};
+        for (u32 i = 0; i < 4; ++i) {
+            if (components[i].IsEmpty()) {
+                continue;
+            }
+            IR::F32 marked{ir.Select(any_huge, ir.Imm32(marks[3][i]), components[i])};
+            marked = IR::F32{ir.Select(any_neg_inf, ir.Imm32(marks[2][i]), marked)};
+            marked = IR::F32{ir.Select(any_pos_inf, ir.Imm32(marks[1][i]), marked)};
+            components[i] = IR::F32{ir.Select(any_nan, ir.Imm32(marks[0][i]), marked)};
         }
     }
 

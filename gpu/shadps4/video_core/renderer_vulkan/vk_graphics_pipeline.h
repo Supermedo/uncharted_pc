@@ -55,6 +55,7 @@ struct GraphicsPipelineKey {
         AmdGpu::ClipSpace clip_space : 1;
         AmdGpu::ProvokingVtxLast provoking_vtx_last : 1;
         u32 depth_clip_enable : 1;
+        u32 alpha_to_coverage : 1; ///< bbport: DB_ALPHA_TO_MASK (BB_ALPHA_TO_COVERAGE=1)
     };
 
     GraphicsPipelineKey() {

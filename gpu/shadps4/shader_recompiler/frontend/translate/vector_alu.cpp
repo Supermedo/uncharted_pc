@@ -1,6 +1,9 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <mutex>
+#include <set>
+#include "bbport_nan_guard.h"
 #include "shader_recompiler/frontend/opcodes.h"
 #include "shader_recompiler/frontend/translate/translate.h"
 #include "shader_recompiler/ir/attribute.h"
@@ -863,8 +866,22 @@ void Translator::V_CVT_PKNORM_I16_F32(const GcnInst& inst) {
 }
 
 void Translator::V_CVT_PKRTZ_F16_F32(const GcnInst& inst) {
-    const IR::Value vec_f32 =
-        ir.CompositeConstruct(GetSrc<IR::F32>(inst.src[0]), GetSrc<IR::F32>(inst.src[1]));
+    IR::F32 src0{GetSrc<IR::F32>(inst.src[0])};
+    IR::F32 src1{GetSrc<IR::F32>(inst.src[1])};
+    if (BbNanGuard::HalfRoundTowardZero()) {
+        // bbport: BB_F16_RTZ (bbport_nan_guard.h). Rounding toward zero turns a finite value
+        // beyond the half-float range into +-65504; Inf and NaN stay. Clamped before the pack,
+        // so it also holds where the pack is folded into a colour export (the f32 value then
+        // reaches the target, where the host may round it to +-Inf).
+        const auto rtz_range = [&](const IR::F32& value) {
+            const IR::F32 limit{ir.Imm32(65504.0f)};
+            const IR::U1 keep{ir.LogicalOr(ir.FPIsInf(value), ir.FPIsNan(value))};
+            return IR::F32{ir.Select(keep, value, ir.FPClamp(value, ir.FPNeg(limit), limit))};
+        };
+        src0 = rtz_range(src0);
+        src1 = rtz_range(src1);
+    }
+    const IR::Value vec_f32 = ir.CompositeConstruct(src0, src1);
     SetDst(inst.dst[0], ir.Pack2x16(AmdGpu::NumberFormat::Float, vec_f32));
 }
 
@@ -1214,25 +1231,54 @@ void Translator::V_MOVRELSD_B32(const GcnInst& inst) {
 
 // VOPC
 
+// bbport: the negated float compares (NGE = !(a >= b), ...) are dispatched as the opposite
+// compare (LT, ...); they differ when an operand is NaN, where the negated compare is true.
+// BB_CMP_UNORDERED=1 makes those unordered (bbport_nan_guard.h). These are all the negated
+// compares dispatched above (V_CMP_NLG_F32/F64 and V_CMPX_*_F64 are not translated).
+static bool IsNegatedFloatCompare(Opcode opcode) {
+    switch (opcode) {
+    case Opcode::V_CMP_NGE_F32:
+    case Opcode::V_CMP_NGT_F32:
+    case Opcode::V_CMP_NLE_F32:
+    case Opcode::V_CMP_NEQ_F32:
+    case Opcode::V_CMP_NLT_F32:
+    case Opcode::V_CMPX_NGE_F32:
+    case Opcode::V_CMPX_NLG_F32:
+    case Opcode::V_CMPX_NGT_F32:
+    case Opcode::V_CMPX_NLE_F32:
+    case Opcode::V_CMPX_NEQ_F32:
+    case Opcode::V_CMPX_NLT_F32:
+    case Opcode::V_CMP_NGE_F64:
+    case Opcode::V_CMP_NGT_F64:
+    case Opcode::V_CMP_NLE_F64:
+    case Opcode::V_CMP_NEQ_F64:
+    case Opcode::V_CMP_NLT_F64:
+        return BbNanGuard::UnorderedNegatedCompares();
+    default:
+        return false;
+    }
+}
+
 void Translator::V_CMP_F32(ConditionOp op, bool set_exec, const GcnInst& inst) {
     const IR::F32 src0{GetSrc<IR::F32>(inst.src[0])};
     const IR::F32 src1{GetSrc<IR::F32>(inst.src[1])};
+    const bool ordered = !IsNegatedFloatCompare(inst.opcode);
     const IR::U1 result = [&] {
         switch (op) {
         case ConditionOp::F:
             return ir.Imm1(false);
         case ConditionOp::EQ:
-            return ir.FPEqual(src0, src1);
+            return ir.FPEqual(src0, src1, ordered);
         case ConditionOp::LG:
-            return ir.FPNotEqual(src0, src1);
+            return ir.FPNotEqual(src0, src1, ordered);
         case ConditionOp::GT:
-            return ir.FPGreaterThan(src0, src1);
+            return ir.FPGreaterThan(src0, src1, ordered);
         case ConditionOp::LT:
-            return ir.FPLessThan(src0, src1);
+            return ir.FPLessThan(src0, src1, ordered);
         case ConditionOp::LE:
-            return ir.FPLessThanEqual(src0, src1);
+            return ir.FPLessThanEqual(src0, src1, ordered);
         case ConditionOp::GE:
-            return ir.FPGreaterThanEqual(src0, src1);
+            return ir.FPGreaterThanEqual(src0, src1, ordered);
         case ConditionOp::U:
             return ir.LogicalOr(ir.FPIsNan(src0), ir.FPIsNan(src1));
         default:
@@ -1253,22 +1299,23 @@ void Translator::V_CMP_F32(ConditionOp op, bool set_exec, const GcnInst& inst) {
 void Translator::V_CMP_F64(ConditionOp op, bool set_exec, const GcnInst& inst) {
     const IR::F64 src0{GetSrc64<IR::F64>(inst.src[0])};
     const IR::F64 src1{GetSrc64<IR::F64>(inst.src[1])};
+    const bool ordered = !IsNegatedFloatCompare(inst.opcode);
     const IR::U1 result = [&] {
         switch (op) {
         case ConditionOp::F:
             return ir.Imm1(false);
         case ConditionOp::EQ:
-            return ir.FPEqual(src0, src1);
+            return ir.FPEqual(src0, src1, ordered);
         case ConditionOp::LG:
-            return ir.FPNotEqual(src0, src1);
+            return ir.FPNotEqual(src0, src1, ordered);
         case ConditionOp::GT:
-            return ir.FPGreaterThan(src0, src1);
+            return ir.FPGreaterThan(src0, src1, ordered);
         case ConditionOp::LT:
-            return ir.FPLessThan(src0, src1);
+            return ir.FPLessThan(src0, src1, ordered);
         case ConditionOp::LE:
-            return ir.FPLessThanEqual(src0, src1);
+            return ir.FPLessThanEqual(src0, src1, ordered);
         case ConditionOp::GE:
-            return ir.FPGreaterThanEqual(src0, src1);
+            return ir.FPGreaterThanEqual(src0, src1, ordered);
         case ConditionOp::U:
             return ir.LogicalOr(ir.FPIsNan(src0), ir.FPIsNan(src1));
         default:
@@ -1360,6 +1407,30 @@ void Translator::V_CMP_CLASS_F32(const GcnInst& inst) {
     const IR::U32 src1{GetSrc(inst.src[1])};
     IR::U1 value;
     if (src1.IsImmediate()) {
+        // bbport: masks the shortcuts below test only in part, once per mask in the log (the
+        // shader cache hides them after the first run: BB_CMP_CLASS_EXACT recompiles all).
+        const u32 mask = src1.U32();
+        const auto nan = static_cast<u32>(IR::FloatClassFunc::NaN);
+        const auto inf = static_cast<u32>(IR::FloatClassFunc::Infinity);
+        const auto negative = static_cast<u32>(IR::FloatClassFunc::Negative);
+        if (mask != nan && mask != inf && mask != negative) {
+            static std::mutex logged_mutex;
+            static std::set<u32> logged;
+            std::scoped_lock lk{logged_mutex};
+            if (logged.insert(mask).second) {
+                LOG_WARNING(Render_Recompiler,
+                            "V_CMP_CLASS_F32 mask {:#x} (shader {:#x}): {}", mask, info.pgm_hash,
+                            BbNanGuard::ExactCmpClass()
+                                ? "every class tested (BB_CMP_CLASS_EXACT)"
+                                : ((mask & nan) == nan ? "tested as NaN only"
+                                   : (mask & inf) == inf ? "tested as Inf only"
+                                   : (mask & negative) == negative
+                                       ? "tested as <= 0 (+0 included)"
+                                       : "unsupported"));
+            }
+        }
+    }
+    if (src1.IsImmediate() && !BbNanGuard::ExactCmpClass()) {
         const auto class_mask = static_cast<IR::FloatClassFunc>(src1.U32());
         if ((class_mask & IR::FloatClassFunc::NaN) == IR::FloatClassFunc::NaN) {
             value = ir.FPIsNan(src0);

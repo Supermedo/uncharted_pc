@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <cstdlib>
+#include "bbport_nan_guard.h"
 #include "shader_recompiler/backend/spirv/emit_spirv_instructions.h"
 #include "shader_recompiler/backend/spirv/spirv_emit_context.h"
 
@@ -149,24 +150,28 @@ Id EmitFPSqrt(EmitContext& ctx, Id value) {
 // bbport: GCN's output clamp (like D3D's saturate) turns NaN into 0; SPIR-V's FClamp leaves it
 // undefined (NVIDIA: NaN or 1). Uncharted 3's cloth flutter computes clamp(exp2(e * log2(|g|)))
 // and gets NaN when the gust g and the exponent e are both 0: on PS4 no displacement, here
-// vertices flew off (Sully's shirt in green screen-size fans for single frames). Vertex shaders
-// only: in all stages some U3 shader then hung the GPU (a NaN this port makes elsewhere that
+// vertices flew off (Sully's shirt in green screen-size fans for single frames). Never in compute
+// shaders: in all stages some U3 shader then hung the GPU (a NaN this port makes elsewhere that
 // FClamp happened to turn into 1).
-static bool SaturateNan() {
-    static const bool enabled = [] {
-        // BB_SATURATE_NAN=1 (opt-in: it changes compiled shaders, clear the shader cache).
-        // Tried against U3's flying cloth vertices: no change.
-        const char* env = std::getenv("BB_SATURATE_NAN");
-        return env && env[0] == '1';
-    }();
-    return enabled;
+// BB_SATURATE_NAN=1: vertex shaders (tried against U3's flying cloth vertices: no change);
+// =2: vertex and pixel shaders, for colours a NaN turned white (Uncharted 2's dropped weapons on
+// NVIDIA). Opt-in; each mode caches its shaders apart (bbport_nan_guard.h).
+static bool SaturateNan(Shader::SwStage stage) {
+    switch (BbNanGuard::SaturateNanMode()) {
+    case 1:
+        return stage == Shader::SwStage::Vertex;
+    case 2:
+        return stage == Shader::SwStage::Vertex || stage == Shader::SwStage::Fragment;
+    default:
+        return false;
+    }
 }
 
 Id EmitFPSaturate32(EmitContext& ctx, Id value) {
     const Id zero{ctx.ConstF32(f32{0.0})};
     const Id one{ctx.ConstF32(f32{1.0})};
     const Id clamped{ctx.OpFClamp(ctx.F32[1], value, zero, one)};
-    if (!SaturateNan() || ctx.sw_stage != Shader::SwStage::Vertex) {
+    if (!SaturateNan(ctx.sw_stage)) {
         return clamped;
     }
     return ctx.OpSelect(ctx.F32[1], ctx.OpIsNan(ctx.U1[1], value), zero, clamped);

@@ -10,6 +10,7 @@
 #include <string>
 #include <unordered_set>
 
+#include "bbport_nan_guard.h"
 #include "common/hash.h"
 #include "common/io_file.h"
 #include "common/path_util.h"
@@ -598,6 +599,23 @@ bool PipelineCache::RefreshGraphicsKey(PipelineSelection& sel) {
         if (sel.motion && !RefreshGraphicsStages(sel)) {
             return false;
         }
+    }
+
+    // bbport: DB_ALPHA_TO_MASK (context register 0x2DC, bit 0 ALPHA_TO_MASK_ENABLE) turns MRT0's
+    // alpha into sample coverage, also with one sample (2x2 dithered by its offsets): sprites
+    // fading out through it are drawn whole without it. Not emulated by default; with
+    // BB_ALPHA_TO_COVERAGE=1 (bbport_nan_guard.h) the pipeline enables Vulkan's alpha to
+    // coverage (host dithering). Only when the pixel shader exports MRT0, so that it declares the
+    // location 0 output Vulkan reads the alpha from (VUID-VkGraphicsPipelineCreateInfo-
+    // alphaToCoverageEnable-08891). mrt_mask, not Info::stores: only the former is kept with
+    // shaders loaded from the cache, and the key must come out the same for them.
+    if (BbNanGuard::AlphaToCoverage() && !skip_cb_binding) {
+        constexpr u32 DbAlphaToMask = 0xA2DC;
+        key.alpha_to_coverage =
+            (regs.reg_array[DbAlphaToMask] & 1u) != 0 &&
+            !regs.depth_shader_control.alpha_to_mask_disable && regs.color_buffers[0] &&
+            regs.color_target_mask.GetMask(0) != 0 && (key.mrt_mask & 1u) != 0 &&
+            key.color_buffers[0].export_format != AmdGpu::ShaderExportFormat::Zero;
     }
 
     // Second pass to mask out render targets not written by shader and fill remaining info
