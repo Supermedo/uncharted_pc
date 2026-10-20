@@ -65,9 +65,7 @@ TextureCache::~TextureCache() = default;
 
 void TextureCache::ProcessDownloadImages() {
     std::unique_lock lk{download_images_mutex};
-    for (const ImageId image_id : download_images) {
-        DownloadImageMemory(image_id, true);
-    }
+    DownloadImagesSync();
     download_images.clear();
     // bbport: tiny render targets the CPU reads, downloaded without waiting (they reach guest
     // memory when the GPU gets there, a frame late at most).
@@ -89,18 +87,15 @@ static bool ReadbackSmallTargets() {
     return value;
 }
 
-void TextureCache::DownloadImageMemory(ImageId image_id, bool sync) {
-    Image& image = slot_images[image_id];
-    if (False(image.flags & ImageFlagBits::GpuModified)) {
-        return;
-    }
-    const u32 download_size = image.info.pitch * image.info.size.height * image.info.size.depth *
-                              image.info.resources.layers * (image.info.num_bits / 8);
-    ASSERT(download_size <= image.info.guest_size);
-    const auto download =
-        runtime.GetStagingPool().Request(download_size, MemoryType::HostCached, 16, !sync);
-    const vk::BufferImageCopy image_download = {
-        .bufferOffset = download.offset,
+/// The guest bytes of an image's download and its copy into `buffer_offset` of a staging buffer.
+static u32 ImageDownloadSize(const Image& image) {
+    return image.info.pitch * image.info.size.height * image.info.size.depth *
+           image.info.resources.layers * (image.info.num_bits / 8);
+}
+
+static vk::BufferImageCopy ImageDownloadCopy(const Image& image, u64 buffer_offset) {
+    return {
+        .bufferOffset = buffer_offset,
         .bufferRowLength = image.info.pitch,
         .bufferImageHeight = image.info.size.height,
         .imageSubresource =
@@ -114,6 +109,63 @@ void TextureCache::DownloadImageMemory(ImageId image_id, bool sync) {
         .imageOffset = {0, 0, 0},
         .imageExtent = {image.info.size.width, image.info.size.height, image.info.size.depth},
     };
+}
+
+/// bbport: the synchronous downloads (BB_READBACK_LINEAR) of a fence: every copy is recorded
+/// first and the GPU is waited for once. Each image waited for the whole GPU queue on its own
+/// before, a full stall per image at every end-of-pipe fence. BB_READBACK_BATCH=0: one wait
+/// per image again. Under download_images_mutex.
+void TextureCache::DownloadImagesSync() {
+    static const bool batch = [] {
+        const char* env = std::getenv("BB_READBACK_BATCH");
+        return !(env && env[0] == '0');
+    }();
+    if (!batch) {
+        for (const ImageId image_id : download_images) {
+            DownloadImageMemory(image_id, true);
+        }
+        return;
+    }
+    struct Pending {
+        VAddr address;
+        Vulkan::StagingBufferRef download;
+        u32 size;
+    };
+    boost::container::small_vector<Pending, 8> pending;
+    for (const ImageId image_id : download_images) {
+        Image& image = slot_images[image_id];
+        if (False(image.flags & ImageFlagBits::GpuModified)) {
+            continue;
+        }
+        const u32 download_size = ImageDownloadSize(image);
+        ASSERT(download_size <= image.info.guest_size);
+        const auto download =
+            runtime.GetStagingPool().Request(download_size, MemoryType::HostCached, 16);
+        const auto copy = ImageDownloadCopy(image, download.offset);
+        runtime.DownloadImage(&image, download.buffer, std::span{&copy, 1});
+        pending.push_back({image.info.guest_address, download, download_size});
+    }
+    if (pending.empty()) {
+        return;
+    }
+    scheduler.Finish();
+    for (const auto& [address, download, size] : pending) {
+        download.Invalidate();
+        Core::Memory::Instance()->TryWriteBacking(std::bit_cast<u8*>(address), download.mapped,
+                                                  size);
+    }
+}
+
+void TextureCache::DownloadImageMemory(ImageId image_id, bool sync) {
+    Image& image = slot_images[image_id];
+    if (False(image.flags & ImageFlagBits::GpuModified)) {
+        return;
+    }
+    const u32 download_size = ImageDownloadSize(image);
+    ASSERT(download_size <= image.info.guest_size);
+    const auto download =
+        runtime.GetStagingPool().Request(download_size, MemoryType::HostCached, 16, !sync);
+    const vk::BufferImageCopy image_download = ImageDownloadCopy(image, download.offset);
     runtime.DownloadImage(&image, download.buffer, std::span{&image_download, 1});
     if (sync) {
         scheduler.Finish();
@@ -747,13 +799,16 @@ ImageView& TextureCache::FindTexture(ImageId image_id, const ImageDesc& desc, Vi
 ImageView& TextureCache::FindRenderTarget(ImageId image_id, const ImageDesc& desc) {
     Image& image = slot_images[image_id];
     image.flags |= ImageFlagBits::GpuModified;
-    if (readback_linear_images && (!image.info.props.is_tiled || image.info.size.width <= 8)) {
-        std::unique_lock lk{download_images_mutex};
-        download_images.emplace(image_id);
-    } else if (ReadbackSmallTargets() && image.info.size.width <= 8 &&
-               image.info.size.height <= 8 && image.info.guest_address != 0) {
+    // bbport: tiny targets go back without waiting even with BB_READBACK_LINEAR (the advice for
+    // 0.3.6, which players keep): a synchronous download waits for the whole GPU queue.
+    if (ReadbackSmallTargets() && image.info.size.width <= 8 && image.info.size.height <= 8 &&
+        image.info.guest_address != 0) {
         std::unique_lock lk{download_images_mutex};
         small_download_images.emplace(image_id);
+    } else if (readback_linear_images &&
+               (!image.info.props.is_tiled || image.info.size.width <= 8)) {
+        std::unique_lock lk{download_images_mutex};
+        download_images.emplace(image_id);
     }
     image.usage.render_target = 1u;
     UpdateImage(image_id);
