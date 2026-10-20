@@ -21,6 +21,8 @@
 #include <future>
 #include <mutex>
 #include <queue>
+#include <string>
+#include <thread>
 
 namespace {
 
@@ -32,6 +34,30 @@ std::mutex m_request{};
 
 mz_zip_archive zip_ar{};
 bool ar_is_read_only{true};
+std::string device_tag{};
+
+std::string DeviceSuffix() {
+    return device_tag.empty() ? std::string{} : "-" + device_tag;
+}
+
+/// A cache from before the per-GPU names cannot be told from a mixed one (it belongs to whichever
+/// GPU wrote last, and the loader only compares the shader profile), and a build that reads it
+/// would rebuild it anyway: it is removed, on a thread of its own (it can hold tens of thousands
+/// of files).
+void RemoveUntaggedCache(const std::filesystem::path& untagged, const std::filesystem::path& tagged) {
+    if (device_tag.empty() || untagged == tagged) {
+        return;
+    }
+    std::error_code ec;
+    if (!std::filesystem::exists(untagged, ec)) {
+        return;
+    }
+    LOG_INFO(Render, "Removing the shader cache {} from before per-GPU caches", untagged.string());
+    std::thread{[untagged] {
+        std::error_code error;
+        std::filesystem::remove_all(untagged, error);
+    }}.detach();
+}
 
 } // namespace
 
@@ -90,6 +116,14 @@ constexpr std::string GetBlobFileExtension(BlobType type) {
     }
 }
 
+void DataBase::SetDeviceTag(std::string tag) {
+    device_tag = std::move(tag);
+}
+
+const std::string& DataBase::DeviceTag() const {
+    return device_tag;
+}
+
 void DataBase::Open() {
     if (opened) {
         return;
@@ -101,8 +135,12 @@ void DataBase::Open() {
     if (EmulatorSettings.IsPipelineCacheArchived()) {
         mz_zip_zero_struct(&zip_ar);
 
+        const auto base_name = std::string{game_info.GameSerial()} + BbNanGuard::ShaderCacheSuffix();
         cache_path = GetUserPath(PathType::CacheDir) /
-                     std::filesystem::path{std::string{game_info.GameSerial()} + BbNanGuard::ShaderCacheSuffix()}.replace_extension(".zip");
+                     std::filesystem::path{base_name + DeviceSuffix()}.replace_extension(".zip");
+        RemoveUntaggedCache(GetUserPath(PathType::CacheDir) /
+                               std::filesystem::path{base_name}.replace_extension(".zip"),
+                           cache_path);
 
         if (!mz_zip_reader_init_file(&zip_ar, cache_path.string().c_str(),
                                      MZ_ZIP_FLAG_READ_ALLOW_WRITING) ||
@@ -113,8 +151,9 @@ void DataBase::Open() {
             mz_zip_writer_init_file(&zip_ar, cache_path.string().c_str(), 0);
         }
     } else {
-        cache_path = GetUserPath(PathType::CacheDir) /
-                     (std::string{game_info.GameSerial()} + BbNanGuard::ShaderCacheSuffix());
+        const auto base_name = std::string{game_info.GameSerial()} + BbNanGuard::ShaderCacheSuffix();
+        cache_path = GetUserPath(PathType::CacheDir) / (base_name + DeviceSuffix());
+        RemoveUntaggedCache(GetUserPath(PathType::CacheDir) / base_name, cache_path);
         if (!std::filesystem::exists(cache_path)) {
             std::filesystem::create_directories(cache_path);
         }

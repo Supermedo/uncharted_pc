@@ -363,6 +363,7 @@ PipelineCache::PipelineCache(const Instance& instance_, Scheduler& scheduler_,
     std::vector<char> initial_data;
     if (EmulatorSettings.IsPipelineCacheEnabled()) {
         auto& db = Storage::DataBase::Instance();
+        db.SetDeviceTag(fmt::format("{:04x}-{:04x}", instance.GetVendorID(), instance.GetDeviceID()));
         db.Open();
         // Not warm until StartWarmUp has run and finished: nothing may select pipelines before.
         warm_done.store(false, std::memory_order_release);
@@ -374,6 +375,15 @@ PipelineCache::PipelineCache(const Instance& instance_, Scheduler& scheduler_,
                 std::ifstream file{driver_cache_path, std::ios::binary};
                 initial_data.resize(size);
                 if (!file.read(initial_data.data(), std::streamsize(size))) {
+                    initial_data.clear();
+                }
+                // The blob is the driver's own. One written by another GPU or driver version (the
+                // header, VkPipelineCacheHeaderVersionOne, names the device and driver) is not
+                // handed over: the spec asks drivers to ignore it, but Intel's Windows driver
+                // crashes on a blob from NVIDIA (igc64.dll, a read of 0x30) instead.
+                if (!initial_data.empty() && !DriverCacheHeaderMatches(initial_data)) {
+                    LOG_INFO(Render_Vulkan,
+                             "Driver pipeline cache is from another GPU or driver version: not used");
                     initial_data.clear();
                 }
             }
@@ -396,6 +406,20 @@ PipelineCache::PipelineCache(const Instance& instance_, Scheduler& scheduler_,
         driver_cache_saver = std::jthread([this](std::stop_token stop) { DriverCacheSaver(stop); });
     }
     g_exit_pipeline_cache = this;
+}
+
+bool PipelineCache::DriverCacheHeaderMatches(const std::vector<char>& data) const {
+    // VkPipelineCacheHeaderVersionOne: headerSize, headerVersion, vendorID, deviceID, UUID.
+    constexpr size_t HeaderSize = 16 + VK_UUID_SIZE;
+    if (data.size() < HeaderSize) {
+        return false;
+    }
+    u32 header[4]{};
+    std::memcpy(header, data.data(), sizeof(header));
+    const auto uuid = instance.GetPipelineCacheUUID();
+    return header[0] >= HeaderSize && header[1] == u32(vk::PipelineCacheHeaderVersion::eOne) &&
+           header[2] == instance.GetVendorID() && header[3] == instance.GetDeviceID() &&
+           std::memcmp(data.data() + 16, uuid.data(), VK_UUID_SIZE) == 0;
 }
 
 PipelineCache::~PipelineCache() {

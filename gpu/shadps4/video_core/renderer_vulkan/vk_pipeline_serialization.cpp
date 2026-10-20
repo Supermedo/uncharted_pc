@@ -272,13 +272,19 @@ void PipelineCache::WarmUpThread() {
             .count();
     };
 
-    // Check if cache is compatible
+    // Check if cache is compatible: the shader profile (what the translator was told about the
+    // GPU) and the GPU it was written by must both be the current ones.
     std::vector<u8> profile_data{};
     db.Load(Storage::BlobType::ShaderProfile, "profile", profile_data);
+    std::vector<u8> device_data{};
+    db.Load(Storage::BlobType::ShaderProfile, "device", device_data);
+    const auto& device_tag = db.DeviceTag();
     const auto write_profile = [&] {
         profile_data.resize(sizeof(profile));
         std::memcpy(profile_data.data(), &profile, sizeof(profile));
         db.Save(Storage::BlobType::ShaderProfile, "profile", std::move(profile_data));
+        db.Save(Storage::BlobType::ShaderProfile, "device",
+                std::vector<u8>(device_tag.begin(), device_tag.end()));
     };
     bool compatible = true;
     if (profile_data.empty()) {
@@ -294,7 +300,13 @@ void PipelineCache::WarmUpThread() {
         if (profile_data.size() == sizeof(Shader::Profile)) {
             std::memcpy(&cached_profile, profile_data.data(), sizeof(cached_profile));
         }
-        if (profile_data.size() != sizeof(Shader::Profile) || cached_profile != profile) {
+        // bbport: a cache folder also names its GPU; blobs another GPU wrote can pass the
+        // profile comparison and then crash the driver's compiler (Intel igc64 on NVIDIA's).
+        const bool same_device = device_data.size() == device_tag.size() &&
+                                 std::equal(device_data.begin(), device_data.end(),
+                                            device_tag.begin());
+        if (profile_data.size() != sizeof(Shader::Profile) || cached_profile != profile ||
+            !same_device) {
             // bbport: upstream closed the cache for the session here, so it was never rewritten
             // and every later session compiled every shader again (stutters on each new area).
             // Start a fresh cache for this build and GPU instead.

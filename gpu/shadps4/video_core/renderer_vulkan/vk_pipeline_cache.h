@@ -193,6 +193,8 @@ private:
         }
     }
     void WaitWarm();
+    /// The driver cache blob was written by this device and driver version.
+    bool DriverCacheHeaderMatches(const std::vector<char>& data) const;
     void SaveDriverCache();
     size_t DriverCacheSize();
     void DriverCacheSaver(std::stop_token stop);

@@ -8,6 +8,7 @@
 #include "common/types.h"
 
 #include <functional>
+#include <string>
 #include <thread>
 #include <vector>
 
@@ -26,6 +27,11 @@ public:
         return *Common::Singleton<DataBase>::Instance();
     }
 
+    /// bbport: names the GPU (vendor, device) the cache belongs to; call before Open(). Each GPU
+    /// gets its own cache, so a PC with two GPUs, or one whose GPU was replaced, does not feed one
+    /// card's shaders and driver cache to the other or throw them away on every switch.
+    void SetDeviceTag(std::string tag);
+    [[nodiscard]] const std::string& DeviceTag() const;
     void Open();
     void Close();
     [[nodiscard]] bool IsOpened() const {
