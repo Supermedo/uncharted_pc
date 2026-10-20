@@ -32,9 +32,10 @@ int bbgpu_text_input_begin(const char *initial_utf8, const char *prompt_utf8);
 int bbgpu_text_input_poll(char *out_utf8, uint64_t size);
 /* 1 while the in-game settings menu is open: the game's pad input is held neutral. */
 int bbgpu_overlay_captures_input(void);
-/* Button prompts (button_prompts.cpp): 1 after controller input (the game's PlayStation buttons),
- * 0 after keyboard or mouse input (pictures of the bound keys). */
-void bbgpu_prompts_controller(int controller);
+/* Button prompts (button_prompts.cpp), the device used last: 0 keyboard or mouse (pictures of the
+ * bound keys), 1 a PlayStation controller (the game's own buttons), 2 an Xbox or other controller
+ * (Xbox buttons). */
+void bbgpu_prompts_controller(int device);
 /* Mouse controls: look=1 captures the cursor while the game window has the focus (relative
  * mode). sample returns the motion (pixels) and wheel steps since the last call and the held
  * buttons (1 left, 2 right, 4 middle, 8 X1, 16 X2); 1 while the cursor is captured. */

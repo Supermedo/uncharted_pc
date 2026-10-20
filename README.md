@@ -20,8 +20,9 @@ code runs directly on your PC and the graphics are translated to Vulkan. Unpack 
 - Anti-aliasing with TAA, AMD FSR 3.1, AMD FSR 4 or NVIDIA DLSS (DLAA).
 - Frame generation: AMD FSR 3 (any GPU) or NVIDIA DLSS (RTX 40 2x, RTX 50 up to 4x).
 - Keyboard, mouse and controller together, all remappable. Mouse look in U3.
-- Button prompts show your keyboard and mouse keys while you play with them, and the
-  PlayStation buttons again after controller input. Keys follow your keyboard layout (AZERTY...).
+- Button prompts show your keyboard and mouse keys while you play with them, Xbox buttons after
+  input from an Xbox (or other) controller, and the PlayStation buttons after a PlayStation
+  controller. Keys follow your keyboard layout (AZERTY...).
 - Add to Steam and desktop shortcuts from the launcher, automatic updates.
 
 ## Requirements
@@ -81,7 +82,8 @@ FSR 4 assets from [FireBurn/Q2RTX](https://github.com/FireBurn/Q2RTX), the
 [xbyak](https://github.com/herumi/xbyak),
 [Vulkan Memory Allocator](https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator),
 [MSYS2](https://www.msys2.org) / [LLVM](https://llvm.org), [PyInstaller](https://pyinstaller.org),
-[Pillow](https://python-pillow.org) and the Cinzel font (SIL Open Font License).
+[Pillow](https://python-pillow.org), the Cinzel font (SIL Open Font License) and the Xbox
+button pictures from [Kenney](https://kenney.nl/assets/input-prompts)'s Input Prompts (CC0).
 
 NVIDIA, GeForce RTX and DLSS are trademarks of NVIDIA Corporation. The default covers and the
 icon are original artwork; no official art is included.

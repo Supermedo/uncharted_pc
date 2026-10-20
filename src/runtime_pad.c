@@ -550,6 +550,15 @@ const RuntimeGuestCallback *runtime_guest_callbacks(size_t *count) {
     return guest_callbacks;
 }
 
+/* The button pictures for this controller: 1 PlayStation (DualShock, DualSense: the game's own),
+ * 2 Xbox (everything else; the buttons are named by position, so a Switch pad is shown as the
+ * Xbox layout). */
+static int prompts_pad_device(SDL_Gamepad *g) {
+    const SDL_GamepadType type=SDL_GetGamepadType(g);
+    if (type==SDL_GAMEPAD_TYPE_PS3 || type==SDL_GAMEPAD_TYPE_PS4 || type==SDL_GAMEPAD_TYPE_PS5) return 1;
+    return SDL_GetGamepadButtonLabel(g,SDL_GAMEPAD_BUTTON_SOUTH)==SDL_GAMEPAD_BUTTON_LABEL_CROSS ? 1 : 2;
+}
+
 static void sample_host(PadData *d) {
     memset(d,0,sizeof(*d));
     d->left_x=d->left_y=d->right_x=d->right_y=128;
@@ -614,10 +623,13 @@ static void sample_host(PadData *d) {
                              abs(d->left_y-128)>64 || abs(d->right_x-128)>64 || abs(d->right_y-128)>64);
     int keys_used=mouse || wheel || (captured && SDL_fabsf(mdx)+SDL_fabsf(mdy)>3.0f);
     for (int a=0;a<ACTIONS && !keys_used;++a) keys_used=action_down(a,k,mouse,now);
-    static int prompts_controller=-1;
-    if (pad_used!=keys_used && pad_used!=prompts_controller) {
-        prompts_controller=pad_used;
-        bbgpu_prompts_controller(pad_used);
+    static int prompts_device=-1;
+    if (pad_used!=keys_used) {
+        const int device=pad_used ? prompts_pad_device(g) : 0;
+        if (device!=prompts_device) {
+            prompts_device=device;
+            bbgpu_prompts_controller(device);
+        }
     }
     /* Keyboard and mouse, together with the controller. */
     for (int a=0;a<16;++a) if (action_down(a,k,mouse,now)) d->buttons|=actions[a].ps;

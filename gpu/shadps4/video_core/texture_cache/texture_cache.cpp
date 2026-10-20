@@ -764,13 +764,13 @@ ImageView& TextureCache::FindDepthTarget(ImageId image_id, const ImageDesc& desc
 
 namespace {
 
-// bbport: the guest ranges of the pictures ReplaceButtonPrompts knows, reloaded when the player
-// switches between controller and keyboard (UpdateButtonPrompts).
+// bbport: the guest ranges of the pictures ReplaceButtonPrompts knows, reloaded when the button
+// pictures switch between the game's, the keyboard's and Xbox (UpdateButtonPrompts).
 std::mutex prompt_mutex;
 std::vector<std::pair<VAddr, u32>> prompt_ranges;
 
 /// bbport: a button icon sheet or big prompt picture the game uploaded gets keyboard and mouse
-/// pictures over its PlayStation buttons (button_prompts.cpp), recorded after the game's own
+/// (or Xbox) pictures over its PlayStation buttons (button_prompts.cpp), recorded after the game's own
 /// upload.
 void ReplaceButtonPrompts(Vulkan::Runtime& runtime, Image& image) {
     const auto& info = image.info;
@@ -797,7 +797,7 @@ void ReplaceButtonPrompts(Vulkan::Runtime& runtime, Image& image) {
     const u8* guest = std::bit_cast<const u8*>(info.guest_address) + mip.offset;
     const auto* patches = ButtonPrompts::Find(XXH3_64bits(guest, mip.size), info.size.width,
                                               info.size.height, info.resources.levels, format);
-    if (!patches || patches->empty()) {
+    if (!patches) {
         return;
     }
     {
@@ -807,7 +807,7 @@ void ReplaceButtonPrompts(Vulkan::Runtime& runtime, Image& image) {
             prompt_ranges.push_back(range);
         }
     }
-    if (!ButtonPrompts::KeyboardShown()) {
+    if (patches->empty()) {
         return; // the game's own picture, just uploaded
     }
     u64 total = 0;

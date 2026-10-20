@@ -1,8 +1,9 @@
-# Keyboard and mouse button prompts
+# Keyboard, mouse and Xbox button prompts
 
 The games only know PlayStation buttons. This port redraws their button pictures as the keys and
-mouse buttons bound in `input.ini` while the keyboard or mouse was used last, and gives the game's
-own pictures back after controller input. It also makes the bindings follow the keyboard layout.
+mouse buttons bound in `input.ini` while the keyboard or mouse was used last, as Xbox buttons after
+input from an Xbox (or any other non-PlayStation) controller, and gives the game's own pictures
+back after PlayStation controller input. It also makes the bindings follow the keyboard layout.
 
 | | |
 |---|---|
@@ -41,9 +42,11 @@ one table row (below).
 
 `runtime_pad.c` notes the last device used: a bound key, a mouse button, the wheel or mouse motion
 of more than a few pixels means keyboard; a controller button, a trigger or a stick past half way
-means controller. It calls
-`bbgpu_prompts_controller()`, logged as `Button prompts: keyboard keys` or `Button prompts:
-controller used, PlayStation buttons`.
+means controller. A DualShock or DualSense (or any pad SDL labels with ✕ ○ □ △) gets the game's own
+pictures; every other controller gets Xbox buttons, since SDL names the buttons by position. It
+calls `bbgpu_prompts_controller(device)` (0 keyboard, 1 PlayStation, 2 Xbox), logged as `Button
+prompts: keyboard keys`, `Button prompts: PlayStation controller used, PlayStation buttons` or
+`Button prompts: Xbox controller used, Xbox buttons`.
 
 - `ReplaceButtonPrompts()` (`texture_cache.cpp`), after the game uploads a texture: when its size
   and format can be a known picture, its guest data is hashed; a match records the range and, in
@@ -53,6 +56,27 @@ controller used, PlayStation buttons`.
 
 The keyboard pictures are built once per picture and mip count, on the GPU thread, from the current
 `input.ini` (the first key of each action).
+
+## Xbox buttons
+
+The Xbox pictures are Kenney's [Input Prompts](https://kenney.nl/assets/input-prompts) (Xbox Series,
+CC0, licence in `packaging/windows/licenses/kenney-input-prompts-LICENSE.txt`), placed on the same
+pictures the keyboard version covers: A B X Y in the colours of the real buttons for ✕ ○ □ △, LB RB
+LT RT, the stick presses, Menu for OPTIONS, View for the touchpad, the sticks and the d-pad with its
+lit directions. The big prompts and the tapping and hold pucks get the A/B/X/Y picture, the U2
+weapon d-pad the Xbox d-pad. The white pictures get a soft dark halo, as the PlayStation ones have
+a glow.
+
+| | |
+|---|---|
+| ![U1: Press LT to aim, press RT to shoot](screenshots/xbox-prompts-u1-aim-shoot.webp) | ![U3: B while holding the left stick](screenshots/xbox-prompts-u3-throw.webp) |
+| U1 hint with LT and RT | U3 hint with B and the left stick |
+| ![U2 pause menu with Xbox buttons](screenshots/xbox-prompts-u2-pause.webp) | ![U2 pause menu bar: Xbox, PlayStation, keyboard](screenshots/xbox-prompts-u2-switching.webp) |
+| U2 pause menu | the same bar after switching Xbox, PlayStation, keyboard in one run |
+
+`tools/make_xbox_prompts.py <unzipped pack>` packs the 21 pictures (128 px each) into
+`texture_cache/button_prompts_xbox.inc` (a zlib stream of the atlas, 15 KB; checked in, so the build
+needs neither Python nor the pack). Adding one is a name in that script and an entry in `XGlyph`.
 
 ## Keyboard layouts
 
@@ -76,7 +100,9 @@ Still in the launcher: keys whose Tk keysym is not a plain letter or digit (AZER
 
 | Variable | Effect |
 |---|---|
-| `BB_BUTTON_PROMPTS=0` | keep the PlayStation buttons |
+| `BB_BUTTON_PROMPTS=0` | keep the PlayStation buttons (also `off`, `playstation`) |
+| `BB_BUTTON_PROMPTS=keyboard` / `xbox` | always show that style (default `auto`: the device used last); the launcher's Controls page has the same choice |
+| `BB_BUTTON_PROMPTS_FILE=<path>` | the first word of that file (`ps`, `xbox`, `keyboard`) is the device used last, read twice a second: switching in runs without a controller (scripted runs ignore the real one) |
 | `BB_ICON_COLLECT=1` | save every picture sampled by a pass that draws to the display to `user/button_icons/<hash>_<w>x<h>_<format>.dds` (uncompressed slots at most 4 times: a sheet can be empty at first) |
 | `BB_TEXTURE_DUMP=1` | F10 saves every texture of the next frame and the pass list to `user/texture_dump/<time>/` |
 
@@ -104,4 +130,5 @@ The two tools are for development and off by default.
 | `gpu/shadps4/video_core/renderer_vulkan/vk_frame_capture.{h,cpp}` | collector and F10 dump |
 | `gpu/bbgpu.h`, `gpu/shim/bbgpu.cpp`, `gpu/shim/window.cpp` | last device from the runtime |
 | `src/runtime_pad.c` | last device, layout-aware bindings |
+| `texture_cache/button_prompts_xbox.inc`, `tools/make_xbox_prompts.py` | the Xbox pictures and the script that packs them |
 | `tools/dds_view.py` | collected pictures to PNG |

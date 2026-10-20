@@ -4,14 +4,18 @@
 #include <algorithm>
 #include <atomic>
 #include <cctype>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <string>
+#include <tuple>
 
+#include <miniz.h>
 #include <SDL3/SDL_keyboard.h>
 
 // Our own copy of stb_truetype (ImGui's is internal to imgui_draw.cpp).
@@ -408,6 +412,207 @@ void DrawBinding(Canvas& c, const Font& font, const Slot& s, const std::string& 
 
 Canvas Downsample(const Canvas& level);
 
+// ---- Xbox pictures: Kenney's Input Prompts (CC0), packed by tools/make_xbox_prompts.py ------
+
+#include "video_core/texture_cache/button_prompts_xbox.inc"
+
+// The order of xbox_glyphs in the .inc.
+enum XGlyph : u8 {
+    XA, XB, XX, XY, XLB, XRB, XLT, XRT, XLeftPress, XRightPress, XLeftStick, XRightStick, XMenu,
+    XView, XDpad, XDpadUp, XDpadDown, XDpadHorizontal, XDpadVertical, XDpadLeft, XDpadRight,
+    XGlyphs
+};
+static_assert(sizeof(xbox_glyphs) / sizeof(xbox_glyphs[0]) == XGlyphs, "glyph table");
+
+struct XboxAtlas {
+    std::vector<u8> rgba; ///< xbox_atlas_width x xbox_atlas_height, straight alpha
+    struct Glyph {
+        int x, y;                     ///< the glyph's cell
+        int left, top, right, bottom; ///< the drawn part inside the cell (alpha), exclusive end
+    } glyph[XGlyphs];
+};
+
+const XboxAtlas* Atlas() {
+    static const std::unique_ptr<XboxAtlas> atlas = []() -> std::unique_ptr<XboxAtlas> {
+        size_t size = 0;
+        void* raw = tinfl_decompress_mem_to_heap(xbox_atlas_z, xbox_atlas_size, &size,
+                                                 TINFL_FLAG_PARSE_ZLIB_HEADER);
+        if (!raw || size != size_t(xbox_atlas_width) * xbox_atlas_height * 4) {
+            mz_free(raw);
+            std::printf("Button prompts: the Xbox pictures could not be unpacked\n");
+            return nullptr;
+        }
+        auto out = std::make_unique<XboxAtlas>();
+        out->rgba.assign(static_cast<const u8*>(raw), static_cast<const u8*>(raw) + size);
+        mz_free(raw);
+        for (int i = 0; i < XGlyphs; ++i) {
+            auto& g = out->glyph[i];
+            g = {xbox_glyphs[i].x, xbox_glyphs[i].y, 1 << 30, 1 << 30, 0, 0};
+            for (u32 y = 0; y < xbox_glyph_size; ++y) {
+                for (u32 x = 0; x < xbox_glyph_size; ++x) {
+                    if (out->rgba[(size_t(g.y + y) * xbox_atlas_width + g.x + x) * 4 + 3] > 8) {
+                        g.left = std::min(g.left, int(x));
+                        g.top = std::min(g.top, int(y));
+                        g.right = std::max(g.right, int(x) + 1);
+                        g.bottom = std::max(g.bottom, int(y) + 1);
+                    }
+                }
+            }
+        }
+        return out;
+    }();
+    return atlas.get();
+}
+
+/// A box filter over a plane, horizontally then vertically.
+void BoxBlur(std::vector<float>& plane, int w, int h, int radius) {
+    std::vector<float> tmp(plane.size());
+    for (int y = 0; y < h; ++y) {
+        for (int x = 0; x < w; ++x) {
+            float sum = 0.0f;
+            for (int k = -radius; k <= radius; ++k) {
+                sum += plane[size_t(y) * w + std::clamp(x + k, 0, w - 1)];
+            }
+            tmp[size_t(y) * w + x] = sum / float(2 * radius + 1);
+        }
+    }
+    for (int y = 0; y < h; ++y) {
+        for (int x = 0; x < w; ++x) {
+            float sum = 0.0f;
+            for (int k = -radius; k <= radius; ++k) {
+                sum += tmp[size_t(std::clamp(y + k, 0, h - 1)) * w + x];
+            }
+            plane[size_t(y) * w + x] = sum / float(2 * radius + 1);
+        }
+    }
+}
+
+/// An Xbox picture with its drawn part `w` x `h` px, centred on (cx, cy), over a soft dark halo
+/// (the PlayStation pictures have a glow) that keeps it readable on bright scenes.
+void DrawGlyph(Canvas& c, int glyph, float cx, float cy, float w, float h, bool halo = true) {
+    const XboxAtlas* atlas = Atlas();
+    if (!atlas || w < 1.0f || h < 1.0f) {
+        return;
+    }
+    const auto& g = atlas->glyph[glyph];
+    const float gw = float(g.right - g.left), gh = float(g.bottom - g.top);
+    if (gw <= 0.0f || gh <= 0.0f) {
+        return;
+    }
+    const float x0 = cx - w * 0.5f, y0 = cy - h * 0.5f;
+    const int margin = 5;
+    const int ix0 = int(std::floor(x0)) - margin, iy0 = int(std::floor(y0)) - margin;
+    const int tw = int(std::ceil(x0 + w)) + margin - ix0, th = int(std::ceil(y0 + h)) + margin - iy0;
+    // The glyph resampled into the box: premultiplied colour, 4x4 bilinear taps per pixel.
+    std::vector<float> layer(size_t(tw) * th * 4, 0.0f);
+    const auto texel = [&](int x, int y, float* out) {
+        x = std::clamp(x, 0, int(xbox_glyph_size) - 1);
+        y = std::clamp(y, 0, int(xbox_glyph_size) - 1);
+        const u8* p = &atlas->rgba[(size_t(g.y + y) * xbox_atlas_width + g.x + x) * 4];
+        const float a = p[3] / 255.0f;
+        out[0] = p[0] / 255.0f * a, out[1] = p[1] / 255.0f * a, out[2] = p[2] / 255.0f * a, out[3] = a;
+    };
+    for (int y = 0; y < th; ++y) {
+        for (int x = 0; x < tw; ++x) {
+            float sum[4]{};
+            for (int sy = 0; sy < 4; ++sy) {
+                for (int sx = 0; sx < 4; ++sx) {
+                    const float u = g.left + (ix0 + x + (sx + 0.5f) / 4.0f - x0) / w * gw - 0.5f;
+                    const float v = g.top + (iy0 + y + (sy + 0.5f) / 4.0f - y0) / h * gh - 0.5f;
+                    const int iu = int(std::floor(u)), iv = int(std::floor(v));
+                    const float fu = u - iu, fv = v - iv;
+                    float t[4][4];
+                    texel(iu, iv, t[0]), texel(iu + 1, iv, t[1]);
+                    texel(iu, iv + 1, t[2]), texel(iu + 1, iv + 1, t[3]);
+                    for (int k = 0; k < 4; ++k) {
+                        sum[k] += (t[0][k] * (1 - fu) + t[1][k] * fu) * (1 - fv) +
+                                  (t[2][k] * (1 - fu) + t[3][k] * fu) * fv;
+                    }
+                }
+            }
+            for (int k = 0; k < 4; ++k) {
+                layer[(size_t(y) * tw + x) * 4 + k] = sum[k] / 16.0f;
+            }
+        }
+    }
+    if (halo) {
+        std::vector<float> shadow(size_t(tw) * th);
+        for (size_t i = 0; i < shadow.size(); ++i) {
+            shadow[i] = layer[i * 4 + 3];
+        }
+        BoxBlur(shadow, tw, th, 2);
+        BoxBlur(shadow, tw, th, 2);
+        for (int y = 0; y < th; ++y) {
+            for (int x = 0; x < tw; ++x) {
+                c.Blend(ix0 + x, iy0 + y, {0.0f, 0.0f, 0.0f},
+                        std::min(shadow[size_t(y) * tw + x] * 1.5f, 1.0f) * 0.6f);
+            }
+        }
+    }
+    for (int y = 0; y < th; ++y) {
+        for (int x = 0; x < tw; ++x) {
+            const float* p = &layer[(size_t(y) * tw + x) * 4];
+            if (p[3] > 0.0f) {
+                c.Blend(ix0 + x, iy0 + y, {p[0] / p[3], p[1] / p[3], p[2] / p[3]}, p[3]);
+            }
+        }
+    }
+}
+
+/// The picture as large as fits `width` x `height`, `squash` times as tall (a button seen at an
+/// angle).
+void DrawGlyphFit(Canvas& c, int glyph, float cx, float cy, float width, float height,
+                  float squash = 1.0f, bool halo = true) {
+    const XboxAtlas* atlas = Atlas();
+    if (!atlas) {
+        return;
+    }
+    const auto& g = atlas->glyph[glyph];
+    const float gw = float(g.right - g.left), gh = float(g.bottom - g.top);
+    const float scale = std::min(width / gw, height / (gh * squash));
+    DrawGlyph(c, glyph, cx, cy, gw * scale, gh * scale * squash, halo);
+}
+
+/// The Xbox picture for a picture of the sheets: A B X Y, bumpers, triggers, stick presses, the
+/// Menu and View buttons, the sticks, and the d-pad with the lit directions.
+int XboxGlyph(u8 icon) {
+    if (icon >= DPad) {
+        const bool up = icon & LitUp, down = icon & LitDown, left = icon & LitLeft, right = icon & LitRight;
+        if ((up || down) && (left || right)) {
+            return XDpad;
+        }
+        if (up && down) {
+            return XDpadVertical;
+        }
+        if (left && right) {
+            return XDpadHorizontal;
+        }
+        return up ? XDpadUp : down ? XDpadDown : left ? XDpadLeft : right ? XDpadRight : XDpad;
+    }
+    switch (icon) {
+    case Cross: return XA;
+    case Circle: return XB;
+    case Square: return XX;
+    case Triangle: return XY;
+    case L1: return XLB;
+    case R1: return XRB;
+    case L2: return XLT;
+    case R2: return XRT;
+    case L3: return XLeftPress;
+    case R3: return XRightPress;
+    case Options: return XMenu;
+    case Touchpad: return XView;
+    case Move: return XLeftStick;
+    default: return XRightStick; // Look
+    }
+}
+
+void DrawXbox(Canvas& c, const Slot& s) {
+    // Inset, so the halo stays inside the area the patch covers.
+    DrawGlyphFit(c, XboxGlyph(s.icon), (s.x0 + s.x1) * 0.5f, (s.y0 + s.y1) * 0.5f, s.x1 - s.x0 - 6.0f,
+                 s.y1 - s.y0 - 6.0f);
+}
+
 Color Expand565(u16 v) {
     return {float((v >> 11) & 31) / 31.0f, float((v >> 5) & 63) / 63.0f, float(v & 31) / 31.0f};
 }
@@ -512,7 +717,7 @@ void DrawLabel(Canvas& c, const Font& font, const std::string& key, float cx, fl
 }
 
 /// A round prompt button as a key: dark face, light rim, the bound key.
-void DrawRoundButton(Canvas& up, const Font& font, const std::string& key) {
+void DrawRoundButton(Canvas& up, const Font& font, const std::string& key, int xbox = -1) {
     const float cx = 128.5f, cy = 256.0f - 126.5f, radius = 70.0f;
     for (u32 y = 0; y < up.height; ++y) {
         for (u32 x = 0; x < up.width; ++x) {
@@ -523,12 +728,16 @@ void DrawRoundButton(Canvas& up, const Font& font, const std::string& key) {
             up.Blend(x, y, rim, 0.8f * std::min(Coverage(d + 9.0f), 1.0f - Coverage(d + 12.0f)));
         }
     }
+    if (xbox >= 0) {
+        DrawGlyphFit(up, xbox, cx, cy, 2 * radius - 36.0f, 2 * radius - 36.0f, 1.0f, false);
+        return;
+    }
     DrawLabel(up, font, key, cx, cy, 2 * radius - 34.0f, 80.0f, 1.0f);
 }
 
 /// The tapping prompt's raised button (a puck seen from above at an angle) or the hold prompt's
 /// pressed one, as a key with the label lying on its face.
-void DrawPuck(Canvas& up, const Font& font, const std::string& key, bool pressed) {
+void DrawPuck(Canvas& up, const Font& font, const std::string& key, bool pressed, int xbox = -1) {
     // Measured on the game's pictures (upright): face ellipse, and the side down to y 273.
     const float cx = 256.5f, rx = 98.5f, ry = 53.0f, bottom = 273.0f;
     const float face = pressed ? bottom : bottom - 24.0f;
@@ -565,6 +774,10 @@ void DrawPuck(Canvas& up, const Font& font, const std::string& key, bool pressed
                      }));
         }
     }
+    if (xbox >= 0) {
+        DrawGlyphFit(up, xbox, cx, face, rx * 1.2f, ry * 1.5f, ry / rx, false);
+        return;
+    }
     DrawLabel(up, font, key, cx, face, rx * 1.2f, rx * 0.95f, ry / rx);
 }
 
@@ -589,7 +802,12 @@ void DrawHudDPad(Canvas& up, const Font& font, const Bindings& b, u8 lit) {
     }
 }
 
-std::vector<Patch> BuildPicture(const Picture& picture, u32 levels) {
+/// The weapon switch d-pad as the Xbox d-pad, the lit direction in red.
+void DrawXboxHudDPad(Canvas& up, u8 lit) {
+    DrawGlyphFit(up, XboxGlyph(DPad | lit), 127.5f, 128.0f, 184.0f, 184.0f, 1.0f, false);
+}
+
+std::vector<Patch> BuildPicture(const Picture& picture, u32 levels, Style style) {
     const Bindings bindings = LoadBindings();
     const Font font;
     const u32 size = picture.size;
@@ -600,16 +818,21 @@ std::vector<Patch> BuildPicture(const Picture& picture, u32 levels) {
             up.Blend(x, y, glow, 1.0f);
         }
     }
+    const int xbox = style == Style::Xbox && picture.shape != HudDPad ? XboxGlyph(picture.icon) : -1;
     switch (picture.shape) {
     case RoundButton:
-        DrawRoundButton(up, font, bindings.keys[picture.icon]);
+        DrawRoundButton(up, font, bindings.keys[picture.icon], xbox);
         break;
     case Puck:
     case PressedPuck:
-        DrawPuck(up, font, bindings.keys[picture.icon], picture.shape == PressedPuck);
+        DrawPuck(up, font, bindings.keys[picture.icon], picture.shape == PressedPuck, xbox);
         break;
     case HudDPad:
-        DrawHudDPad(up, font, bindings, picture.icon);
+        if (style == Style::Xbox) {
+            DrawXboxHudDPad(up, picture.icon);
+        } else {
+            DrawHudDPad(up, font, bindings, picture.icon);
+        }
         break;
     }
     // Upside down like the game's pictures.
@@ -740,12 +963,14 @@ void StorePixel(u8* out, const float* src, Layer layer) {
     }
 }
 
-std::vector<Patch> Build(const Sheet& sheet, u32 levels) {
+std::vector<Patch> Build(const Sheet& sheet, u32 levels, Style style) {
     const Bindings bindings = LoadBindings();
     const Font font;
     Canvas canvas{sheet.width, sheet.height};
     for (const Slot& s : sheet.slots) {
-        if (s.icon >= DPad) {
+        if (style == Style::Xbox) {
+            DrawXbox(canvas, s);
+        } else if (s.icon >= DPad) {
             DrawArrows(canvas, font, s, bindings);
         } else if (s.icon < Actions) {
             DrawBinding(canvas, font, s, bindings.keys[s.icon]);
@@ -799,35 +1024,83 @@ std::vector<Patch> Build(const Sheet& sheet, u32 levels) {
 } // namespace
 
 namespace {
-std::atomic<bool> controller_used{false};
+std::atomic<int> device_used{0}; ///< 0 keyboard and mouse, 1 PlayStation pad, 2 Xbox or other pad
 std::atomic<u32> switches{0};
 
-bool Enabled() {
-    static const bool enabled = [] {
+enum class Force : u8 { Auto, Off, Keyboard, Xbox };
+
+/// BB_BUTTON_PROMPTS: unset or auto follows the device used last; 0 (or off, playstation) keeps the
+/// game's own pictures; keyboard or xbox shows that style always.
+Force Forced() {
+    static const Force forced = [] {
         const char* env = std::getenv("BB_BUTTON_PROMPTS");
-        return !env || env[0] != '0';
+        if (!env || !*env || !std::strcmp(env, "auto")) {
+            return Force::Auto;
+        }
+        if (!std::strcmp(env, "keyboard")) {
+            return Force::Keyboard;
+        }
+        if (!std::strcmp(env, "xbox")) {
+            return Force::Xbox;
+        }
+        return !std::strcmp(env, "0") || !std::strcmp(env, "off") || !std::strcmp(env, "playstation")
+                   ? Force::Off
+                   : Force::Auto;
     }();
-    return enabled;
+    return forced;
 }
 } // namespace
 
-void SetController(bool controller) {
-    if (controller_used.exchange(controller) != controller) {
+void SetDevice(int device) {
+    device = std::clamp(device, 0, 2);
+    if (device_used.exchange(device) != device) {
         switches.fetch_add(1, std::memory_order_release);
-        std::printf("Button prompts: %s\n",
-                    controller ? "controller used, PlayStation buttons" : "keyboard keys");
+        static constexpr const char* names[] = {"keyboard keys", "PlayStation controller used, PlayStation buttons",
+                                                "Xbox controller used, Xbox buttons"};
+        std::printf("Button prompts: %s\n", names[device]);
     }
 }
 
-bool KeyboardShown() {
-    return Enabled() && !controller_used.load(std::memory_order_relaxed);
+Style Shown() {
+    switch (Forced()) {
+    case Force::Off:
+        return Style::Original;
+    case Force::Keyboard:
+        return Style::Keyboard;
+    case Force::Xbox:
+        return Style::Xbox;
+    case Force::Auto:
+        break;
+    }
+    const int device = device_used.load(std::memory_order_relaxed);
+    return device == 0 ? Style::Keyboard : device == 1 ? Style::Original : Style::Xbox;
 }
 
 u32 Switches() {
+    // BB_BUTTON_PROMPTS_FILE=<path>: the first word of that file (ps, xbox or keyboard) is the device
+    // used last, read twice a second; for runs without a controller (scripted runs ignore real ones).
+    static const char* path = std::getenv("BB_BUTTON_PROMPTS_FILE");
+    if (path && *path) {
+        static auto checked = std::chrono::steady_clock::time_point{};
+        const auto now = std::chrono::steady_clock::now();
+        if (now - checked > std::chrono::milliseconds(500)) {
+            checked = now;
+            char word[16]{};
+            if (FILE* f = std::fopen(path, "r")) {
+                if (std::fscanf(f, "%15s", word) == 1) {
+                    SetDevice(!std::strcmp(word, "ps") ? 1 : !std::strcmp(word, "xbox") ? 2 : 0);
+                }
+                std::fclose(f);
+            }
+        }
+    }
     return switches.load(std::memory_order_acquire);
 }
 
 bool Candidate(u32 width, u32 height, Format format) {
+    if (Forced() == Force::Off) {
+        return false;
+    }
     if (format == Format::Bc1) {
         for (const Picture& picture : pictures) {
             if (picture.size == width && picture.size == height) {
@@ -845,35 +1118,54 @@ bool Candidate(u32 width, u32 height, Format format) {
 }
 
 const std::vector<Patch>* Find(u64 hash, u32 width, u32 height, u32 levels, Format format) {
-    if (!Enabled()) {
+    if (Forced() == Force::Off) {
         return nullptr;
     }
     static std::mutex mutex;
-    static std::map<std::pair<u64, u32>, std::vector<Patch>> built;
+    static std::map<std::tuple<u64, u32, Style>, std::vector<Patch>> built;
+    static const std::vector<Patch> original;
+    const Style style = Shown();
     std::scoped_lock lock{mutex};
-    if (const auto it = built.find({hash, levels}); it != built.end()) {
+    const auto known_sheet = [&]() -> const Sheet* {
+        for (const Sheet& sheet : sheets) {
+            if (format == Format::Rgba8 && sheet.hash == hash && sheet.width == width &&
+                sheet.height == height) {
+                return &sheet;
+            }
+        }
+        return nullptr;
+    };
+    const auto known_picture = [&]() -> const Picture* {
+        for (const Picture& picture : pictures) {
+            if (format == Format::Bc1 && picture.hash == hash && picture.size == width &&
+                picture.size == height) {
+                return &picture;
+            }
+        }
+        return nullptr;
+    };
+    const Sheet* sheet = known_sheet();
+    const Picture* picture = sheet ? nullptr : known_picture();
+    if (!sheet && !picture) {
+        return nullptr;
+    }
+    if (style == Style::Original) {
+        return &original; // a known picture, shown as the game drew it
+    }
+    const auto key = std::make_tuple(hash, levels, style);
+    if (const auto it = built.find(key); it != built.end()) {
         return &it->second;
     }
-    for (const Sheet& sheet : sheets) {
-        if (format == Format::Rgba8 && sheet.hash == hash && sheet.width == width &&
-            sheet.height == height) {
-            auto& patches = built[{hash, levels}] = Build(sheet, levels);
-            std::printf("Button prompts: %s button pictures drawn as keyboard and mouse keys "
-                        "(%zu pictures, %u mip levels)\n",
-                        sheet.name, sheet.slots.size(), levels);
-            return &patches;
-        }
+    const char* look = style == Style::Xbox ? "Xbox buttons" : "keyboard and mouse keys";
+    if (sheet) {
+        auto& patches = built[key] = Build(*sheet, levels, style);
+        std::printf("Button prompts: %s button pictures drawn as %s (%zu pictures, %u mip levels)\n",
+                    sheet->name, look, sheet->slots.size(), levels);
+        return &patches;
     }
-    for (const Picture& picture : pictures) {
-        if (format == Format::Bc1 && picture.hash == hash && picture.size == width &&
-            picture.size == height) {
-            auto& patches = built[{hash, levels}] = BuildPicture(picture, levels);
-            std::printf("Button prompts: %s drawn as keyboard keys (%u mip levels)\n", picture.name,
-                        levels);
-            return &patches;
-        }
-    }
-    return nullptr;
+    auto& patches = built[key] = BuildPicture(*picture, levels, style);
+    std::printf("Button prompts: %s drawn as %s (%u mip levels)\n", picture->name, look, levels);
+    return &patches;
 }
 
 } // namespace VideoCore::ButtonPrompts

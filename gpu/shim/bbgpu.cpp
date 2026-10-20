@@ -381,8 +381,8 @@ u32 ConsumeWithOverlaysScreenshotRequests() { return 0; }
 ScreenshotRequests ConsumeScreenshotRequests() { return {}; }
 } // namespace VideoCore
 
-extern "C" void bbgpu_prompts_controller(int controller) {
-    VideoCore::ButtonPrompts::SetController(controller != 0);
+extern "C" void bbgpu_prompts_controller(int device) {
+    VideoCore::ButtonPrompts::SetDevice(device);
 }
 
 extern "C" int bbgpu_overlay_captures_input(void) {
