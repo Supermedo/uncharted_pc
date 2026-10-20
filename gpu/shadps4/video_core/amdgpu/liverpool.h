@@ -254,6 +254,10 @@ private:
     VAddr indirect_args_addr{};
     u32 num_counter_pairs{};
     u64 pixel_counter{};
+    /// bbport: SET_PREDICATION state (BB_PREDICATION, liverpool.cpp).
+    bool predicate_visible{};
+    bool predicate_pending{}; ///< a result of the predicate set was not ready: draws run
+    bool predicate_skip{};
 
     struct ConstantEngine {
         void Reset() {

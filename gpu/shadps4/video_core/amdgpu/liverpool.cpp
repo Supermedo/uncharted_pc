@@ -43,6 +43,56 @@ static std::chrono::microseconds SubmitDelay() {
     return delay;
 }
 
+// bbport: occlusion queries do not run on the GPU. Each ZPASS_DONE dump (the begin and the end
+// of a query) writes a running counter, valid bit set, that grows by OcclusionCounterStep on
+// every render backend: a query reports 8 x 0x2FFFFFF = 402,653,176 visible samples (about 194
+// full 1080p screens; 16 backends on PS4 Pro) whatever was drawn, more when other dumps fall
+// between its begin and end.
+// BB_OCCLUSION_PIXELS=<n> (diagnosis): each dump advances the counter by n instead, on the first
+// render backend only (a query reports n samples; 0: nothing visible; strtoull base 0: decimal,
+// 0x hex). Unset: the large count above.
+// BB_OCCLUSION_LOG=1 (diagnosis): occlusion dumps (and the protection faults their writes take
+// on the GPU thread, approximate), other ZPASS events (no result written), SET_PREDICATION,
+// predicated draws and COND_EXEC per second, printed every 5 s.
+static constexpr u64 OcclusionCounterValidMask = 0x8000000000000000ULL;
+static constexpr u64 OcclusionCounterStep = 0x2FFFFFFULL;
+static s64 OcclusionPixels() {
+    static const s64 pixels = [] {
+        const char* env = std::getenv("BB_OCCLUSION_PIXELS");
+        return env && *env ? static_cast<s64>(std::strtoull(env, nullptr, 0)) : s64{-1};
+    }();
+    return pixels;
+}
+namespace {
+struct OcclusionStats {
+    u64 dumps{}, dump_faults{}, dump_ns{}, zpass_other{}, predications{}, pred_visible{},
+        pred_not_visible{}, pred_clear{};
+    u64 predicated_draws{}, predicated_skipped{}, cond_execs{}, cond_skipped{};
+    std::chrono::steady_clock::time_point window = std::chrono::steady_clock::now();
+};
+OcclusionStats g_occlusion_stats;
+bool OcclusionLog() {
+    static const bool enabled = EmulatorSettingsImpl::Flag("BB_OCCLUSION_LOG", false);
+    return enabled;
+}
+void PrintOcclusionStats() {
+    auto& st = g_occlusion_stats;
+    const auto now = std::chrono::steady_clock::now();
+    const double secs = std::chrono::duration<double>(now - st.window).count();
+    if (secs < 5.0) {
+        return;
+    }
+    std::printf("Occlusion: %.0f dumps/s (%.1f faults/s, %.2f ms/s), %.0f other ZPASS events/s, "
+                "SET_PREDICATION %.0f/s (draw if visible %.0f, if not visible %.0f, clear %.0f), "
+                "predicated draws %.0f/s (%.0f skipped), COND_EXEC %.0f/s (%.0f skipped)\n",
+                st.dumps / secs, st.dump_faults / secs, st.dump_ns / 1e6 / secs,
+                st.zpass_other / secs, st.predications / secs, st.pred_visible / secs,
+                st.pred_not_visible / secs, st.pred_clear / secs, st.predicated_draws / secs,
+                st.predicated_skipped / secs, st.cond_execs / secs, st.cond_skipped / secs);
+    st = OcclusionStats{};
+}
+} // namespace
+
 static const char* dcb_task_name{"DCB_TASK"};
 static const char* ccb_task_name{"CCB_TASK"};
 
@@ -251,6 +301,8 @@ bool PipelinedOpcode(PM4ItOpcode opcode) {
     case PM4ItOpcode::IncrementDeCounter:
     case PM4ItOpcode::WaitOnCeCounter:
     case PM4ItOpcode::EventWrite:     // occlusion results only, no rasterizer state
+    case PM4ItOpcode::SetPredication: // command processor state only (BB_PREDICATION reads
+                                      // results the EventWrite wrote on this thread)
     case PM4ItOpcode::EventWriteEop:  // runs in order on the recording thread (RunInOrder)
     case PM4ItOpcode::EventWriteEos:
     case PM4ItOpcode::WaitRegMem:     // waits for the recording thread only while unmet
@@ -817,6 +869,23 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
                 // They may write guest memory: not before fences deferred earlier.
                 rasterizer->WaitDeferredSignals();
             }
+            // bbport: draws and dispatches with the PM4 predicate bit, while a SET_PREDICATION
+            // failed (BB_PREDICATION=1; otherwise predicate_skip stays false and they all run).
+            if (header->type3.predicate.Value() == PM4Predicate::PredEnable &&
+                (IsDrawOpcode(opcode) || opcode == PM4ItOpcode::DispatchDirect ||
+                 opcode == PM4ItOpcode::DispatchIndirect)) {
+                g_occlusion_stats.predicated_draws++;
+                if (predicate_skip) {
+                    g_occlusion_stats.predicated_skipped++;
+                    if (draw_prep && (opcode == PM4ItOpcode::DrawIndex2 ||
+                                      opcode == PM4ItOpcode::DrawIndexOffset2 ||
+                                      opcode == PM4ItOpcode::DrawIndexAuto)) {
+                        draw_prep->NextDraw(); // the prepared draws stay in step
+                    }
+                    dcb = NextPacket(dcb, header->type3.NumWords() + 1);
+                    continue;
+                }
+            }
             switch (opcode) {
             case PM4ItOpcode::Nop: {
                 const auto* nop = reinterpret_cast<const PM4CmdNop*>(header);
@@ -964,7 +1033,57 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
                 break; // registers: ApplyGraphicsRegisterPacket
             }
             case PM4ItOpcode::SetPredication: {
-                LOG_WARNING(Render, "Unimplemented IT_SET_PREDICATION");
+                // bbport: BB_PREDICATION=1 evaluates ZPass predication on the occlusion results
+                // in guest memory (the synthetic counts of the EventWrite below: always visible
+                // unless BB_OCCLUSION_PIXELS=0). Off (default): ignored, every draw runs.
+                const auto* pred = reinterpret_cast<const PM4CmdSetPredication*>(header);
+                static const bool predication = EmulatorSettingsImpl::Flag("BB_PREDICATION", false);
+                g_occlusion_stats.predications++;
+                if (pred->pred_op.Value() == PM4CmdSetPredication::Op::Clear) {
+                    g_occlusion_stats.pred_clear++;
+                } else if (pred->draw_if_visible.Value()) {
+                    g_occlusion_stats.pred_visible++;
+                } else {
+                    g_occlusion_stats.pred_not_visible++;
+                }
+                if (!predication) {
+                    static bool warned = false;
+                    if (!warned) {
+                        warned = true;
+                        LOG_WARNING(Render, "IT_SET_PREDICATION ignored (BB_PREDICATION=1 "
+                                            "evaluates it; reported once)");
+                    }
+                    predicate_skip = false;
+                    break;
+                }
+                if (pred->pred_op.Value() == PM4CmdSetPredication::Op::Clear) {
+                    predicate_visible = predicate_pending = predicate_skip = false;
+                    break;
+                }
+                if (pred->pred_op.Value() != PM4CmdSetPredication::Op::ZPass ||
+                    pred->Address() == 0) {
+                    LOG_WARNING(Render, "Unimplemented IT_SET_PREDICATION op {} at {:#x}",
+                                static_cast<u32>(pred->pred_op.Value()), pred->Address());
+                    predicate_skip = false;
+                    break;
+                }
+                const auto* results = reinterpret_cast<const u64*>(pred->Address());
+                u64 samples = 0;
+                bool ready = true;
+                for (s32 i = 0; i < num_counter_pairs; ++i, results += 2) {
+                    ready &= (results[0] & results[1] & OcclusionCounterValidMask) != 0;
+                    samples += (results[1] & ~OcclusionCounterValidMask) -
+                               (results[0] & ~OcclusionCounterValidMask);
+                }
+                // CONTINUE: visible when this query or the ones set before it are. A result not
+                // ready (valid bit clear) never skips a draw, whichever way the packet is set
+                // (the CP would wait for it; HINT 1 draws): the draw runs, as before.
+                const bool chain = pred->continue_set.Value();
+                predicate_pending = !ready || (chain && predicate_pending);
+                predicate_visible = samples != 0 || (chain && predicate_visible);
+                predicate_skip = !predicate_pending && (pred->draw_if_visible.Value()
+                                                            ? !predicate_visible
+                                                            : predicate_visible);
                 break;
             }
             case PM4ItOpcode::IndexType: {
@@ -1173,13 +1292,28 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
                     // registers: ApplyGraphicsRegisterPacket
                 } else if (event->event_index.Value() == EventIndex::ZpassDone) {
                     if (event->event_type.Value() == EventType::PixelPipeStatDump) {
-                        static constexpr u64 OcclusionCounterValidMask = 0x8000000000000000ULL;
-                        static constexpr u64 OcclusionCounterStep = 0x2FFFFFFULL;
+                        const s64 forced = OcclusionPixels(); // BB_OCCLUSION_PIXELS
+                        const bool log = OcclusionLog();
+                        const u64 faults = log ? BbStats::gpu_signal_faults.load() : 0;
+                        const auto start = log ? std::chrono::steady_clock::now()
+                                               : std::chrono::steady_clock::time_point{};
                         u64* results = event->Address<u64*>();
                         for (s32 i = 0; i < num_counter_pairs; ++i, results += 2) {
-                            *results = pixel_counter | OcclusionCounterValidMask;
+                            const u64 count = forced < 0 || i == 0 ? pixel_counter : 0;
+                            *results = count | OcclusionCounterValidMask;
                         }
-                        pixel_counter += OcclusionCounterStep;
+                        pixel_counter += forced < 0 ? OcclusionCounterStep : u64(forced);
+                        g_occlusion_stats.dumps++;
+                        if (log) {
+                            g_occlusion_stats.dump_faults +=
+                                BbStats::gpu_signal_faults.load() - faults;
+                            g_occlusion_stats.dump_ns +=
+                                std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                    std::chrono::steady_clock::now() - start)
+                                    .count();
+                        }
+                    } else {
+                        g_occlusion_stats.zpass_other++; // nothing written (BB_OCCLUSION_LOG)
                     }
                 }
                 break;
@@ -1357,7 +1491,11 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
                 if (cond_exec->command.Value() != 0) {
                     LOG_WARNING(Render, "IT_COND_EXEC used a reserved command");
                 }
-                const auto skip = *cond_exec->Address() == false;
+                // bbport: the CP tests the whole dword at the (dword-aligned) address; the one-byte
+                // bool read skipped blocks whose condition was 0x100, 0x10000, ...
+                const auto skip = *reinterpret_cast<const u32*>(cond_exec->Address()) == 0;
+                g_occlusion_stats.cond_execs++;
+                g_occlusion_stats.cond_skipped += skip;
                 if (skip) {
                     dcb = NextPacket(dcb,
                                      header->type3.NumWords() + 1 + cond_exec->exec_count.Value());
@@ -1383,6 +1521,9 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
 
     if (rasterizer && seq != NoSeq) {
         rasterizer->RetireSubmission(); // prepared draws live until the recording thread is past
+    }
+    if (seq != NoSeq && OcclusionLog()) {
+        PrintOcclusionStats(); // BB_OCCLUSION_LOG
     }
     if (draw_prep) {
         draw_prep->EndSubmission();

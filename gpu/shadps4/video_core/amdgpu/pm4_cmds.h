@@ -1239,4 +1239,28 @@ struct PM4CmdCondExec {
     }
 };
 
+/// bbport: IT_SET_PREDICATION (CIK PM4; Mesa sid.h PRED_OP/PREDICATION_*).
+struct PM4CmdSetPredication {
+    enum class Op : u32 {
+        Clear = 0,
+        ZPass = 1,
+        PrimCount = 2,
+    };
+    PM4Type3Header header;
+    union {
+        BitField<4, 28, u32> start_addr_lo; ///< 16-byte aligned occlusion results
+    };
+    union {
+        BitField<0, 8, u32> start_addr_hi;
+        BitField<8, 1, u32> draw_if_visible; ///< 0: draw if not visible, 1: draw if visible
+        BitField<12, 1, u32> hint;           ///< 1: draw if the result is not ready
+        BitField<16, 3, Op> pred_op;
+        BitField<31, 1, u32> continue_set; ///< combine with the predicate set before
+    };
+
+    VAddr Address() const {
+        return u64(start_addr_hi.Value()) << 32 | u64(start_addr_lo.Value()) << 4;
+    }
+};
+
 } // namespace AmdGpu
