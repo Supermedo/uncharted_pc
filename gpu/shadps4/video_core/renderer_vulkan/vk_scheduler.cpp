@@ -274,6 +274,9 @@ void Scheduler::WaitDeferredSignals() {
     BbStats::WaitTimer timer{BbStats::host_copies_wait_ns};
     KickRecording(true);
     while (deferred_signals_done->load(std::memory_order_acquire) < issued) {
+        if (VideoCore::LandingGate::Stopped()) {
+            break; // shutdown: the labels waiting on the landing thread were dropped
+        }
         // Helps the copy threads the signals wait for.
         BbCopy::WaitAsync();
         std::this_thread::yield();

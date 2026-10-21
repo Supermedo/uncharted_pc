@@ -29,4 +29,9 @@ void Wait(u64 seq);
 /// passed here, without blocking the caller (inline when nothing is waiting).
 void Run(u64 seq, std::function<void()> fn);
 
+/// True once the buffer cache is going down: the landing thread no longer lands anything, the
+/// labels run at once and the waits for a landing return. Loops that wait for a label to run on
+/// the landing thread leave when it is set.
+bool Stopped();
+
 } // namespace VideoCore::LandingGate

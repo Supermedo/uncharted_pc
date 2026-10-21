@@ -117,6 +117,9 @@ public:
     bool LandingGateActive() const;
     void WaitLanding(u64 seq);
     void RunAfterLanding(u64 seq, std::function<void()> fn);
+    /// Ends the landing thread: nothing more is deferred, every wait on it lets go, what is
+    /// pending is dropped (~BufferCache; idempotent).
+    void StopLanding();
 
     /// bbport diagnosis (BB_STABLE_CHECK=1): at an end-of-pipe fence, reports read-only
     /// bindings since the last one whose guest data changed meanwhile.
@@ -241,7 +244,9 @@ private:
     std::atomic<u32> gate_outstanding{0}; ///< labels queued or running on the landing thread
     std::thread landing_thread;
     void LandingWorker();
-    void ExecuteLanding(Landing& landing);
+    bool ExecuteLanding(Landing& landing);
+    bool WaitLandingTick(u64 tick);
+    std::atomic<bool> landing_exited{false};
 
     std::unique_ptr<FaultManager> fault_manager;
     std::unique_ptr<Buffer> bda_pagetable_buffer;
