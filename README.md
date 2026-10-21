@@ -20,6 +20,7 @@ code runs directly on your PC and the graphics are translated to Vulkan. Unpack 
 - Anti-aliasing with TAA, AMD FSR 3.1, AMD FSR 4 or NVIDIA DLSS (DLAA).
 - Frame generation: AMD FSR 3 (any GPU) or NVIDIA DLSS (RTX 40 2x, RTX 50 up to 4x).
 - Keyboard, mouse and controller together, all remappable. Mouse look in U3.
+- Trophies: the games' own trophy lists, a notice in the game when one is earned, and a Trophies page in the launcher.
 - Add to Steam and desktop shortcuts from the launcher, automatic updates.
 
 ## Requirements

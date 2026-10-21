@@ -6,6 +6,7 @@
 #pragma once
 
 #include <string>
+#include <vector>
 #include "common/types.h"
 #include "video_core/renderer_vulkan/vk_common.h"
 
@@ -33,6 +34,10 @@ bool Visible();
 void Render(vk::CommandBuffer cmdbuf, vk::ImageView view, vk::Extent2D extent);
 /// Every presented frame (FPS readout; BB_FPS_LOG=1 prints the rate every 5 seconds).
 void NotePresent();
+
+/// Any thread: queues the notice of an earned trophy (grade 1 platinum .. 4 bronze, `png` the
+/// trophy's icon file or empty). Notices are shown at the top of the screen one after the other.
+void NotifyTrophy(int grade, std::string game, std::string name, std::vector<unsigned char> png);
 
 /// The menu is open or a text entry is shown: the game's input is held neutral.
 bool CapturesInput();

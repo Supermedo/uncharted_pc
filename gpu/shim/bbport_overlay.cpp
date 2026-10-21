@@ -6,13 +6,18 @@
 #include <cfloat>
 #include <chrono>
 #include <cmath>
+#include <deque>
 #include <cstdio>
+#include <cstring>
 #include <cstdlib>
 #include <mutex>
+#include <vector>
 
 #include <SDL3/SDL.h>
 #include "bbport_settings.h"
+#include <miniz.h>
 #include "imgui.h"
+#include "imgui_internal.h"
 #include "imgui_impl_vulkan.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
@@ -452,6 +457,200 @@ void FpsCounter() {
     ImGui::End();
 }
 
+
+// ---- Trophy notices (NotifyTrophy): the console's "trophy earned" box, one at a time ----------
+struct Toast {
+    int grade = 4;
+    std::string game, name;
+    std::vector<unsigned char> png;
+};
+std::mutex toast_mutex;
+std::deque<Toast> toast_queue;       // guarded by toast_mutex
+std::atomic<bool> toast_busy{false}; // something is queued or on screen
+bool toast_on = false;
+Toast toast_now;
+std::chrono::steady_clock::time_point toast_start;
+ImTextureData* toast_icon = nullptr; // one 256x256 texture, rewritten for every notice
+ImVec2 toast_icon_uv{1.0f, 1.0f};
+constexpr float ToastSeconds = 6.0f;
+constexpr int ToastIconSize = 256;
+
+// 8-bit RGB/RGBA PNG without interlacing (what the trophy packs hold) to RGBA.
+bool DecodePng(const std::vector<unsigned char>& png, std::vector<unsigned char>& rgba, int& width,
+               int& height) {
+    static const unsigned char signature[8] = {0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A};
+    if (png.size() < 33 || std::memcmp(png.data(), signature, 8) != 0) {
+        return false;
+    }
+    const auto be32 = [](const unsigned char* p) {
+        return (u32(p[0]) << 24) | (u32(p[1]) << 16) | (u32(p[2]) << 8) | u32(p[3]);
+    };
+    std::vector<unsigned char> idat;
+    int color_type = -1;
+    for (size_t at = 8; at + 12 <= png.size();) {
+        const u32 length = be32(&png[at]);
+        const unsigned char* type = &png[at + 4];
+        if (length > png.size() || at + 12 + length > png.size()) {
+            return false;
+        }
+        const unsigned char* body = &png[at + 8];
+        if (std::memcmp(type, "IHDR", 4) == 0 && length >= 13) {
+            width = int(be32(body));
+            height = int(be32(body + 4));
+            color_type = body[9];
+            if (body[8] != 8 || (color_type != 2 && color_type != 6) || body[12] != 0) {
+                return false;
+            }
+        } else if (std::memcmp(type, "IDAT", 4) == 0) {
+            idat.insert(idat.end(), body, body + length);
+        } else if (std::memcmp(type, "IEND", 4) == 0) {
+            break;
+        }
+        at += 12 + length;
+    }
+    if (color_type < 0 || width <= 0 || height <= 0 || width > ToastIconSize ||
+        height > ToastIconSize || idat.empty()) {
+        return false;
+    }
+    const int bpp = color_type == 6 ? 4 : 3;
+    const size_t stride = size_t(width) * bpp;
+    std::vector<unsigned char> raw((stride + 1) * height);
+    mz_ulong raw_size = mz_ulong(raw.size());
+    if (mz_uncompress(raw.data(), &raw_size, idat.data(), mz_ulong(idat.size())) != MZ_OK ||
+        raw_size != raw.size()) {
+        return false;
+    }
+    std::vector<unsigned char> pixels(stride * height);
+    for (int y = 0; y < height; ++y) {
+        const unsigned char* in = &raw[y * (stride + 1)];
+        const int filter = *in++;
+        unsigned char* row = &pixels[y * stride];
+        const unsigned char* up = y ? row - stride : nullptr;
+        for (size_t x = 0; x < stride; ++x) {
+            const int a = x >= size_t(bpp) ? row[x - bpp] : 0;
+            const int b = up ? up[x] : 0;
+            const int c = (up && x >= size_t(bpp)) ? up[x - bpp] : 0;
+            int predictor = 0;
+            switch (filter) {
+            case 0: break;
+            case 1: predictor = a; break;
+            case 2: predictor = b; break;
+            case 3: predictor = (a + b) / 2; break;
+            case 4: {
+                const int p = a + b - c, pa = std::abs(p - a), pb = std::abs(p - b),
+                          pc = std::abs(p - c);
+                predictor = (pa <= pb && pa <= pc) ? a : (pb <= pc ? b : c);
+                break;
+            }
+            default: return false;
+            }
+            row[x] = static_cast<unsigned char>(in[x] + predictor);
+        }
+    }
+    rgba.assign(size_t(width) * height * 4, 255);
+    for (size_t i = 0; i < size_t(width) * height; ++i) {
+        std::memcpy(&rgba[i * 4], &pixels[i * bpp], bpp);
+    }
+    return true;
+}
+
+// Puts the notice's icon into the shared texture (the first notice creates it).
+void SetToastIcon(const std::vector<unsigned char>& png) {
+    std::vector<unsigned char> rgba;
+    int w = 0, h = 0;
+    const bool ok = !png.empty() && DecodePng(png, rgba, w, h);
+    if (!ok && !toast_icon) {
+        return;
+    }
+    const bool created = toast_icon == nullptr;
+    if (created) {
+        toast_icon = IM_NEW(ImTextureData)();
+        toast_icon->Create(ImTextureFormat_RGBA32, ToastIconSize, ToastIconSize);
+        toast_icon->UseColors = true;
+    }
+    std::memset(toast_icon->Pixels, 0, size_t(ToastIconSize) * ToastIconSize * 4);
+    if (ok) {
+        for (int y = 0; y < h; ++y) {
+            std::memcpy(toast_icon->GetPixelsAt(0, y), &rgba[size_t(y) * w * 4], size_t(w) * 4);
+        }
+        toast_icon_uv = ImVec2(float(w) / ToastIconSize, float(h) / ToastIconSize);
+    } else {
+        toast_icon_uv = ImVec2(0.0f, 0.0f); // nothing to show: an empty square
+    }
+    if (created) {
+        ImGui::RegisterUserTexture(toast_icon);
+    } else {
+        toast_icon->UpdateRect = {0, 0, ToastIconSize, ToastIconSize};
+        toast_icon->Updates.push_back(toast_icon->UpdateRect);
+        toast_icon->Status = ImTextureStatus_WantUpdates;
+    }
+}
+
+void TrophyToast() {
+    const auto now = std::chrono::steady_clock::now();
+    if (!toast_on) {
+        std::scoped_lock lock{toast_mutex};
+        if (toast_queue.empty()) {
+            toast_busy = false;
+            return;
+        }
+        toast_now = std::move(toast_queue.front());
+        toast_queue.pop_front();
+        toast_on = true;
+        toast_start = now;
+        SetToastIcon(toast_now.png);
+        toast_now.png = {};
+    }
+    const float t = std::chrono::duration<float>(now - toast_start).count();
+    if (t >= ToastSeconds) {
+        toast_on = false;
+        return;
+    }
+    const float s = base_scale;
+    const float slide = std::min(t / 0.35f, 1.0f);
+    const float eased = 1.0f - (1.0f - slide) * (1.0f - slide);
+    const float alpha = std::min(1.0f, (ToastSeconds - t) / 0.5f);
+    static const ImVec4 colors[] = {ImVec4(0.62f, 0.82f, 0.96f, 1.0f), ImVec4(0.96f, 0.78f, 0.28f, 1.0f),
+                                    ImVec4(0.80f, 0.83f, 0.88f, 1.0f), ImVec4(0.82f, 0.52f, 0.24f, 1.0f)};
+    static const char* const names[] = {"Platinum trophy earned", "Gold trophy earned",
+                                        "Silver trophy earned", "Bronze trophy earned"};
+    const int grade = std::clamp(toast_now.grade, 1, 4) - 1;
+
+    const ImGuiViewport* viewport = ImGui::GetMainViewport();
+    ImGui::SetNextWindowPos(
+        ImVec2(viewport->WorkPos.x + viewport->WorkSize.x * 0.5f,
+               viewport->WorkPos.y + (18.0f - (1.0f - eased) * 110.0f) * s),
+        ImGuiCond_Always, ImVec2(0.5f, 0.0f));
+    ImGui::SetNextWindowSizeConstraints(ImVec2(340.0f * s, 0.0f), ImVec2(FLT_MAX, FLT_MAX));
+    ImGui::PushStyleVar(ImGuiStyleVar_Alpha, alpha);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(12.0f * s, 12.0f * s));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 10.0f * s);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 1.5f * s);
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.05f, 0.06f, 0.08f, 0.95f));
+    ImGui::PushStyleColor(ImGuiCol_Border, colors[grade]);
+    ImGui::Begin("##trophy_toast", nullptr,
+                 ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize |
+                     ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoNav |
+                     ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoSavedSettings);
+    if (toast_icon) {
+        ImGui::Image(toast_icon->GetTexRef(), ImVec2(64.0f * s, 64.0f * s), ImVec2(0.0f, 0.0f),
+                     toast_icon_uv);
+        ImGui::SameLine(0.0f, 12.0f * s);
+    }
+    ImGui::BeginGroup();
+    ImGui::TextColored(colors[grade], "%s", names[grade]);
+    ImGui::SetWindowFontScale(1.2f);
+    ImGui::TextUnformatted(toast_now.name.c_str());
+    ImGui::SetWindowFontScale(1.0f);
+    if (!toast_now.game.empty()) {
+        ImGui::TextDisabled("%s", toast_now.game.c_str());
+    }
+    ImGui::EndGroup();
+    ImGui::End();
+    ImGui::PopStyleColor(2);
+    ImGui::PopStyleVar(4);
+}
+
 } // namespace
 
 void Init(const Vulkan::Instance& instance, vk::Format format, u32 image_count) {
@@ -620,7 +819,16 @@ bool HandleEvent(const SDL_Event& event) {
 }
 
 bool Visible() {
-    return initialized && (menu_open || text_entry_active || BbSettings::Get().show_fps);
+    return initialized &&
+           (menu_open || text_entry_active || BbSettings::Get().show_fps || toast_busy);
+}
+
+void NotifyTrophy(int grade, std::string game, std::string name, std::vector<unsigned char> png) {
+    std::scoped_lock lock{toast_mutex};
+    if (toast_queue.size() < 32) {
+        toast_queue.push_back({grade, std::move(game), std::move(name), std::move(png)});
+        toast_busy = true;
+    }
 }
 
 bool CapturesInput() {
@@ -693,6 +901,7 @@ void Render(vk::CommandBuffer cmdbuf, vk::ImageView view, vk::Extent2D extent) {
     if (text_entry_active) {
         TextEntryBox();
     }
+    TrophyToast();
     ImGui::Render();
 
     const vk::RenderingAttachmentInfo attachment{

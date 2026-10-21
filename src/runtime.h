@@ -85,6 +85,9 @@ uintptr_t runtime_rtc_resolve(const char *name);
 const char *runtime_file_user_dir(void);
 void runtime_savedata_configure(const char *title);
 uintptr_t runtime_savedata_resolve(const char *name);
+/* Trophies (runtime_trophy.c): the folder run.py prepared for the running game (scripts/trophies.py). */
+void runtime_trophy_configure(const char *dir);
+uintptr_t runtime_trophy_resolve(const char *name);
 void runtime_savedata_report(void);
 int runtime_savedata_pick(int32_t user, const char *title, const char (*names)[32], uint32_t count,
                           int which, const char *focus, char out[32], void *param_out);

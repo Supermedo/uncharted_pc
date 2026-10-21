@@ -40,6 +40,9 @@ void bbgpu_mouse_configure(int look);
  * it is; 0 before the first frame with a known camera. */
 int bbgpu_camera_yaw(float *yaw_degrees, double *age_seconds);
 int bbgpu_mouse_sample(float *dx, float *dy, uint32_t *buttons, int *wheel);
+/* In-game trophy notice (the overlay draws it for a few seconds, one at a time): grade 1 platinum,
+ * 2 gold, 3 silver, 4 bronze; png is the trophy's icon (a PNG file) or empty. */
+void bbgpu_trophy_notify(int grade, const char *game, const char *name, const void *png, uint64_t png_size);
 /* Number of symbols registered by the vendored libraries (diagnostics). */
 unsigned bbgpu_symbol_count(void);
 #ifdef __cplusplus

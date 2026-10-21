@@ -153,6 +153,14 @@ def main():
         out = out_root / Path(exe).stem.split('-')[0]
         prepare(game, file, out)
         run_script('content_profile.py', game, '--out', out, '--sku', env.get('BB_CONTENT_SKU', 'full'))
+        # The trophy set of this game (its texts in the console language, the icons) for the runtime.
+        trophy_dir = out / 'trophy'
+        key = next((k for k, v in EXECUTABLES.items() if v == exe), '')
+        if key:
+            language = env.get('BB_LANGUAGE', '1')
+            run_script('trophies.py', game, '--out', trophy_dir, '--exe', key,
+                       '--lang', language if language.isdigit() else '1',
+                       *(['--own'] if env.get(f'BB_GAME_DIR_{key.upper()}') else []))
         this = ['--run'] if getattr(sys, 'frozen', False) else [str(Path(__file__).resolve())]
         env['BB_EXE'] = exe
         env['BB_RESTART_COMMAND'] = subprocess.list2cmdline([sys.executable, *this, '--after', str(os.getpid()), *args])
@@ -160,6 +168,8 @@ def main():
                    '--app0', str(game), '--user', str(user_dir), '--timeout', env.get('BB_TIMEOUT', '0')]
         if guest_argv:
             command += ['--guest-argv', str(guest_argv)]
+        if key and (trophy_dir / 'trophies.txt').is_file():
+            command += ['--trophies', str(trophy_dir)]
         loadexec.unlink(missing_ok=True)
         # No stdin: an inherited pipe (shells such as Git Bash) cost the game its console output.
         code = subprocess.run([*command, *args], stdin=subprocess.DEVNULL, creationflags=no_console()).returncode

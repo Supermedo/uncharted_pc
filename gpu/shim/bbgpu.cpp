@@ -380,6 +380,14 @@ u32 ConsumeWithOverlaysScreenshotRequests() { return 0; }
 ScreenshotRequests ConsumeScreenshotRequests() { return {}; }
 } // namespace VideoCore
 
+extern "C" void bbgpu_trophy_notify(int grade, const char* game, const char* name, const void* png,
+                                    uint64_t png_size) {
+    const auto* bytes = static_cast<const unsigned char*>(png);
+    BbOverlay::NotifyTrophy(grade, game ? game : "", name ? name : "",
+                            bytes && png_size ? std::vector<unsigned char>(bytes, bytes + png_size)
+                                              : std::vector<unsigned char>());
+}
+
 extern "C" int bbgpu_overlay_captures_input(void) {
     return BbOverlay::CapturesInput() ? 1 : 0;
 }
