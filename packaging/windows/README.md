@@ -48,6 +48,11 @@ uses the NVIDIA SDK, compiled with MSVC 2022) and copies it with `nvngx_dlss.dll
 time (`vk_dlss.cpp`), adds the Vulkan extensions NGX asks for, and DLSS gets the same inputs as
 FSR 3 (scene color, depth, render-pixel motion vectors, jitter). `BB_DLSS=0` turns it off.
 
+XeSS (optional, any GPU): `bash packaging/windows/fetch_xess.sh` downloads Intel's `libxess.dll` and its
+license into `out/` (next to `out/bb-probe.exe`); `package.sh` ships them when present. The renderer
+loads the DLL at run time (`vk_xess.cpp`, no MSVC needed) with the same inputs as DLSS. The PC needs the
+Visual C++ 2022 x64 Redistributable. `BB_XESS=0` turns it off, `BB_XESS_DLL=<file>` picks another copy.
+
 The launcher texts are written in English with the Russian beside them; the other languages
 are in `launcher/bbport_lang.py` (one list per language in the order of `KEYS`; a missing or
 empty text falls back to English). The icon (`launcher/bloodborne.ico`/`.png`) is drawn by

@@ -73,6 +73,14 @@ if [[ -f out/bbport_dlss.dll && -f out/nvngx_dlss.dll ]]; then
 else
     echo "DLSS bridge not built (packaging/windows/build_dlss.sh): no DLSS in this package" >&2
 fi
+# Intel XeSS (any GPU): Intel's libxess.dll next to bb-probe.exe (packaging/windows/fetch_xess.sh).
+# Without it the XeSS option stays hidden.
+if [[ -f out/libxess.dll && -f out/Intel-XeSS-LICENSE.txt ]]; then
+    cp out/libxess.dll "$dest/bin/"
+    cp out/Intel-XeSS-LICENSE.txt out/Intel-XeSS-third-party-programs.txt "$dest/licenses/"
+else
+    echo "XeSS not fetched (packaging/windows/fetch_xess.sh): no XeSS in this package" >&2
+fi
 for license in gpu/third_party/wepoll/LICENSE:wepoll gpu/third_party/httplib/LICENSE:cpp-httplib; do
     if [[ -f ${license%%:*} ]]; then cp "${license%%:*}" "$dest/licenses/${license##*:}-LICENSE.txt"; fi
 done

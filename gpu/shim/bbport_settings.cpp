@@ -166,6 +166,19 @@ void ConfigureDlssSupport(bool available, const char* problem) {
     }
 }
 
+void ConfigureXessSupport(bool available, const char* problem) {
+    auto& v = Get();
+    v.xess_supported = available;
+    static std::string kept;
+    kept = problem ? problem : "";
+    v.xess_problem = available || kept.empty() ? nullptr : kept.c_str();
+    if (v.upscaler == UpscalerXess && !available) {
+        std::printf("Upscaler: XeSS unavailable (%s); falling back to FSR 3.1\n",
+                    kept.empty() ? "libxess.dll missing" : kept.c_str());
+        v.upscaler = UpscalerFsr3;
+    }
+}
+
 bool FixedRenderSession() {
     const char* size = std::getenv("BB_RENDER_RES");
     return size && size[0];
@@ -230,7 +243,7 @@ const char* PresetName(int preset) {
 }
 
 const char* UpscalerName(int upscaler) {
-    static constexpr const char* names[UpscalerCount] = {"off", "fsr3", "fsr4", "fsr411", "taa", "dlss"};
+    static constexpr const char* names[UpscalerCount] = {"off", "fsr3", "fsr4", "fsr411", "taa", "dlss", "xess"};
     return names[std::clamp(upscaler, 0, UpscalerCount - 1)];
 }
 

@@ -32,6 +32,31 @@ intro at 120 FPS (FSR 3, DLSS 2x) and 240 FPS (DLSS 4x) from 60, pacing within 1
 `BB_FRAME_DUMP_TRIGGER` (tools/drive.py `shot`) also writes the generated frames and the
 inputs (`fg_depth`, `fg_motion`).
 
+## Intel XeSS (2026-10-20)
+
+`BB_UPSCALER=xess` (launcher: Anti-aliasing > Intel XeSS) runs XeSS Super Resolution on any Vulkan
+GPU: the Intel XMX/DP4a path on Intel, Intel's DP4a path elsewhere. `vk_xess.cpp` loads Intel's
+`libxess.dll` (XeSS SDK 3.0.2, Intel Simplified Software License, redistributable) from next to
+`bb-probe.exe` with LoadLibrary (`BB_XESS_DLL=<file>` overrides the place) and calls its C API
+(`xessVK*`) through GetProcAddress, so no MSVC and none of Intel's headers are needed. The DLL
+itself needs the Visual C++ 2022 x64 Redistributable. `packaging/windows/fetch_xess.sh` downloads
+the DLL and the license texts into `out/`; `package.sh` ships them. Without the DLL the option is
+hidden. `BB_XESS=0` switches it off.
+
+- Device creation: XeSS is asked for its Vulkan extensions and features (VK_EXT_mutable_descriptor_type
+  and more); they are added to the device chain before `vkCreateDevice`.
+- Inputs are DLSS's: scene color before the post pass (HDR, XeSS measures the exposure itself,
+  `BB_XESS_AUTOEXPOSURE=0` turns that off), the scene depth, the render-pixel motion vectors
+  (current to previous, undilated: XeSS dilates them with the depth) and the Halton jitter with the
+  same sign as FSR 3 (toggle 1<<26 flips it). The color, depth and motion images are moved from
+  General to ShaderReadOnlyOptimal for the call and back, as XeSS asks.
+- The quality preset follows the render scale (Native AA 1.0, Ultra Quality Plus 1.3, Ultra Quality
+  1.5, Quality 1.7, Balanced 2.0, Performance 2.3, Ultra Performance 3.0). Uncharted renders at the
+  game's own size, so it runs as Native AA.
+- The context is created on the first frame that uses it (XeSS is not thread safe and wants the
+  rendering thread); that frame waits for XeSS to compile its kernels. A failure falls back to
+  FSR 3.1 like DLSS does.
+
 ## Native TAA and missing FSR 4 assets (2026-10-01)
 
 `upscaler=taa` / `BB_UPSCALER=taa` is a separate native-resolution temporal AA

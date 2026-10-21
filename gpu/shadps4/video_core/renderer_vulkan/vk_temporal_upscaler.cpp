@@ -173,6 +173,12 @@ TemporalUpscaler::TemporalUpscaler(const Instance& instance_, Scheduler& schedul
                         : dlss->Problem();
         BbSettings::ConfigureDlssSupport(dlss && dlss->Available(), problem.c_str());
     }
+    {
+        const Xess* xess = Xess::Get();
+        static std::string problem;
+        problem = !xess ? "libxess.dll is not installed (Intel XeSS SDK)" : xess->Problem();
+        BbSettings::ConfigureXessSupport(xess && xess->Available(), problem.c_str());
+    }
     // Available unless BB_UPSCALER=none; on/off and the parameters are the menu's settings.
     const char* env = std::getenv("BB_UPSCALER");
     enabled = !(env && std::strcmp(env, "none") == 0);
@@ -236,13 +242,14 @@ bool TemporalUpscaler::Active() const {
            (BbSettings::Get().upscaler == BbSettings::UpscalerFsr3 ||
             BbSettings::IsFsr4(BbSettings::Get().upscaler) ||
             BbSettings::Get().upscaler == BbSettings::UpscalerTaa ||
-            BbSettings::Get().upscaler == BbSettings::UpscalerDlss) &&
+            BbSettings::Get().upscaler == BbSettings::UpscalerDlss ||
+            BbSettings::Get().upscaler == BbSettings::UpscalerXess) &&
            !BbToggle::Disabled(1u << 24);
 }
 
 bool TemporalUpscaler::ReactiveOn() const {
     // FSR 4 takes no reactive mask: the opaque snapshot and the mask pass would be wasted.
-    return BbSettings::Get().reactive && !BbToggle::Disabled(1u << 27) && !UseFsr4() && !UseDlss() &&
+    return BbSettings::Get().reactive && !BbToggle::Disabled(1u << 27) && !UseFsr4() && !UseDlss() && !UseXess() &&
            BbSettings::Get().upscaler != BbSettings::UpscalerTaa;
 }
 
@@ -395,8 +402,8 @@ void TemporalUpscaler::OnDispatch(u64 cs_hash) {
 }
 
 bool TemporalUpscaler::EnsureResources(u32 w, u32 h, u32 ow, u32 oh, bool hdr) {
-    // DLSS, like FSR 4, has its own context: no portable FSR 3 context is made.
-    const bool use_fsr4 = UseFsr4() || UseDlss();
+    // DLSS and XeSS, like FSR 4, have their own context: no portable FSR 3 context is made.
+    const bool use_fsr4 = UseFsr4() || UseDlss() || UseXess();
     const bool use_taa = BbSettings::Get().upscaler == BbSettings::UpscalerTaa;
     if (use_taa && (w != ow || h != oh)) {
         std::printf("TAA: remove BB_RENDER_RES to use native-resolution TAA\n");
@@ -1124,6 +1131,12 @@ void TemporalUpscaler::Run() {
             {input_color, input_color_view, color.info.pixel_format, vk::ImageAspectFlagBits::eColor, w, h},
             {input_depth, input_depth_view, depth_format, vk::ImageAspectFlagBits::eDepth, w, h}, w, h,
             ow, oh, frame_ms, true);
+    } else if (UseXess()) {
+        dispatched = RecordXess(
+            cmdbuf,
+            {input_color, input_color_view, color.info.pixel_format, vk::ImageAspectFlagBits::eColor, w, h},
+            {input_depth, input_depth_view, depth_format, vk::ImageAspectFlagBits::eDepth, w, h}, w, h,
+            ow, oh, true);
     } else {
         FfxVkPortableUpscaleDispatchInfo info{};
         info.structSize = sizeof(info);
@@ -1682,7 +1695,8 @@ void TemporalUpscaler::RunScaled() {
     last_frame = now;
 
     // bbport: FSR 4 writes its HDR-format output, copied into the output-size UI image.
-    if (UseFsr4() || UseDlss() || BbSettings::Get().upscaler == BbSettings::UpscalerTaa) {
+    if (UseFsr4() || UseDlss() || UseXess() ||
+        BbSettings::Get().upscaler == BbSettings::UpscalerTaa) {
         barrier(vk::Image(output_image), vk::ImageAspectFlagBits::eColor,
                 vk::ImageLayout::eUndefined, all, vk::AccessFlagBits2::eNone,
                 vk::ImageLayout::eGeneral, all, rw);
@@ -1696,6 +1710,13 @@ void TemporalUpscaler::RunScaled() {
                              {depth_image, depth_view, depth_format, vk::ImageAspectFlagBits::eDepth,
                               source_width, source_height},
                              w, h, ow, oh, frame_ms, false);
+        } else if (UseXess()) {
+            ok4 = RecordXess(cmdbuf,
+                             {color_image, color_view, color.info.pixel_format,
+                              vk::ImageAspectFlagBits::eColor, source_width, source_height},
+                             {depth_image, depth_view, depth_format, vk::ImageAspectFlagBits::eDepth,
+                              source_width, source_height},
+                             w, h, ow, oh, false);
         } else {
             ok4 = RecordFsr4(cmdbuf, {color_image, color_view, source_width, source_height},
                             {depth_image, depth_view, source_width, source_height}, w, h, ow,
@@ -2088,6 +2109,83 @@ bool TemporalUpscaler::RecordDlss(vk::CommandBuffer cmdbuf, const Dlss::Resource
         std::printf("Upscaler: DLSS failed; falling back to FSR 3.1\n");
         BbSettings::Get().upscaler = BbSettings::UpscalerFsr3;
         dlss_failed = true; // EnsureResources creates the FSR 3 context next frame
+        reset = true;
+    }
+    return ok;
+}
+
+bool TemporalUpscaler::UseXess() const {
+    const Xess* xess = Xess::Get();
+    return BbSettings::Get().upscaler == BbSettings::UpscalerXess && xess && xess->Available() &&
+           !xess_failed;
+}
+
+bool TemporalUpscaler::RecordXess(vk::CommandBuffer cmdbuf, const Xess::Resource& color,
+                                  const Xess::Resource& depth, u32 w, u32 h, u32 ow, u32 oh,
+                                  bool hdr) {
+    Xess* xess = Xess::Get();
+    const Xess::FeatureDesc desc{w, h, ow, oh, Xess::QualityForScale(float(ow) / float(w)), hdr};
+    bool ok = true;
+    if (!xess->HasFeature(desc)) {
+        // The previous feature may still be in use by submitted work; `cmdbuf` stays open.
+        scheduler.WaitSubmitted();
+        xess->ReleaseFeature();
+        ok = xess->CreateFeature(desc);
+        reset = true;
+    }
+    if (ok) {
+        // XeSS reads its inputs as sampled images in ShaderReadOnlyOptimal; the games' images
+        // (and the motion vectors made above) are kept in General, so they go there and back.
+        const std::array<std::pair<vk::Image, vk::ImageAspectFlags>, 3> inputs = {{
+            {color.image, color.aspect},
+            {depth.image, depth.aspect},
+            {vk::Image(motion_image), vk::ImageAspectFlagBits::eColor},
+        }};
+        const auto transition = [&](vk::ImageLayout from, vk::ImageLayout to,
+                                    vk::PipelineStageFlags2 src_stage, vk::AccessFlags2 src_access,
+                                    vk::PipelineStageFlags2 dst_stage, vk::AccessFlags2 dst_access) {
+            std::array<vk::ImageMemoryBarrier2, 3> barriers;
+            for (size_t i = 0; i < inputs.size(); ++i) {
+                barriers[i] = vk::ImageMemoryBarrier2{
+                    .srcStageMask = src_stage,
+                    .srcAccessMask = src_access,
+                    .dstStageMask = dst_stage,
+                    .dstAccessMask = dst_access,
+                    .oldLayout = from,
+                    .newLayout = to,
+                    .image = inputs[i].first,
+                    .subresourceRange = {inputs[i].second, 0, 1, 0, 1},
+                };
+            }
+            cmdbuf.pipelineBarrier2({.imageMemoryBarrierCount = u32(barriers.size()),
+                                     .pImageMemoryBarriers = barriers.data()});
+        };
+        const auto all = vk::PipelineStageFlagBits2::eAllCommands;
+        const auto compute = vk::PipelineStageFlagBits2::eComputeShader;
+        const auto write = vk::AccessFlagBits2::eMemoryWrite;
+        const auto rw = vk::AccessFlagBits2::eMemoryRead | vk::AccessFlagBits2::eMemoryWrite;
+        transition(vk::ImageLayout::eGeneral, vk::ImageLayout::eShaderReadOnlyOptimal, all, write,
+                   compute, vk::AccessFlagBits2::eShaderRead);
+        // The jitter and motion vectors FSR 3 gets: render pixels, current to previous.
+        const float sign = BbToggle::Disabled(1u << 26) ? -1.0f : 1.0f;
+        ok = xess->Evaluate(cmdbuf, {
+            .color = color,
+            .depth = depth,
+            .motion = {vk::Image(motion_image), *motion_view, vk::Format::eR16G16Sfloat,
+                       vk::ImageAspectFlagBits::eColor, w, h},
+            .output = {vk::Image(output_image), *output_view, vk::Format::eR16G16B16A16Sfloat,
+                       vk::ImageAspectFlagBits::eColor, ow, oh},
+            .jitter_x = sign * jitter[0],
+            .jitter_y = sign * jitter[1],
+            .reset = reset,
+        });
+        transition(vk::ImageLayout::eShaderReadOnlyOptimal, vk::ImageLayout::eGeneral, compute,
+                   vk::AccessFlagBits2::eNone, all, rw);
+    }
+    if (!ok) {
+        std::printf("Upscaler: XeSS failed; falling back to FSR 3.1\n");
+        BbSettings::Get().upscaler = BbSettings::UpscalerFsr3;
+        xess_failed = true; // EnsureResources creates the FSR 3 context next frame
         reset = true;
     }
     return ok;

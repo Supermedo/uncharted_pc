@@ -77,6 +77,7 @@ SHARPENING = [('off', 'Off'), ('1000', 'Low'), ('500', 'Medium'), ('250', 'High'
 ANTI_ALIASING = [('off', "Off (the game's own)"), ('taa', 'TAA'), ('fsr3', 'AMD FSR 3.1 (Native AA)'),
                  ('fsr4', 'AMD FSR 4 (Native AA)'), ('dlss', 'NVIDIA DLSS (DLAA, GeForce RTX)')]
 FSR411 = ('fsr411', 'AMD FSR 4.1.1 (Native AA)')
+XESS = ('xess', 'Intel XeSS (Native AA, any GPU)')
 AA_SHARPNESS = [('0', 'Off'), ('0.2', 'Low'), ('0.4', 'Medium'), ('0.7', 'High')]
 # Frames generated between two of the game's (BB_FRAME_GEN, BB_FRAME_GEN_MULTIPLIER).
 FRAME_GENERATION = [('off', 'Off'), ('fsr3', 'AMD FSR 3 Frame Generation (any GPU)'),
@@ -296,6 +297,14 @@ def fsr411_assets():
     """FSR 4.1.1 needs its model assets, built from AMD's DLL (docs/upscaler.md)."""
     return bool(os.environ.get('BB_FSR411_DIR')) or any(
         (folder / 'fsr4_411').is_dir() for folder in (PORT_DIR, DATA_DIR))
+
+
+def xess_available():
+    """Intel XeSS needs Intel's libxess.dll next to bb-probe.exe (packaging/windows/fetch_xess.sh)."""
+    override = os.environ.get('BB_XESS_DLL')
+    if override:
+        return Path(override).is_file()
+    return any((PORT_DIR / folder / 'libxess.dll').is_file() for folder in ('bin', 'out'))
 
 
 def input_ini_path():
@@ -1021,11 +1030,12 @@ class Launcher:
         self.row(f, _('Sharpening'), self.choice(f, 'sharpening', SHARPENING, 34),
                  _('AMD RCAS after FSR 1 (only while the image is enlarged).'))
         self.section(f, _('Anti-aliasing'))
-        modes = ANTI_ALIASING + ([FSR411] if fsr411_assets() else [])
+        modes = ANTI_ALIASING + ([FSR411] if fsr411_assets() else []) + ([XESS] if xess_available() else [])
         self.row(f, _('Anti-aliasing'), self.choice(f, 'anti_aliasing', modes, 34),
                  _('Temporal anti-aliasing at the games\' 1920 × 1080, with their own motion vectors: '
                    'smoother edges and less shimmering than the games\' own. DLSS needs a GeForce RTX; '
-                   'FSR 4 runs best on a Radeon RX 7000/9000 or a GeForce RTX 40/50.'))
+                   'FSR 4 runs best on a Radeon RX 7000/9000 or a GeForce RTX 40/50. '
+                   'Intel XeSS runs on any GPU (best on Intel Arc).'))
         self.row(f, _('Anti-aliasing sharpness'), self.choice(f, 'aa_sharpness', AA_SHARPNESS, 34))
         self.section(f, _('Frame generation'))
         hint = _('Frames made between two of the game\'s, for smoother motion: 60 FPS shows as 120. '

@@ -24,7 +24,7 @@ Starting
 - Display page -> Frame rate: 60 FPS as on PS4, or 120 FPS. Gameplay keeps its normal speed
   and the cutscene videos still play at 60. Higher rates are experimental. Above your
   display's refresh rate use the Mailbox or Immediate presentation.
-- Display page -> Anti-aliasing: TAA, AMD FSR 3.1, AMD FSR 4 or NVIDIA DLSS (DLAA) smooth the
+- Display page -> Anti-aliasing: TAA, AMD FSR 3.1, AMD FSR 4, NVIDIA DLSS (DLAA) or Intel XeSS smooth the
   games' 1920x1080 picture with their own motion vectors, before their post-processing.
   DLSS needs a GeForce RTX. Upscaling to a larger window or screen stays with FSR 1.
 - Display page -> Frame generation: AMD FSR 3 Frame Generation (any GPU, 2x) or NVIDIA DLSS
