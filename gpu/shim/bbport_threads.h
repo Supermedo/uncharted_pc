@@ -27,9 +27,12 @@ inline unsigned Available() {
     return std::max(1u, std::thread::hardware_concurrency());
 }
 
-/// The calling thread only runs when cores are otherwise idle (lowest Windows priority).
+/// The calling thread stays out of the way of the game's own threads: below normal, so it
+/// still runs when the job workers (lowest) and the rest of the game use all cores. At the
+/// idle level the draw preparation was starved by them and the GPU thread fell back to doing
+/// the work itself.
 inline void MakeBackground() {
-    SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_IDLE);
+    SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
 }
 #else
 
