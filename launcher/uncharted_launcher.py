@@ -374,9 +374,18 @@ COLORS = {'surface': SURFACE, 'card': CARD, 'card_hi': CARD_HI, 'line': LINE, 't
           'gold': GOLD, 'gold_hi': GOLD_HI, 'track': '#2c2e33', 'knob': '#9a958b', 'knob_on': '#f7f1e2',
           'button': '#25272b', 'button_hi': '#30333a'}
 # Sidebar icons (Segoe Fluent Icons on Windows 11, Segoe MDL2 Assets on Windows 10).
-NAV_ICONS = {'play': '\ue768', 'game': '\ue7fc', 'display': '\ue7f4', 'controls': '\ue765',
-             'advanced': '\ue713', 'log': '\ue8a5'}
+NAV_ICONS = {'play': '\ue80f', 'game': '\ue8f1', 'display': '\ue7f4', 'controls': '\ue7fc',
+             'advanced': '\ue90f', 'log': '\ue9d9'}
 RUST, RUST_HI = GOLD, GOLD_HI
+# The home screen: its menu row (settings pages, with the sidebar's icons) and its tile row.
+HOME_MENU = [('game', 'Game folder'), ('display', 'Display and graphics'), ('controls', 'Controls'),
+             ('advanced', 'Advanced'), ('log', 'Log')]
+HOME_TILES = [key for key, _t, _s, _e in GAMES] + ['settings']
+
+
+def rgb(color):
+    """'#rrggbb' as an (r, g, b) tuple for Pillow."""
+    return tuple(int(color[i:i + 2], 16) for i in (1, 3, 5))
 
 
 class Launcher:
@@ -390,7 +399,6 @@ class Launcher:
         self.output = queue.Queue()
         self.ui_calls = queue.Queue()
         self.banner_key = self.banner_scaled = self.cover_image = None
-        self.card_hot = self.backdrop_key = None
         self.hero_video = self.video_photo = None
         self.tile_clip = self.tile_clip_key = self.tile_photo = None
         self.video_masks, self.clip_masks = {}, {}
@@ -691,7 +699,9 @@ class Launcher:
     def build(self):
         tk, ttk = self.tk, self.ttk
         side_w = self.px(248)
-        side = tk.Frame(self.root, bg=BG, width=side_w)
+        # The settings view (sidebar and pages); the home screen covers the window instead.
+        self.settings_view = tk.Frame(self.root, bg=BG)
+        side = tk.Frame(self.settings_view, bg=BG, width=side_w)
         side.pack(side='left', fill='y')
         side.pack_propagate(False)
         brand_wrap = side_w - 36
@@ -712,7 +722,7 @@ class Launcher:
                  anchor='w').pack(anchor='w', padx=18, pady=(1, 16))
         tk.Frame(side, bg=LINE, height=1).pack(fill='x', padx=18, pady=(0, 14))
         self.nav, self.nav_pills, self.nav_icons, self.nav_marks, self.current_page = {}, {}, {}, {}, None
-        for name, title in (('play', _('Play')), ('game', _('Game')), ('display', _('Display')),
+        for name, title in (('play', _('Home')), ('game', _('Game')), ('display', _('Display')),
                             ('controls', _('Controls')), ('advanced', _('Advanced')), ('log', _('Log'))):
             row = tk.Frame(side, bg=BG, cursor='hand2')
             row.pack(fill='x', padx=(0, 12), pady=2)
@@ -743,8 +753,8 @@ class Launcher:
                                   wraplength=side_w - 36)
         self.side_note.pack(anchor='w', padx=18, pady=(0, 18))
 
-        tk.Frame(self.root, bg=LINE, width=1).pack(side='left', fill='y')
-        right = tk.Frame(self.root, bg=SURFACE)
+        tk.Frame(self.settings_view, bg=LINE, width=1).pack(side='left', fill='y')
+        right = tk.Frame(self.settings_view, bg=SURFACE)
         right.pack(side='left', fill='both', expand=True)
         bar = tk.Frame(right, bg=PANEL, height=self.px(78))
         bar.pack(fill='x', side='bottom')
@@ -793,28 +803,25 @@ class Launcher:
             return
         self._nav_style(name, hover=inside)
 
-    def _card_hover(self, key):
-        if self.card_hot == key:
-            return
-        self.card_hot = key
-        if key:
-            self.backdrop_key = key  # the background stays until another game is hovered
-        if self.tile_clip and self.tile_clip_key != key:
-            self.stop_tile_clip()
-        self.stage.configure(cursor='hand2' if key else '')
-        self.draw_stage()
-        if self.music:
-            self.music.hover(None if self.process else key)
-
     def show(self, name):
+        """'play' is the home screen over the whole window; the others are settings pages."""
         for page in self.pages.values():
             page.pack_forget()
-        self.pages[name].pack(fill='both', expand=True)
         self.current_page = name
+        if name == 'play':
+            self.settings_view.pack_forget()
+            self.stage.pack(fill='both', expand=True)
+        else:
+            self.stage.pack_forget()
+            self.settings_view.pack(fill='both', expand=True)
+            self.pages[name].pack(fill='both', expand=True)
         for n in self.nav:
             self._nav_style(n, active=(n == name))
         if name == 'play':
             self.refresh()
+            key = HOME_TILES[self.tile_index]
+            if self.music and not self.process and key != 'settings':
+                self.music.hover(key)
         else:
             self.quiet_media()
 
@@ -833,161 +840,284 @@ class Launcher:
         self.tile_clip = self.tile_clip_key = self.tile_photo = None
 
     def build_play(self):
+        """The home screen: one canvas over the whole window (the settings view is hidden while it
+        shows), console style: a menu row at the top, the tile row (the three games, Settings),
+        the focused game's name and Start, and the window options along the bottom."""
         tk = self.tk
-        page = tk.Frame(self.content, bg=SURFACE)
-        self.pages['play'] = page
-        # Under the covers: ordinary widgets on the page colour (the backdrop has faded out there).
-        self.ready = tk.Label(page, text='', bg=SURFACE, fg=MUTED, font=self.font_ui_sm,
-                              wraplength=self.px(820), justify='left')
-        self.ready.pack(side='bottom', anchor='w', padx=self.px(44), pady=(0, self.px(16)))
-        row = tk.Frame(page, bg=SURFACE)
-        row.pack(side='bottom', fill='x', padx=self.px(44), pady=(self.px(4), self.px(8)))
-        self.toggle(row, self.var('fullscreen'), SURFACE).pack(side='left')
-        fullscreen = tk.Label(row, text=_('Fullscreen'), bg=SURFACE, fg=TEXT, font=self.font_ui, cursor='hand2')
+        import tkinter.font as tkfont
+        self.font_home_title = (self.ps_medium, 26)
+        self.measure_play = tkfont.Font(root=self.root, font=self.font_play).measure
+        self.stage = tk.Canvas(self.root, bg=BG, highlightthickness=0, bd=0)
+        self.stage.bind('<Configure>', lambda _e: self.schedule_stage())
+        self.stage.bind('<Motion>', lambda e: self.home_hover(self.hit_at(e.x, e.y)))
+        self.stage.bind('<Leave>', lambda _e: self.home_hover(None))
+        self.stage.bind('<Button-1>', lambda e: self.home_click(self.hit_at(e.x, e.y)))
+        self.stage.bind('<Double-Button-1>', lambda e: self.home_click(self.hit_at(e.x, e.y), True))
+        for sequence, action in (('<Left>', (0, -1)), ('<Right>', (0, 1)), ('<Up>', (-1, 0)),
+                                 ('<Down>', (1, 0)), ('<Return>', 'enter'), ('<KP_Enter>', 'enter'),
+                                 ('<Escape>', 'back')):
+            self.root.bind(sequence, lambda _e, a=action: self.home_key(a))
+        # Fullscreen, Add to Steam and Desktop shortcut along the bottom.
+        self.home_options = tk.Frame(self.stage, bg=BG)
+        self.toggle(self.home_options, self.var('fullscreen'), BG).pack(side='left')
+        fullscreen = tk.Label(self.home_options, text=_('Fullscreen'), bg=BG, fg=TEXT, font=self.font_ui,
+                              cursor='hand2')
         fullscreen.pack(side='left', padx=(self.px(10), 0))
         fullscreen.bind('<Button-1>', lambda _e: self.var('fullscreen').set(not self.var('fullscreen').get()))
-        self.pill(row, _('Add to Steam'), self.add_to_steam, background=SURFACE, padding=(14, 6)).pack(
+        self.pill(self.home_options, _('Add to Steam'), self.add_to_steam, background=BG, padding=(14, 6)).pack(
             side='left', padx=(self.px(24), 0))
-        self.pill(row, _('Desktop shortcut'), self.shortcut, background=SURFACE, padding=(14, 6)).pack(
+        self.pill(self.home_options, _('Desktop shortcut'), self.shortcut, background=BG, padding=(14, 6)).pack(
             side='left', padx=(self.px(8), 0))
-        # The header, the library heading and the covers share one canvas, so the game's
-        # background picture runs behind all of them.
-        self.stage = tk.Canvas(page, bg=SURFACE, highlightthickness=0, bd=0)
-        self.stage.pack(fill='both', expand=True)
-        self.stage.bind('<Configure>', lambda _e: self.draw_stage())
-        self.stage.bind('<Motion>', lambda e: self._card_hover(self.card_at(e.x, e.y)))
-        self.stage.bind('<Leave>', lambda _e: self._card_hover(None))
-        self.stage.bind('<Button-1>', lambda e: self.pick_card(e.x, e.y))
-        self.stage.bind('<Double-Button-1>', lambda e: self.pick_card(e.x, e.y, play=True))
-        self.cards = {key: None for key, _t, _s, _e in GAMES}  # stage area of each cover
-        self.card_images, self.backdrops = {}, {}
-        self.var('start').trace_add('write', lambda *_a: self.refresh())
-
-    def card_at(self, x, y):
-        return next((key for key, box in self.cards.items()
-                     if box and box[0] <= x < box[2] and box[1] <= y < box[3]), None)
-
-    def pick_card(self, x, y, play=False):
-        key = self.card_at(x, y)
-        if key:
-            self.var('start').set(key)
-            if play:
-                self.play()
-
-    def _tile_content_size(self, canvas_w, canvas_h):
-        """Size passed to poster_tile so the bitmap, including its shadow pad, stays inside the card."""
-        inner_w = max(48, canvas_w - 8)
-        inner_h = max(80, canvas_h - 8)
-        while inner_w > 48 and inner_w + 2 * max(10, inner_w // 28) > canvas_w - 2:
-            inner_w -= 2
-        pad = max(10, inner_w // 28)
-        while inner_h > 80 and inner_h + 2 * pad > canvas_h - 2:
-            inner_h -= 2
-        return inner_w, inner_h
-
-    def draw_stage(self):
-        """The Play page above the controls: the plain banner until a cover is hovered, then that
-        game's background over its top part (it stays until another game is hovered); the header
-        names; the library heading; the covers."""
-        c = self.stage
-        w, h = c.winfo_width(), c.winfo_height()
-        if w < 200 or h < 200:
-            return
-        c.delete('all')
+        self.home_hits, self.home_hot, self.home_images = [], None, {}
+        self.ready_text, self.clock_item, self.stage_job = '', None, None
         start = self.var('start').get()
-        shown = self.card_hot or self.backdrop_key or start
-        title, subtitle = next((t, sub) for k, t, sub, _e in GAMES if k == shown)
-        hero_h = max(self.px(180), min(self.px(280), int(w * 576 / 1024)))
-        # A little more than half of the page, fading out over its lower part.
-        backdrop = self.backdrop_key and self.photo_backdrop(
-            self.backdrop_key, w, min(h, int(self.pages['play'].winfo_height() * 0.62)))
-        if backdrop:
-            c.create_image(0, 0, image=backdrop, anchor='nw')
-            self.sync_hero_video(w, hero_h, start, hidden=True)
+        self.home_row, self.menu_index = 1, 0
+        self.tile_index = HOME_TILES.index(start) if start in HOME_TILES else 0
+        self.backdrops = {}
+        self.var('start').trace_add('write', lambda *_a: self.refresh())
+        self.root.after(1000, self.tick_clock)
+
+    def schedule_stage(self):
+        """Redraw once the window stops changing size (the background is made per size)."""
+        if self.stage_job:
+            self.root.after_cancel(self.stage_job)
+        self.stage_job = self.root.after(60, self.draw_stage)
+
+    def home_key(self, action):
+        """Arrow keys move the focus (Up: the menu row, Down: the tiles), Enter opens or starts
+        what has it; Esc goes back home from the settings pages."""
+        if getattr(self, 'capturing', None):
+            return None
+        if self.current_page != 'play':
+            if action == 'back':
+                self.show('play')
+                return 'break'
+            return None
+        if action == 'enter':
+            self.home_activate()
+        elif action != 'back':
+            self.home_move(*action)
+        return 'break'
+
+    def home_move(self, rows, columns):
+        if rows:
+            self.home_row = 0 if rows < 0 else 1
+        elif self.home_row == 0:
+            self.menu_index = min(len(HOME_MENU) - 1, max(0, self.menu_index + columns))
         else:
-            self.draw_banner(w, hero_h, start)
-        info = self.info
-        meta = (f"{info['id']}  ·  {_('version')} {info['version']}" if info
-                else _('Set your game folder on the Game page'))
-        # The game's block, store-page style, on the same left edge as the library below: a short
-        # rule and the series line in the game's accent, the title, then the folder status.
-        accent, x0 = GAME_ACCENTS.get(shown, GOLD), self.px(44)
-        meta_y = hero_h - self.px(18)
-        title_y = meta_y - self.px(24)
-        eyebrow_y = title_y - self.px(38)
-        self.shadow_text(x0, meta_y, meta, 'sw', '#b3ab9d', self.font_hero_sub)
-        self.shadow_text(x0, title_y, _(title), 'sw', '#f6f1e6', self.font_hero)
-        self.shadow_text(x0, eyebrow_y, _(subtitle).upper(), 'sw', accent, self.font_eyebrow)
-        rule_y = eyebrow_y - self.px(22)
-        c.create_rectangle(x0, rule_y, x0 + self.px(28), rule_y + max(2, self.px(2)), fill=accent, outline='')
-        heading_y = hero_h + self.px(36)
-        self.shadow_text(self.px(44), heading_y, _('Library'), 'w', TEXT, (self.ps_medium, 14))
-        self.shadow_text(w - self.px(44), heading_y, _('Double-click a cover to launch'), 'e', '#aaa49a',
-                         self.font_ui_sm)
-        # Three columns as the old card grid had them; tiles keep the cover shape but stay short
-        # enough that their names are on screen.
-        top, left, gap = hero_h + self.px(58), self.px(36), self.px(18)
-        col_w = (w - 2 * left - 2 * gap) // 3
-        natural = int(round(col_w * 365 / 273)) + self.px(78)
-        tile_h = max(self.px(168), min(natural, h - top - self.px(6)))
-        for column, (key, _t, _s, _e) in enumerate(GAMES):
-            x = left + column * (col_w + gap)
-            self.cards[key] = (x, top, x + col_w, top + tile_h)
-            self.draw_card(key, x, top, col_w, tile_h)
+            self.focus_tile(min(len(HOME_TILES) - 1, max(0, self.tile_index + columns)))
+        self.draw_stage()
 
-    def shadow_text(self, x, y, text, anchor, fill, font):
-        """Text that stays readable over a bright background: a soft dark copy one pixel below."""
-        offset = max(1, self.px(1))
-        self.stage.create_text(x + offset, y + offset, text=text, anchor=anchor, fill='#000000', font=font)
-        self.stage.create_text(x, y, text=text, anchor=anchor, fill=fill, font=font)
+    def focus_tile(self, index):
+        """A game tile with the focus is the game Start runs (and its music plays)."""
+        self.tile_index = index
+        key = HOME_TILES[index]
+        if key != 'settings' and self.var('start').get() != key:
+            self.var('start').set(key)
+        if self.music:
+            self.music.hover(None if self.process or key == 'settings' else key)
 
-    def draw_card(self, key, x, y, w, h):
-        """Rounded cover tile with shadow (see-through around it); gold ring when selected."""
-        c = self.stage
-        title, subtitle = next((t, sub) for k, t, sub, _e in GAMES if k == key)
-        present = self.available.get(key, True)
-        chosen = key == self.var('start').get()
-        hot = key == self.card_hot
-        inner_w, inner_h = self._tile_content_size(w, h)
-        try:
-            import uncharted_art
-            aspect = uncharted_art.poster_aspect(key)
-        except ImportError:
-            aspect = None
-        if aspect:
-            # The tile takes the cover's own shape, so the picture fills it whole: no strips.
-            inner_w = min(inner_w, max(48, round((inner_h - self.px(62)) * aspect)))
-        page = tuple(int(SURFACE[i:i + 2], 16) for i in (1, 3, 5))
-        wanted = (inner_w, inner_h, present, chosen, hot)
-        if self.card_images.get(key, (None,))[0] != wanted:
-            image = strip = None
+    def home_activate(self):
+        if self.home_row == 0:
+            self.show(HOME_MENU[self.menu_index][0])
+        elif HOME_TILES[self.tile_index] == 'settings':
+            self.show('display')
+        elif not self.process:
+            self.play()
+
+    def hit_at(self, x, y):
+        return next((hit for (x0, y0, x1, y1), hit in reversed(self.home_hits)
+                     if x0 <= x < x1 and y0 <= y < y1), None)
+
+    def home_hover(self, hit):
+        if hit == self.home_hot:
+            return
+        self.home_hot = hit
+        self.stage.configure(cursor='hand2' if hit else '')
+        self.draw_stage()
+
+    def home_click(self, hit, double=False):
+        if not hit:
+            return
+        kind = hit[0]
+        if kind == 'menu':
+            self.home_row, self.menu_index = 0, hit[1]
+            self.show(HOME_MENU[hit[1]][0])
+        elif kind == 'tile':
+            self.home_row = 1
+            self.focus_tile(hit[1])
+            if HOME_TILES[hit[1]] == 'settings':
+                self.show('display')
+            elif double and not self.process:
+                self.play()
+            else:
+                self.draw_stage()
+        elif kind == 'start':
+            self.play()
+        elif kind == 'stop':
+            self.stop()
+
+    def home_image(self, key, make):
+        """A cached PhotoImage of a Pillow picture; None without Pillow."""
+        if key not in self.home_images:
             try:
                 from PIL import ImageTk
-                import uncharted_art
-                scene = uncharted_art.poster_tile(key, inner_w, inner_h, title, subtitle, selected=chosen,
-                                                  hover=hot and not chosen, dimmed=not present, page=page,
-                                                  caption=self.px(62), transparent=True)
-                image, strip, poster = ImageTk.PhotoImage(scene), scene.info.get('caption'), scene.info.get('poster')
+                self.home_images[key] = ImageTk.PhotoImage(make())
             except Exception:
-                image = strip = poster = None
-            self.card_images[key] = (wanted, image, strip, poster)
-        _wanted, image, strip, poster = self.card_images[key]
-        if not image:
-            c.create_rectangle(x, y, x + w, y + h, fill=CARD, outline=LINE)
+                self.home_images[key] = None
+        return self.home_images[key]
+
+    def draw_stage(self):
+        """The home screen, drawn again after each change (pictures are cached)."""
+        self.stage_job = None
+        c = self.stage
+        w, h = c.winfo_width(), c.winfo_height()
+        if self.current_page != 'play' or w < 200 or h < 200:
             return
-        x += max(0, (w - image.width()) // 2)
-        c.create_image(x, y, image=image, anchor='nw')
-        if hot and poster and not self.process:
-            self.draw_tile_clip(key, x + poster[0], y + poster[1], poster[2], poster[3])
-        if strip:
-            # The names as system text: sharp at every size, unlike text drawn into the picture.
-            left, top, width, height = strip
-            middle = x + left + width // 2
-            fg = GOLD if chosen else (GAME_ACCENTS.get(key, TEXT) if hot else '#e4ded2') if present else MUTED
-            c.create_text(middle, y + top + height * 0.40, text=_(title), fill=fg, font=self.font_game,
-                          anchor='center', width=width - self.px(16))
-            c.create_text(middle, y + top + height * 0.76, text=_(subtitle), fill=GOLD_DIM if chosen else MUTED,
-                          font=self.font_game_sub, anchor='center')
+        try:
+            import uncharted_art as art
+        except ImportError:
+            art = None
+        px = self.px
+        c.delete('all')
+        self.home_hits = []
+        start = self.var('start').get()
+        focus = HOME_TILES[self.tile_index]
+        # The background: the selected game's picture, or the art folder's background video.
+        own = art is not None and art.has_background(start)
+        video = None if own else self.sync_hero_video(w, h, start)
+        back = self.photo_home(start, w, h)
+        if back:
+            c.create_image(0, 0, image=back, anchor='nw')
+        if video:
+            c.create_image(w // 2, h // 2, image=self.video_photo)  # see-through until a frame
+        margin = px(56)
+
+        # The menu row: round icons, the focused or pointed one lit with its name under it.
+        top = px(46)
+        for i, (name, label) in enumerate(HOME_MENU):
+            x = margin + px(20) + i * px(56)
+            focused = self.home_row == 0 and self.menu_index == i
+            hot = self.home_hot == ('menu', i)
+            if (focused or hot) and art:
+                alpha = 64 if focused else 34
+                dot = self.home_image(('dot', alpha), lambda a=alpha: art.glow_dot(px(44), a))
+                if dot:
+                    c.create_image(x, top, image=dot)
+            if self.font_icon:
+                c.create_text(x, top, text=NAV_ICONS[name], font=(self.font_icon[0], 15),
+                              fill=TEXT if focused or hot else '#cfc9bd')
+            else:
+                c.create_text(x, top, text=_(label)[:1], font=self.font_ui_md, fill=TEXT)
+            if focused or hot:
+                c.create_text(x, top + px(36), text=_(label), font=self.font_ui_sm, fill=TEXT)
+            self.home_hits.append(((x - px(22), top - px(22), x + px(22), top + px(22)), ('menu', i)))
+        self.clock_item = c.create_text(w - margin, top, text=self.clock_text(), anchor='e',
+                                        font=(self.ps_family, 12), fill='#e4ded2')
+
+        # The tile row: the focused tile larger, a gold ring while the row has the focus.
+        big = max(px(150), min(px(250), int(min(w * 0.18, h * 0.27))))
+        small = int(big * 0.64)
+        tile_top, x = px(122), margin
+        for i, key in enumerate(HOME_TILES):
+            side = big if i == self.tile_index else small
+            ring = i == self.tile_index and self.home_row == 1
+            hot = self.home_hot == ('tile', i)
+            image = None
+            if art and key == 'settings':
+                image = self.home_image(('blank', side, ring, hot),
+                                        lambda s=side, r=ring, o=hot: art.home_blank_tile(s, focused=r, hover=o))
+            elif art:
+                dim = not self.available.get(key, True)
+                image = self.home_image(('tile', key, side, ring, hot, dim),
+                                        lambda k=key, s=side, r=ring, o=hot, d=dim:
+                                        art.home_tile(k, s, focused=r, hover=o, dimmed=d))
+            if image:
+                pad = (image.width() - side) // 2
+                c.create_image(x - pad, tile_top - pad, image=image, anchor='nw')
+            else:
+                c.create_rectangle(x, tile_top, x + side, tile_top + side, fill=CARD,
+                                   outline=GOLD if ring else LINE)
+            if key == 'settings':
+                if self.font_icon:
+                    c.create_text(x + side / 2, tile_top + side * 0.44, text='\ue713',
+                                  font=(self.font_icon[0], max(12, side // 6)), fill=TEXT)
+                c.create_text(x + side / 2, tile_top + side * 0.78, text=_('Settings'),
+                              font=self.font_ui_sm if side < big else self.font_ui_md, fill=TEXT)
+            elif i == self.tile_index and not self.process:
+                self.draw_tile_clip(key, x, tile_top, side, side)
+            self.home_hits.append(((x, tile_top, x + side, tile_top + side), ('tile', i)))
+            x += side + px(16)
+
+        # The focused tile's block: accent rule, series line, name, Start, the folder status.
+        if focus == 'settings':
+            accent, eyebrow, title = GOLD, _('Launcher'), _('Settings')
+            meta = _('Display and graphics, controls, the game folder and more. Esc comes back here.')
+        else:
+            title, eyebrow = next((t, sub) for k, t, sub, _e in GAMES if k == focus)
+            accent, title, eyebrow, meta = GAME_ACCENTS.get(focus, GOLD), _(title), _(eyebrow), self.ready_text
+        y = tile_top + big + px(38)
+        c.create_rectangle(margin, y, margin + px(28), y + max(2, px(2)), fill=accent, outline='')
+        self.shadow_text(margin, y + px(14), eyebrow.upper(), 'nw', accent, self.font_eyebrow)
+        self.shadow_text(margin, y + px(32), title, 'nw', '#f6f1e6', self.font_home_title)
+        button_y = y + px(88)
+        if focus == 'settings':
+            self.home_pill(margin, button_y, _('Open settings'), ('tile', self.tile_index), True)
+        elif self.process:
+            self.home_pill(margin, button_y, _('Close game'), ('stop',))
+            meta = _('The game is running in its own window.')
+        else:
+            self.home_pill(margin, button_y, _('Start'), ('start',), True)
+        self.shadow_text(margin, button_y + px(58), meta, 'nw', '#b3ab9d', self.font_ui_sm,
+                         width=max(px(300), int(w * 0.55)))
+
+        # Along the bottom: the window options and the keys.
+        band = px(58)
+        c.create_rectangle(0, h - band, w, h, fill=BG, outline='')
+        c.create_line(0, h - band, w, h - band, fill='#15161a')
+        c.create_window(margin, h - band // 2, window=self.home_options, anchor='w')
+        c.create_text(w - margin, h - band // 2, anchor='e', fill=MUTED, font=self.font_ui_sm,
+                      text=_('← →  Choose        ↑ ↓  Menu        Enter  Start'))
+
+    def home_pill(self, x, y, text, hit, primary=False):
+        """A canvas button (smooth corners); returns its right edge."""
+        px = self.px
+        width, height = max(px(140), self.measure_play(text) + px(60)), px(44)
+        hot = self.home_hot == hit
+        if primary:
+            fill, fg = rgb(GOLD_HI if hot else GOLD) + (255,), '#1a1408'
+        else:
+            fill, fg = (255, 255, 255, 52 if hot else 30), TEXT
+        try:
+            import uncharted_art as art
+            image = self.home_image(('pill', width, height, fill),
+                                    lambda: art.pill_image(width, height, fill,
+                                                           None if primary else (255, 255, 255, 70)))
+        except ImportError:
+            image = None
+        if image:
+            self.stage.create_image(x, y, image=image, anchor='nw')
+        else:
+            self.stage.create_rectangle(x, y, x + width, y + height, fill=GOLD if primary else CARD, outline='')
+        self.stage.create_text(x + width / 2, y + height / 2, text=text, font=self.font_play, fill=fg)
+        self.home_hits.append(((x, y, x + width, y + height), hit))
+        return x + width
+
+    def clock_text(self):
+        name = str(self.var('player_name').get()).strip() or _('Player')
+        return f"{name}        {time.strftime('%H:%M')}"
+
+    def tick_clock(self):
+        if self.clock_item and self.current_page == 'play':
+            self.stage.itemconfigure(self.clock_item, text=self.clock_text())
+        self.root.after(15000, self.tick_clock)
+
+    def shadow_text(self, x, y, text, anchor, fill, font, width=0):
+        """Text that stays readable over a bright background: a soft dark copy one pixel below."""
+        offset = max(1, self.px(1))
+        self.stage.create_text(x + offset, y + offset, text=text, anchor=anchor, fill='#000000', font=font,
+                               width=width)
+        self.stage.create_text(x, y, text=text, anchor=anchor, fill=fill, font=font, width=width)
 
     def draw_tile_clip(self, key, x, y, w, h):
         """The hovered game's video (art folder: u1_video.mp4 …) over its cover picture, like the
@@ -1043,50 +1173,32 @@ class Launcher:
         return fill
 
     def round_clip(self, image):
-        """Cover video frames (helper thread): the cover's rounded corners."""
+        """Tile video frames (helper thread): the tile's rounded corners."""
         from uncharted_art import rounded_mask
         if self.clip_masks.get('size') != image.size:
-            self.clip_masks = {'size': image.size, 'mask': rounded_mask(image.size, 16)}
+            self.clip_masks = {'size': image.size, 'mask': rounded_mask(image.size, max(4, image.size[0] // 26))}
         image = image.convert('RGBA')
         image.putalpha(self.clip_masks['mask'])
         return image
 
-    def photo_backdrop(self, key, width, height):
-        """The game's background picture (art folder: u1_background.jpg …), faded into the page;
-        None when there is none. Kept per game, so moving between covers is instant."""
+    def photo_home(self, key, width, height):
+        """The home screen's background for a game (see uncharted_art.home_backdrop). Kept per
+        game, so moving between tiles is instant after the first time."""
         wanted = (key, width, height)
         if wanted not in self.backdrops:
             if any(k[1:] != wanted[1:] for k in self.backdrops):
                 self.backdrops.clear()  # the window changed size
+                self.home_images.clear()
             photo = None
             try:
                 from PIL import ImageTk
                 import uncharted_art
-                page = tuple(int(SURFACE[i:i + 2], 16) for i in (1, 3, 5))
-                scene = uncharted_art.game_backdrop(key, width, height, page)
-                photo = ImageTk.PhotoImage(scene) if scene is not None else None
+                scene = uncharted_art.home_backdrop(key, width, height, rgb(BG))
+                photo = ImageTk.PhotoImage(scene)
             except Exception:
                 photo = None
             self.backdrops[wanted] = photo
         return self.backdrops[wanted]
-
-    def draw_banner(self, w, h, start):
-        """No game background: the collection banner (or the dump's pic1.png) and the header video
-        in the top band, with the gold rule under it."""
-        c = self.stage
-        game_dir = game_folder(self.current(), start)
-        key = (w, h, start, game_dir)
-        if self.banner_key != key:
-            self.banner_key = key
-            # The collection banner when this machine has it (launcher art is not distributed),
-            # otherwise the background art of the player's own dump.
-            self.banner_scaled = self.photo_collection_banner(w, h) or \
-                self.scaled_art(Path(game_dir or '.') / 'sce_sys' / 'pic1.png', w, h)
-        if self.banner_scaled:
-            c.create_image(w // 2, h // 2, image=self.banner_scaled)
-        if self.sync_hero_video(w, h, start):
-            c.create_image(w // 2, h // 2, image=self.video_photo)  # blank (see-through) until a frame
-        c.create_rectangle(0, h - 1, w, h, fill=GOLD_DIM, outline='')
 
     def sync_hero_video(self, w, h, start, hidden=False):
         """The selected game's video (else the background video) of the art folder, playing in the
@@ -1137,16 +1249,6 @@ class Launcher:
                          fade=fade.point(lambda v: 0 if v < 110 else min(255, (v - 110) * 255 // 140)))
         image = Image.blend(image, masks['dark'], 0.22)
         return Image.composite(masks['page'], image, masks['fade'])
-
-    def photo_collection_banner(self, width, height):
-        try:
-            from PIL import ImageTk
-            import uncharted_art
-            page = tuple(int(BG[i:i + 2], 16) for i in (1, 3, 5))
-            scene = uncharted_art.collection_banner(width, height, page)
-            return ImageTk.PhotoImage(scene) if scene is not None else None
-        except Exception:
-            return None
 
     def photo_hero(self, key, width, height):
         """Blurred cover backdrop when the dump has no pic1.png."""
@@ -1479,7 +1581,7 @@ class Launcher:
             ready = f"{info['title']} · {info['id']} · {_('version')} {info['version']}"
             if missing:
                 ready += '\n' + _('Not in this folder: ') + ', '.join(missing)
-        self.ready.configure(text=ready)
+        self.ready_text = ready
         if not self.process:
             title = next(t for k, t, _s, _e in GAMES if k == start)
             self.status.configure(text=_('Ready: {}').format(title) if info else _('No game folder yet.'),
@@ -1527,6 +1629,7 @@ class Launcher:
         self.play_button.configure(state='disabled')
         self.stop_button.configure(state='normal')
         self.status.configure(text=_('Preparing the game; it opens in its own window…'), fg=GOLD)
+        self.draw_stage()
         if self.app.get('close_on_play'):
             self.root.after(5000, self.root.destroy)
 

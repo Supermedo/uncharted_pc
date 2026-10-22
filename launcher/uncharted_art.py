@@ -404,6 +404,11 @@ def _game_background(key):
     return _BACKGROUNDS[key]
 
 
+def has_background(key):
+    """Whether the player has a background picture for the game in an art folder."""
+    return _game_background(key) is not None
+
+
 def game_backdrop(key, width, height, page):
     """The game's background picture over the top of the Play page: scaled to the page width,
     a little darker, and faded into the page colour over its lower part. None without one."""
@@ -419,6 +424,147 @@ def game_backdrop(key, width, height, page):
         t = min(1.0, max(0.0, (y / max(height - 1, 1) - 0.42) / 0.58))
         pixels[0, y] = int(255 * t * t * (3 - 2 * t))  # smooth from 42 % of the height to the end
     return Image.composite(Image.new('RGB', image.size, page), image, fade.resize((width, height)))
+
+
+_CONTOURS = {}
+_ICONS = {}
+
+
+def _smooth(t):
+    t = min(1.0, max(0.0, t))
+    return t * t * (3 - 2 * t)
+
+
+def _contours(size, color=(231, 195, 106), alpha=30, seed=7):
+    """Faint map contour lines (RGBA), the home screen's own touch of the series' treasure maps:
+    irregular rings around a few hills, drawn larger and reduced so they stay smooth."""
+    if size in _CONTOURS:
+        return _CONTOURS[size]
+    w, h = size
+    scale = 2
+    lines = Image.new('L', (w * scale, h * scale), 0)
+    draw = ImageDraw.Draw(lines)
+    rnd = random.Random(seed)
+    span = max(w, h) * scale
+    for cx, cy, rings, step in ((0.80, 0.26, 10, 0.040), (0.10, 0.92, 7, 0.050), (1.02, 1.0, 6, 0.055)):
+        phases = [rnd.uniform(0, 2 * math.pi) for _ in range(3)]
+        amps = [rnd.uniform(0.06, 0.12), rnd.uniform(0.03, 0.07), rnd.uniform(0.015, 0.035)]
+        for ring in range(1, rings + 1):
+            radius = ring * step * span
+            points = []
+            for i in range(240):
+                a = i / 240 * 2 * math.pi
+                k = 1 + sum(amps[j] * math.sin((j + 2) * a + phases[j] + ring * 0.4) for j in range(3))
+                points.append((cx * w * scale + radius * k * math.cos(a),
+                               cy * h * scale + radius * k * 0.78 * math.sin(a)))
+            draw.line(points + [points[0]], fill=255, width=scale)
+    mask = lines.resize(size, Image.LANCZOS).point(lambda v: v * alpha // 255)
+    layer = Image.new('RGBA', size, color + (0,))
+    layer.putalpha(mask)
+    _CONTOURS.clear()  # one window size at a time
+    _CONTOURS[size] = layer
+    return layer
+
+
+def home_backdrop(key, width, height, page):
+    """The home screen's background for the focused game, over the whole window: the player's
+    background picture (u1_background.jpg …), else the game's cover softened, else the painted
+    scene. Darker at the top (menu icons), along the
+    bottom (names, Start) and on the left, with faint map contour lines over it."""
+    width, height = max(width, 8), max(height, 8)
+    image = _game_background(key)
+    sharp = image is not None
+    if image is None:
+        image = _load_scene(key)
+    if image is None:
+        image = SCENES[key](width // 2, height // 2)
+    image = _cover(image, (width, height), (0.5, 0.35))
+    if not sharp:
+        image = image.filter(ImageFilter.GaussianBlur(max(2, width // 360)))
+    image = Image.blend(image, Image.new('RGB', image.size, (6, 5, 4)), 0.25)
+    column = Image.new('L', (1, height))
+    pixels = column.load()
+    for y in range(height):
+        t = y / max(height - 1, 1)
+        pixels[0, y] = int(255 * max(0.55 * (1 - _smooth(t / 0.22)), 0.94 * _smooth((t - 0.40) / 0.60)))
+    row = Image.new('L', (width, 1))
+    pixels = row.load()
+    for x in range(width):
+        pixels[x, 0] = int(255 * 0.5 * (1 - _smooth(x / max(width - 1, 1) / 0.62)))
+    shade = ImageChops.lighter(column.resize((width, height)), row.resize((width, height)))
+    image = Image.composite(Image.new('RGB', image.size, page), image, shade).convert('RGBA')
+    image.alpha_composite(_contours((width, height)))
+    return image.convert('RGB')
+
+
+def _tile_art(key):
+    """A game's square tile picture: the player's art/u1_icon.png (.jpg), else its cover."""
+    if key not in _ICONS:
+        _ICONS[key] = load_art(f'{key}_icon.png') or load_art(f'{key}_icon.jpg')
+    return _ICONS[key] or _load_scene(key)
+
+
+def home_tile(key, side, *, focused=False, hover=False, dimmed=False):
+    """A square home-screen tile (RGBA): the game's picture with slightly rounded corners and a
+    soft shadow; a gold ring when focused, a faint one under the pointer. info['poster'] is the
+    picture's (left, top, width, height) in the image."""
+    side = max(side, 24)
+    pad = max(8, side // 12)
+    radius = max(4, side // 26)
+    image = _tile_art(key)
+    if image is None:
+        image = SCENES[key](side * 2, side * 2)
+    art = _cover(image, (side, side), (0.5, 0.38))
+    if dimmed:
+        art = Image.blend(art, Image.new('RGB', art.size, (12, 12, 12)), 0.55)
+    return _tile_frame(art, side, pad, radius, focused, hover)
+
+
+def home_blank_tile(side, *, focused=False, hover=False):
+    """A tile without a picture (Settings): dark glass for an icon drawn over it."""
+    side = max(side, 24)
+    pad = max(8, side // 12)
+    art = Image.new('RGBA', (side, side), (22, 23, 26, 215))
+    return _tile_frame(art, side, pad, max(4, side // 26), focused, hover)
+
+
+def _tile_frame(art, side, pad, radius, focused, hover):
+    canvas = Image.new('RGBA', (side + pad * 2, side + pad * 2), (0, 0, 0, 0))
+    shadow = Image.new('RGBA', canvas.size, (0, 0, 0, 0))
+    ImageDraw.Draw(shadow).rounded_rectangle((pad + 2, pad + 5, pad + side - 3, pad + side + 2),
+                                             radius=radius, fill=(0, 0, 0, 150))
+    canvas.alpha_composite(shadow.filter(ImageFilter.GaussianBlur(max(4, pad * 0.6))))
+    framed = art.convert('RGBA')
+    mask = rounded_mask((side, side), radius)
+    framed.putalpha(ImageChops.multiply(framed.getchannel('A'), mask))
+    canvas.alpha_composite(framed, (pad, pad))
+    if focused:
+        width = max(2.5, side / 70)
+        canvas.alpha_composite(_ring(canvas.size, (pad - 3, pad - 3, pad + side + 2, pad + side + 2),
+                                     radius + 3, (231, 195, 106, 255), width))
+    elif hover:
+        canvas.alpha_composite(_ring(canvas.size, (pad, pad, pad + side - 1, pad + side - 1),
+                                     radius, (210, 200, 180, 170), 1.6))
+    canvas.info['poster'] = (pad, pad, side, side)
+    return canvas
+
+
+def pill_image(width, height, fill, ring=None):
+    """A smooth rounded button face (RGBA) for canvas buttons."""
+    image = Image.new('RGBA', (width, height), fill)
+    image.putalpha(ImageChops.multiply(image.getchannel('A'), rounded_mask((width, height), height // 2)))
+    if ring:
+        image.alpha_composite(_ring((width, height), (0, 0, width - 1, height - 1), height // 2, ring, 1.5))
+    return image
+
+
+def glow_dot(size, alpha=70):
+    """A soft round highlight (RGBA) behind a focused or hovered menu icon."""
+    image = Image.new('RGBA', (size, size), (255, 255, 255, 0))
+    mask = Image.new('L', (size * 4, size * 4), 0)
+    ImageDraw.Draw(mask).ellipse((0, 0, size * 4 - 1, size * 4 - 1), fill=alpha)
+    image.putalpha(mask.resize((size, size), Image.LANCZOS))
+    return image
 
 
 def collection_banner(width, height, page=(5, 5, 5)):
