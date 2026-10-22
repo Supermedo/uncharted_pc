@@ -62,6 +62,22 @@ code runs directly on your PC and the graphics are translated to Vulkan. Unpack 
 MSYS2 CLANG64 on Windows: `bash build.sh` builds `out\bb-probe.exe`, and
 `bash packaging/windows/package.sh` makes `dist\uncharted-windows` and the zip.
 
+## Linux
+
+The shared bbport runtime and the Vulkan renderer build on Linux x86-64. On a machine with
+Vulkan, SDL3 and FFmpeg development files, `bash build.sh` builds `out/bb-probe` and
+`out/gpu/libbbgpu.so`. Then run:
+
+```sh
+BB_GAME_DIR=/path/to/Game ./run-linux.sh
+# or
+./run-linux.sh /path/to/Game
+```
+
+`run-linux.sh` uses `run.py`, which starts the collection menu and follows
+`sceSystemServiceLoadExec` when you pick U2 or U3. Set `BB_EXE=u2` or `BB_EXE=u3` to start one
+game directly, and pass other `bb-probe` arguments after the folder.
+
 ## Credits
 
 Built on [bbport](https://github.com/deadinside28/bloodborne_pc), the native Linux port of

@@ -809,7 +809,11 @@ bool Presenter::PresentImage(Frame* frame, vk::Image image, bool last) {
 
     {
         const vk::Extent2D extent = swapchain.GetExtent();
-        SetExpectedGameSize(s32(extent.width), s32(extent.height));
+        // bbport: the frame stays at the game's output size; the blit below scales it to the
+        // swapchain. Resizing the frame to a smaller window breaks Uncharted's quarter-size UI
+        // composition and tiles the UI.
+        SetExpectedGameSize(s32(EmulatorSettings.GetInternalScreenWidth()),
+                            s32(EmulatorSettings.GetInternalScreenHeight()));
         const vk::ImageSubresourceRange color_range{
             .aspectMask = vk::ImageAspectFlagBits::eColor,
             .baseMipLevel = 0,

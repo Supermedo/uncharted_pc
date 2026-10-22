@@ -17,6 +17,8 @@
 #include <string.h>
 #ifdef _WIN32
 #include <windows.h>
+#else
+#include <unistd.h>
 #endif
 
 #define FIBER_ERROR_NULL ((int32_t)0x80590001)

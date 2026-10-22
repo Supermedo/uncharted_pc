@@ -453,6 +453,7 @@ void Scheduler::AllocateWorkerCommandBuffers() {
 
 void Scheduler::SubmitExecution(SubmitInfo& info) {
     std::scoped_lock lk{submit_mutex};
+#ifdef _WIN32
     // bbport: BB_SUBMIT_THREADS=1 names each thread that submits through this scheduler (once).
     static const bool submit_threads = std::getenv("BB_SUBMIT_THREADS") != nullptr;
     if (submit_threads) {
@@ -492,6 +493,7 @@ void Scheduler::SubmitExecution(SubmitInfo& info) {
             std::printf("\n");
         }
     }
+#endif
     const u64 signal_value = work_semaphore.NextTick();
 
 #if TRACY_GPU_ENABLED

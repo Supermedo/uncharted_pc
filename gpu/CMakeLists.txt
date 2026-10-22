@@ -209,6 +209,11 @@ if (WIN32)
     target_compile_options(bbnet PRIVATE
         $<$<COMPILE_LANGUAGE:CXX>:-include ${CMAKE_CURRENT_SOURCE_DIR}/shim/bb_win_compat.h>)
     target_link_libraries(bbnet PUBLIC ws2_32 iphlpapi bcrypt crypt32)
+else()
+    pkg_check_modules(MINIUPNPC REQUIRED IMPORTED_TARGET miniupnpc)
+    find_path(MINIUPNPC_INCLUDE miniupnpc.h PATH_SUFFIXES miniupnpc REQUIRED)
+    target_include_directories(bbnet PRIVATE "${MINIUPNPC_INCLUDE}")
+    target_link_libraries(bbnet PRIVATE PkgConfig::MINIUPNPC)
 endif()
 target_link_libraries(bbgpu PUBLIC bbnet)
 # In-game settings menu: Dear ImGui (third_party/imgui, MIT) with its Vulkan backend, and an
