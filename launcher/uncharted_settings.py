@@ -15,8 +15,8 @@ class SettingsList:
         # The lit row's description, under the list.
         self.help = tk.Label(self.outer, text='', bg=surface, fg=colors['muted'], font=fonts['hint'],
                              anchor='nw', justify='left', wraplength=px(720), height=3)
-        self.help.pack(side='bottom', fill='x', padx=px(28), pady=(px(10), px(6)))
-        tk.Frame(self.outer, bg=colors['line'], height=1).pack(side='bottom', fill='x', padx=px(26))
+        self.help.pack(side='bottom', fill='x', padx=px(22), pady=(px(10), px(6)))
+        tk.Frame(self.outer, bg=colors['line'], height=1).pack(side='bottom', fill='x', padx=px(20))
         body = tk.Frame(self.outer, bg=surface)
         body.pack(fill='both', expand=True)
         self.canvas = tk.Canvas(body, bg=surface, highlightthickness=0, bd=0)
@@ -31,8 +31,8 @@ class SettingsList:
 
     def _fit(self, _event=None):
         canvas, inner = self.canvas, self.inner
-        canvas.itemconfigure(self.window, width=canvas.winfo_width() - self.px(26) * 2)
-        canvas.coords(self.window, self.px(26), 0)
+        canvas.itemconfigure(self.window, width=canvas.winfo_width() - self.px(20) * 2)
+        canvas.coords(self.window, self.px(20), 0)
         canvas.configure(scrollregion=(0, 0, canvas.winfo_width(), inner.winfo_reqheight() + self.px(12)))
         if inner.winfo_reqheight() > canvas.winfo_height():
             self.bar.pack(side='right', fill='y')
@@ -89,7 +89,8 @@ class SettingsList:
             self.canvas.yview_moveto((bottom + self.px(20) - (view_bottom - view_top)) / total)
 
     def key(self, action):
-        """Arrow keys and Enter from the launcher; returns 'break' when handled."""
+        """Arrow keys and Enter from the launcher; returns 'break' when handled, 'top' for Up on
+        the first row (the launcher's menu row takes the focus)."""
         if self.popup:
             return self.popup.key(action)
         if not self.rows:
@@ -101,6 +102,8 @@ class SettingsList:
         rows, columns = action
         if rows:
             index = self.rows.index(self.lit) if self.lit in self.rows else 0
+            if index + rows < 0:
+                return 'top'
             self.light(self.rows[min(len(self.rows) - 1, max(0, index + rows))], scroll=True)
         elif self.lit:
             self.lit.step(columns)

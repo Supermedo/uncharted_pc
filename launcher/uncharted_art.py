@@ -466,11 +466,12 @@ def _contours(size, color=(231, 195, 106), alpha=30, seed=7):
     return layer
 
 
-def home_backdrop(key, width, height, page):
+def home_backdrop(key, width, height, page, dim=0.0):
     """The home screen's background for the focused game, over the whole window: the player's
     background picture (u1_background.jpg …), else the game's cover softened, else the painted
     scene. Darker at the top (menu icons), along the
-    bottom (names, Start) and on the left, with faint map contour lines over it."""
+    bottom (names, Start) and on the left, with faint map contour lines over it. `dim` (0..1)
+    darkens it further towards the page colour (behind a settings page)."""
     width, height = max(width, 8), max(height, 8)
     image = _game_background(key)
     sharp = image is not None
@@ -492,7 +493,10 @@ def home_backdrop(key, width, height, page):
     for x in range(width):
         pixels[x, 0] = int(255 * 0.5 * (1 - _smooth(x / max(width - 1, 1) / 0.62)))
     shade = ImageChops.lighter(column.resize((width, height)), row.resize((width, height)))
-    image = Image.composite(Image.new('RGB', image.size, page), image, shade).convert('RGBA')
+    image = Image.composite(Image.new('RGB', image.size, page), image, shade)
+    if dim:
+        image = Image.blend(image, Image.new('RGB', image.size, page), dim)
+    image = image.convert('RGBA')
     image.alpha_composite(_contours((width, height)))
     return image.convert('RGB')
 
