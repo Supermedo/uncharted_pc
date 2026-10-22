@@ -745,7 +745,8 @@ class Launcher:
         start = self.var('start').get()
         self.home_row, self.menu_index = 1, 0
         self.tile_index = HOME_TILES.index(start) if start in HOME_TILES else 0
-        self.backdrops = {}
+        self.pictures, self.pictures_size, self.fade_job, self.fade_start = {}, None, None, 0.0
+        self.back_photo = self.back_shown = self.back_target = self.back_from = None
         self.var('start').trace_add('write', lambda *_a: self.refresh())
         self.root.after(1000, self.tick_clock)
 
@@ -852,14 +853,21 @@ class Launcher:
             self.stop()
 
     def home_image(self, key, make):
-        """A cached PhotoImage of a Pillow picture; None without Pillow."""
+        """A cached PhotoImage of a Pillow picture, made ahead by prepare_pictures when it could
+        be; None without Pillow."""
         if key not in self.home_images:
             try:
                 from PIL import ImageTk
-                self.home_images[key] = ImageTk.PhotoImage(make())
+                picture = self.pictures.get(key)
+                self.home_images[key] = ImageTk.PhotoImage(picture if picture is not None else make())
             except Exception:
                 self.home_images[key] = None
         return self.home_images[key]
+
+    def tile_sizes(self, w, h):
+        """The focused tile's side and the others' for a window size."""
+        big = max(self.px(150), min(self.px(250), int(min(w * 0.18, h * 0.27))))
+        return big, int(big * 0.64)
 
     def draw_stage(self):
         """The window, drawn again after each change (pictures are cached): the background and the
@@ -882,9 +890,13 @@ class Launcher:
         # folder's background video on the home screen.
         own = art is not None and art.has_background(start)
         video = None if own else self.sync_hero_video(w, h, start, hidden=not home)
-        back = self.photo_home(start, w, h, dim=not home)
-        if back:
-            c.create_image(0, 0, image=back, anchor='nw')
+        if (w, h) != self.pictures_size:
+            self.pictures_size = (w, h)
+            self.prepare_pictures(w, h)
+        back = self.background(start, w, h, dim=not home)
+        if back is not None:
+            self.show_background(back)
+            c.create_image(0, 0, image=self.back_photo, anchor='nw')
         if video and home:
             c.create_image(w // 2, h // 2, image=self.video_photo)  # see-through until a frame
         margin = px(56)
@@ -929,8 +941,7 @@ class Launcher:
             return
 
         # The tile row: the focused tile larger, a gold ring while the row has the focus.
-        big = max(px(150), min(px(250), int(min(w * 0.18, h * 0.27))))
-        small = int(big * 0.64)
+        big, small = self.tile_sizes(w, h)
         tile_top, x = px(122), margin
         for i, key in enumerate(HOME_TILES):
             side = big if i == self.tile_index else small
@@ -1100,25 +1111,71 @@ class Launcher:
         image.putalpha(self.clip_masks['mask'])
         return image
 
-    def photo_home(self, key, width, height, dim=False):
-        """The home screen's background for a game (see uncharted_art.home_backdrop). Kept per
-        game, so moving between tiles is instant after the first time. `dim`: darker, behind a
-        settings page."""
-        wanted = (key, width, height, dim)
-        if wanted not in self.backdrops:
-            if any(k[1:3] != wanted[1:3] for k in self.backdrops):
-                self.backdrops.clear()  # the window changed size
-                self.home_images.clear()
-            photo = None
+    def background(self, key, width, height, dim=False):
+        """A game's background picture for the window (uncharted_art.home_backdrop; `dim`: darker,
+        behind a settings page), or None without Pillow. Usually made ahead (prepare_pictures)."""
+        wanted = ('back', key, width, height, dim)
+        if wanted not in self.pictures:
             try:
-                from PIL import ImageTk
                 import uncharted_art
-                scene = uncharted_art.home_backdrop(key, width, height, rgb(BG), 0.72 if dim else 0)
-                photo = ImageTk.PhotoImage(scene)
+                self.pictures[wanted] = uncharted_art.home_backdrop(key, width, height, rgb(BG),
+                                                                    0.72 if dim else 0)
             except Exception:
-                photo = None
-            self.backdrops[wanted] = photo
-        return self.backdrops[wanted]
+                self.pictures[wanted] = None
+        return self.pictures[wanted]
+
+    def prepare_pictures(self, width, height):
+        """For a new window size: every game's backgrounds and tiles, made on a helper thread so
+        moving between games never waits for them (making one takes 0.1 to 0.3 s)."""
+        self.pictures, self.home_images = {}, {}
+        pictures, (big, small) = self.pictures, self.tile_sizes(width, height)
+        games = [self.var('start').get()] + [k for k in HOME_TILES[:3] if k != self.var('start').get()]
+        dimmed = {key: not self.available.get(key, True) for key in games}
+
+        def make(wanted, build):
+            if wanted not in pictures:
+                pictures[wanted] = build()
+
+        def work():
+            try:
+                import uncharted_art as art
+                for dim in (False, True):
+                    for key in games:
+                        make(('back', key, width, height, dim),
+                             lambda: art.home_backdrop(key, width, height, rgb(BG), 0.72 if dim else 0))
+                for key in games:
+                    for side, ring in ((big, True), (big, False), (small, False)):
+                        make(('tile', key, side, ring, False, dimmed[key]),
+                             lambda: art.home_tile(key, side, focused=ring, dimmed=dimmed[key]))
+                for side, ring in ((big, True), (big, False), (small, False)):
+                    make(('blank', side, ring, False), lambda: art.home_blank_tile(side, focused=ring))
+            except Exception:
+                pass  # what is missing is made when it is first shown
+        threading.Thread(target=work, daemon=True).start()
+
+    def show_background(self, picture):
+        """Puts a background picture (the window's size) on screen, cross-fading from the one shown
+        over a quarter of a second; a newer one during a fade carries on from the frame shown."""
+        from PIL import ImageTk
+        photo = self.back_photo
+        if photo is None or (photo.width(), photo.height()) != picture.size:
+            self.back_photo = ImageTk.PhotoImage(picture)
+            self.back_shown = self.back_target = picture
+            return
+        if picture is self.back_target:
+            return
+        self.back_from, self.back_target, self.fade_start = self.back_shown, picture, time.perf_counter()
+        if not self.fade_job:
+            self.fade_job = self.root.after(1, self.fade_step)
+
+    def fade_step(self):
+        from PIL import Image
+        t = min(1.0, (time.perf_counter() - self.fade_start) / 0.25)
+        t = t * t * (3 - 2 * t)
+        frame = self.back_target if t >= 1 else Image.blend(self.back_from, self.back_target, t)
+        self.back_photo.paste(frame)
+        self.back_shown = frame
+        self.fade_job = self.root.after(15, self.fade_step) if t < 1 else None
 
     def sync_hero_video(self, w, h, start, hidden=False):
         """The selected game's video (else the background video) of the art folder, playing in the
