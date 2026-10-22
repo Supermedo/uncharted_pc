@@ -60,6 +60,7 @@ static GuestThread *threads;
 static _Thread_local GuestThread *current;
 static _Thread_local int32_t guest_errno;
 static void apply_affinity(GuestThread *t,int current_thread);
+static void apply_priority(GuestThread *t,int current_thread);
 static const unsigned char *tls_template;
 static uint64_t tls_filesz, tls_memsz, tls_align=16;
 static size_t created, joined_count, exited;
@@ -284,6 +285,7 @@ static void *host_start(void *p) {
     attach(t);
     set_host_name(t->name);
     runtime_set_guest_fpu();
+    if (t->attr.prio!=DEFAULT_PRIO) apply_priority(t,1);
     if (t->attr.affinity!=0x7f) apply_affinity(t,1);
     if (!exit_setjmp(t)) t->result=t->entry(t->argument);
     runtime_thread_keys_cleanup();
@@ -359,9 +361,38 @@ static ABI int32_t thread_get_prio(GuestThread *t,int *prio) {
     if (!prio) return ERR(22);
     *prio=t->attr.prio; return 0;
 }
+/* PS4 priorities run from 256 (highest) to 767 (lowest); 700 is the default and what nearly every
+ * game thread uses. The Nd job workers are created at 767 and the file I/O threads at 260-272.
+ * Windows has fewer levels, so the guest range is cut into bands around NORMAL. Without this the
+ * spinning idle workers ran at the same priority as the threads doing real work (and starved
+ * the GPU command thread on CPUs with few cores). BB_THREAD_PRIO=0 keeps every thread at normal. */
+static int host_priority(int prio) {
+#ifdef _WIN32
+    static int enabled=-1;
+    if (enabled<0) { const char *env=getenv("BB_THREAD_PRIO"); enabled=!(env && env[0]=='0'); }
+    if (!enabled) return THREAD_PRIORITY_NORMAL;
+    if (prio<=300) return THREAD_PRIORITY_ABOVE_NORMAL;
+    if (prio<720) return THREAD_PRIORITY_NORMAL;
+    if (prio<0x2f0) return THREAD_PRIORITY_BELOW_NORMAL;
+    return THREAD_PRIORITY_LOWEST;
+#else
+    (void)prio; return 0;
+#endif
+}
+static void apply_priority(GuestThread *t,int current_thread) {
+#ifdef _WIN32
+    if (t->finished) return;
+    HANDLE handle=current_thread ? GetCurrentThread() : (HANDLE)pthread_gethandle(t->host);
+    if (handle) SetThreadPriority(handle,host_priority(t->attr.prio));
+#else
+    (void)t; (void)current_thread;
+#endif
+}
 static ABI int32_t thread_set_prio(GuestThread *t,int prio) {
     if (!find_thread(t)) return ERR(3);
-    t->attr.prio=prio; return 0;
+    t->attr.prio=prio;
+    apply_priority(t,t==current);
+    return 0;
 }
 /* BB_AFFINITY=1: the guest's core masks are applied, PS4 core i on host logical processor 2*i
  * (one per physical core where SMT pairs neighbour). Off by default: the PS4 scheduler's
