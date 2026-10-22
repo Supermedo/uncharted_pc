@@ -339,6 +339,7 @@ static ssize_t host_write(int h,const void *buffer,uint64_t size) { return write
 /* Pages of the destination may be write-protected for GPU tracking: the kernel's copy then
  * fails with EFAULT instead of faulting to our handler. A user-mode write to each page first
  * goes through the handler, which unprotects it (and records the upcoming write). */
+#ifdef _WIN32
 static void touch_for_write(void *buffer,uint64_t size) {
     if (!size) return;
     uintptr_t p=(uintptr_t)buffer & ~(uintptr_t)4095, end=(uintptr_t)buffer+size;
@@ -347,11 +348,37 @@ static void touch_for_write(void *buffer,uint64_t size) {
         *b=*b;
     }
 }
+#endif
 /* The GPU side can write-protect a destination page again between touch_for_write and the read;
  * the host then stops short (Windows: no error, fewer bytes) and a short read the guest takes as
  * complete loses data (U2's script module: 16384 of 392775 bytes, issue #101; streamed level
  * data). Files are read until the request is done or the file ends, touching the rest again.
  * offset -1: at the file position. */
+#ifndef _WIN32
+/* Linux: the kernel never raises the guest-page fault for a read() into a protected page, it
+ * returns EFAULT or stops short, so the retries below could still end with part of the data
+ * (iSubMesh < m_numSubMeshInstances on the train-wreck level). The file is read into a
+ * per-thread host buffer and copied in user space: a protected guest page faults in memcpy like
+ * any guest write and the handler unprotects it. */
+#define BOUNCE_SIZE (4u<<20)
+static ssize_t read_full(int h,void *buffer,uint64_t size,int64_t offset) {
+    static __thread unsigned char *bounce;
+    if (!bounce && !(bounce=malloc(BOUNCE_SIZE))) return -1;
+    unsigned char *at=buffer;
+    uint64_t done=0;
+    while (done<size) {
+        size_t want=size-done>BOUNCE_SIZE ? BOUNCE_SIZE : (size_t)(size-done);
+        ssize_t n=offset<0 ? read(h,bounce,want) : pread(h,bounce,want,offset+(int64_t)done);
+        if (n<0 && errno==EINTR) continue;
+        if (n<0) { if (done) break; return -1; }
+        if (n==0) break;
+        memcpy(at+done,bounce,(size_t)n);
+        done+=(uint64_t)n;
+        if (h<3) break;
+    }
+    return (ssize_t)done;
+}
+#else
 static ssize_t read_full(int h,void *buffer,uint64_t size,int64_t offset) {
     unsigned char *at=buffer;
     uint64_t done=0;
@@ -365,6 +392,7 @@ static ssize_t read_full(int h,void *buffer,uint64_t size,int64_t offset) {
     }
     return (ssize_t)done;
 }
+#endif
 static int64_t do_read(int fd,void *buffer,uint64_t size) {
     int h=host_fd(fd);
     if (h<0) return -EBADF;
