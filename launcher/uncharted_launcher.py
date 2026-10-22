@@ -371,7 +371,7 @@ BG, PANEL, SURFACE, CARD, LINE = '#08090a', '#0c0d0f', '#0f1012', '#17181b', '#2
 TEXT, MUTED, GOLD, GOLD_HI, GOLD_DIM = '#f3efe6', '#8e8a82', '#e7c36a', '#f3d78a', '#a88942'
 CARD_HI = '#202226'
 COLORS = {'surface': SURFACE, 'card': CARD, 'card_hi': CARD_HI, 'line': LINE, 'text': TEXT, 'muted': MUTED,
-          'gold': GOLD, 'gold_hi': GOLD_HI, 'track': '#2c2e33', 'knob': '#9a958b', 'knob_on': '#f7f1e2',
+          'gold': GOLD, 'gold_hi': GOLD_HI, 'gold_dim': GOLD_DIM, 'track': '#2c2e33', 'knob': '#9a958b', 'knob_on': '#f7f1e2',
           'button': '#25272b', 'button_hi': '#30333a'}
 # Sidebar icons (Segoe Fluent Icons on Windows 11, Segoe MDL2 Assets on Windows 10).
 NAV_ICONS = {'play': '\ue80f', 'game': '\ue8f1', 'display': '\ue7f4', 'controls': '\ue7fc',
@@ -466,7 +466,7 @@ class Launcher:
         self.font_ui_md = ('Segoe UI Semibold', 10)
         self.font_button = ('Segoe UI Semibold', 10)
         self.font_play = ('Segoe UI Semibold', 13)
-        self.font_title = ('Segoe UI Semibold', 22)
+        self.font_title = (self.ps_medium, 22)
         self.font_card = ('Segoe UI Semibold', 9)
         import tkinter.font as tkfont
         families = set(tkfont.families(self.root))
@@ -549,38 +549,11 @@ class Launcher:
             self.vars[key] = v
         return self.vars[key]
 
-    def choice(self, parent, key, options, width=36):
-        var = self.var(key)
-        values = [v for v, _t in options]
-        box = self.ttk.Combobox(parent, values=[_(t) for _v, t in options], state='readonly', width=width)
-        if var.get() not in values:
-            var.set(values[0])
-
-        def show(*_args):
-            box.current(values.index(var.get()) if var.get() in values else 0)
-        show()
-        box.bind('<<ComboboxSelected>>', lambda _e: var.set(values[box.current()]))
-        var.trace_add('write', show)
-        return box
-
-    def next_row(self, parent):
-        return parent.grid_size()[1]
-
-    def target(self, parent):
-        """Where a page's rows go: its current card (one is opened when rows come before a section)."""
-        if parent in self.page_cards:
-            if self.page_cards[parent] is None:
-                self.new_card(parent, None)
-            self.page_cards[parent].refit()
-            return self.page_cards[parent].inner
-        return parent
-
-    def new_card(self, page, title):
-        from uncharted_widgets import Card
-        card = Card(self.tk, page, COLORS, self.px, title, self.font_card)
-        card.canvas.grid(row=self.next_row(page), column=0, columnspan=2, sticky='ew', pady=(0, self.px(14)))
-        self.page_cards[page] = card
-        return card
+    def choice(self, parent, key, options, title, hint=None, variable=None):
+        """A setting with a list of values (`variable`, else the setting `key`)."""
+        from uncharted_settings import ChoiceRow
+        lst = self.lists[parent]
+        return lst.add(ChoiceRow(lst, title, variable or self.var(key), [(v, _(t)) for v, t in options], hint))
 
     def toggle(self, parent, variable, background=CARD):
         from uncharted_widgets import Toggle
@@ -593,92 +566,66 @@ class Launcher:
                           background, padding, icon, self.font_icon_sm)
 
     def row(self, parent, title, widget, hint=None):
-        parent = self.target(parent)
-        r = self.next_row(parent)
-        self.ttk.Label(parent, text=title).grid(row=r, column=0, sticky='nw', padx=(0, 24), pady=(9, 0))
-        widget.grid(row=r, column=1, sticky='w', pady=(5, 0), in_=parent)
-        widget.lift()
-        if hint:
-            self.ttk.Label(parent, text=hint, style='Muted.TLabel', wraplength=self.px(560), justify='left').grid(
-                row=r + 1, column=1, sticky='w', pady=(3, 4))
-        return widget
+        """A row with its own controls (made as children of `parent`, the page's list)."""
+        from uncharted_settings import WidgetRow
+        lst = self.lists[parent]
+        return lst.add(WidgetRow(lst, title, widget, hint))
 
     def check(self, parent, key, title, hint=None):
-        parent = self.target(parent)
-        r = self.next_row(parent)
-        line = self.tk.Frame(parent, bg=CARD)
-        line.grid(row=r, column=0, columnspan=2, sticky='w', pady=(7, 0))
-        self.toggle(line, self.var(key)).pack(side='left')
-        label = self.tk.Label(line, text=title, bg=CARD, fg=TEXT, font=self.font_ui, cursor='hand2')
-        label.pack(side='left', padx=(self.px(12), 0))
-        label.bind('<Button-1>', lambda _e: self.var(key).set(not self.var(key).get()))
-        if hint:
-            self.ttk.Label(parent, text=hint, style='Muted.TLabel', wraplength=self.px(640), justify='left').grid(
-                row=r + 1, column=0, columnspan=2, sticky='w', padx=(self.px(52), 0), pady=(2, 2))
+        from uncharted_settings import ToggleRow
+        lst = self.lists[parent]
+        return lst.add(ToggleRow(lst, title, self.var(key), hint,
+                                 lambda master, var, bg: self.toggle(master, var, bg)))
 
-    def note(self, parent, text, top=12):
-        parent = self.target(parent)
-        self.ttk.Label(parent, text=text, style='Muted.TLabel', wraplength=self.px(680), justify='left').grid(
-            row=self.next_row(parent), column=0, columnspan=2, sticky='w', pady=(top, 0))
+    def action(self, parent, title, command, hint=None, value=''):
+        from uncharted_settings import ActionRow
+        lst = self.lists[parent]
+        return lst.add(ActionRow(lst, title, command, hint, value))
 
-    def section(self, parent, title, top=18):
-        if parent in self.page_cards:
-            return self.new_card(parent, title).inner
-        self.ttk.Label(parent, text=title, style='Section.TLabel').grid(
-            row=self.next_row(parent), column=0, columnspan=2, sticky='w', pady=(top, 2))
-        return parent
+    def note(self, parent, text):
+        self.lists[parent].note(text)
+
+    def section(self, parent, title, top=22):
+        self.lists[parent].heading(title, top)
 
     def folder(self, parent, key, title, prompt, hint=None, on_change=None):
+        """A folder setting: the row shows it; Enter or a click chooses another."""
         var = self.var(key)
-        holder = self.tk.Frame(self.target(parent), bg=CARD)
-        self.ttk.Entry(holder, textvariable=var, width=54).pack(side='left')
 
         def browse():
             chosen = self.filedialog.askdirectory(title=prompt, initialdir=var.get() or str(PORT_DIR))
             if chosen:
                 var.set(str(Path(chosen)))
-        self.pill(holder, _('Browse…'), browse, padding=(14, 6)).pack(side='left', padx=(8, 0))
-        self.pill(holder, _('Open'), lambda: self.open_path(var.get(), key), kind='ghost',
-                  padding=(12, 6)).pack(side='left', padx=(4, 0))
+        row = self.action(parent, title, browse, hint)
+
+        def show(*_args):
+            path = var.get()
+            text = path if len(path) <= 56 else '…' + path[-55:]
+            row.value.configure(text=text or _('Not set'), fg='#b9b2a5' if path else MUTED)
+        show()
+        var.trace_add('write', show)
         if on_change:
             var.trace_add('write', lambda *_a: on_change())
-        return self.row(parent, title, holder, hint)
+        return row
 
     def page(self, name, title, subtitle):
+        """A settings page: its title, then a console-style list (uncharted_settings). Returns the
+        list's frame, the parent for rows and the controls placed into them."""
+        from uncharted_settings import SettingsList
         tk = self.tk
         outer = tk.Frame(self.content, bg=SURFACE)
-        shell = tk.Frame(outer, bg=SURFACE)
-        shell.pack(fill='both', expand=True, padx=self.px(18), pady=(self.px(14), 0))
-        head = tk.Frame(shell, bg=SURFACE)
-        head.pack(fill='x', padx=self.px(26), pady=(self.px(18), self.px(14)))
+        head = tk.Frame(outer, bg=SURFACE)
+        head.pack(fill='x', padx=self.px(44), pady=(self.px(30), self.px(12)))
         tk.Label(head, text=title, bg=SURFACE, fg=TEXT, font=self.font_title).pack(anchor='w')
         tk.Label(head, text=subtitle, bg=SURFACE, fg=MUTED, font=self.font_ui).pack(anchor='w', pady=(2, 0))
-        # The page body scrolls when it is taller than the window (Display holds many options).
-        body = tk.Frame(shell, bg=SURFACE)
-        body.pack(fill='both', expand=True)
-        canvas = tk.Canvas(body, bg=SURFACE, highlightthickness=0, bd=0)
-        bar = self.ttk.Scrollbar(body, orient='vertical', command=canvas.yview)
-        canvas.configure(yscrollcommand=bar.set)
-        canvas.pack(side='left', fill='both', expand=True)
-        inner = self.ttk.Frame(canvas, style='Shell.TFrame', padding=(26, 0, 26, 12))
-        inner.columnconfigure(1, weight=1)
-        self.page_cards[inner] = None
-        window = canvas.create_window(0, 0, window=inner, anchor='nw')
-
-        def fit(_event=None):
-            canvas.itemconfigure(window, width=canvas.winfo_width())
-            canvas.configure(scrollregion=(0, 0, canvas.winfo_width(), inner.winfo_reqheight()))
-            if inner.winfo_reqheight() > canvas.winfo_height():
-                bar.pack(side='right', fill='y')
-            else:
-                bar.pack_forget()
-                canvas.yview_moveto(0)
-        inner.bind('<Configure>', fit)
-        canvas.bind('<Configure>', fit)
-
-        self.scrollers[name] = (canvas, bar)
+        fonts = {'row': (self.ps_family, 11), 'value': (self.ps_family, 10), 'hint': ('Segoe UI', 9),
+                 'heading': (self.ps_medium, 10), 'icon': self.font_icon_sm}
+        lst = SettingsList(tk, self.ttk, outer, COLORS, self.px, fonts)
+        lst.outer.pack(fill='both', expand=True, padx=self.px(18))
+        self.lists[lst.inner] = self.lists[name] = lst
+        self.scrollers[name] = (lst.canvas, lst.bar)
         self.pages[name] = outer
-        return inner
+        return lst.inner
 
     def on_wheel(self, event):
         """The mouse wheel scrolls the page under the pointer (also over its buttons and lists;
@@ -774,7 +721,7 @@ class Launcher:
         self.content = tk.Frame(right, bg=SURFACE)
         self.content.pack(fill='both', expand=True)
 
-        self.pages, self.scrollers, self.page_cards = {}, {}, {}
+        self.pages, self.scrollers, self.lists = {}, {}, {}
         self.root.bind_all('<MouseWheel>', self.on_wheel)
         self.root.bind_class('TCombobox', '<MouseWheel>', self.on_wheel)
         self.build_play()
@@ -885,13 +832,20 @@ class Launcher:
 
     def home_key(self, action):
         """Arrow keys move the focus (Up: the menu row, Down: the tiles), Enter opens or starts
-        what has it; Esc goes back home from the settings pages."""
+        what has it. On a settings page they move through its list; Esc closes a pop-up list or
+        goes back home."""
         if getattr(self, 'capturing', None):
             return None
         if self.current_page != 'play':
+            lst = self.lists.get(self.current_page)
+            typing = self.root.focus_get() is not None and \
+                self.root.focus_get().winfo_class() in ('Entry', 'TEntry', 'Text')
             if action == 'back':
-                self.show('play')
+                if not (lst and lst.back()):
+                    self.show('play')
                 return 'break'
+            if lst and not typing:
+                return lst.key(action)
             return None
         if action == 'enter':
             self.home_activate()
@@ -1296,45 +1250,49 @@ class Launcher:
                       'Leave it empty if every game has a folder of its own, below.'),
                     on_change=self.refresh)
         self.folder(f, 'user_dir', _('Saves folder'), _('Where saves and the shader cache are kept'),
-                    _('Empty: the user folder next to the launcher.'))
+                    _('Where saves and the shader cache are kept. Empty: the user folder next to the launcher.'))
+        self.action(f, _('Open the game folder'), lambda: self.open_path(self.var('game_dir').get(), 'game_dir'))
+        self.action(f, _('Open the saves folder'), lambda: self.open_path(self.var('user_dir').get(), 'user_dir'))
         self.section(f, _('Separate game folders'))
         self.note(f, _('Only when the games are not in one collection folder (each dumped on its own). A game with '
-                       'a folder here is taken from it; the others from the collection folder above.'), top=2)
+                       'a folder here is taken from it; the others from the collection folder above.'))
         for key, _title, subtitle, _exe in GAMES:
             self.folder(f, f'game_dir_{key}', _(subtitle.split(' · ')[0]), _('The folder of this game'),
-                        _('Empty: the collection folder.'), on_change=self.refresh)
+                        _('The folder of this game. Empty: the collection folder.'), on_change=self.refresh)
         self.section(f, _('Console'))
-        self.row(f, _('Language'), self.choice(f, 'language', LANGUAGES, 30),
-                 _('The language the PS4 would be set to; the games use it for text and speech.'))
+        self.choice(f, 'language', LANGUAGES, _('Language'),
+                    _('The language the PS4 would be set to; the games use it for text and speech.'))
         name = self.ttk.Entry(f, textvariable=self.var('player_name'), width=30)
         self.row(f, _('Player name'), name, _('Shown where the game uses the PSN name.'))
 
     def build_display(self):
-        f = self.page('display', _('Display'), _('How the game window is shown.'))
+        f = self.page('display', _('Display and graphics'), _('How the game window is shown, and the picture.'))
         self.check(f, 'fullscreen', _('Fullscreen'))
-        self.row(f, _('Presentation'), self.choice(f, 'present_mode', PRESENT_MODES, 34),
-                 _('Mailbox shows each frame as soon as it is ready without tearing; FIFO waits for the display.'))
+        self.choice(f, 'present_mode', PRESENT_MODES, _('Presentation'),
+                    _('Mailbox shows each frame as soon as it is ready without tearing; FIFO waits for the display.'))
         refresh = display_refresh_rate()
         hint = _('Gameplay keeps its normal speed at every setting; the cutscene videos always play at '
                  '60 FPS. Above your display\'s refresh rate use Mailbox or Immediate.')
         if refresh:
             hint += ' ' + _('Your display runs at {} Hz.').format(refresh)
-        self.row(f, _('Frame rate'), self.choice(f, 'frame_rate', FRAME_RATES, 34), hint)
+        self.choice(f, 'frame_rate', FRAME_RATES, _('Frame rate'), hint)
+        self.check(f, 'show_fps', _('Show the FPS counter'))
         self.section(f, _('Resolution'))
-        self.row(f, _('Window size'), self.choice(f, 'window_size', WINDOW_SIZES, 34),
-                 _('The games render at 1920 × 1080. A larger window, or fullscreen on a 1440p or 4K '
-                   'screen, gets the image upscaled to fit.'))
-        self.row(f, _('Upscaling'), self.choice(f, 'scaler', SCALERS, 34),
-                 _('FSR 1 keeps edges sharp when the image is enlarged; bilinear is softer.'))
-        self.row(f, _('Sharpening'), self.choice(f, 'sharpening', SHARPENING, 34),
-                 _('AMD RCAS after FSR 1 (only while the image is enlarged).'))
+        self.choice(f, 'window_size', WINDOW_SIZES, _('Window size'),
+                    _('The games render at 1920 × 1080. A larger window, or fullscreen on a 1440p or 4K '
+                      'screen, gets the image upscaled to fit.'))
+        self.choice(f, 'scaler', SCALERS, _('Upscaling'),
+                    _('FSR 1 keeps edges sharp when the image is enlarged; bilinear is softer.'))
+        self.choice(f, 'sharpening', SHARPENING, _('Sharpening'),
+                    _('AMD RCAS after FSR 1 (only while the image is enlarged).'))
         self.section(f, _('Anti-aliasing'))
         modes = ANTI_ALIASING + ([FSR411] if fsr411_assets() else [])
-        self.row(f, _('Anti-aliasing'), self.choice(f, 'anti_aliasing', modes, 34),
-                 _('Temporal anti-aliasing at the games\' 1920 × 1080, with their own motion vectors: '
-                   'smoother edges and less shimmering than the games\' own. DLSS needs a GeForce RTX; '
-                   'FSR 4 runs best on a Radeon RX 7000/9000 or a GeForce RTX 40/50.'))
-        self.row(f, _('Anti-aliasing sharpness'), self.choice(f, 'aa_sharpness', AA_SHARPNESS, 34))
+        self.choice(f, 'anti_aliasing', modes, _('Anti-aliasing'),
+                    _('Temporal anti-aliasing at the games\' 1920 × 1080, with their own motion vectors: '
+                      'smoother edges and less shimmering than the games\' own. DLSS needs a GeForce RTX; '
+                      'FSR 4 runs best on a Radeon RX 7000/9000 or a GeForce RTX 40/50.'))
+        self.choice(f, 'aa_sharpness', AA_SHARPNESS, _('Anti-aliasing sharpness'),
+                    _('Sharpening after the temporal anti-aliasing.'))
         self.section(f, _('Frame generation'))
         hint = _('Frames made between two of the game\'s, for smoother motion: 60 FPS shows as 120. '
                  'Use Mailbox or Immediate presentation and a display of at least that refresh rate. '
@@ -1342,11 +1300,10 @@ class Launcher:
                  'with the 60 or 120 FPS frame rate: above about 165 FPS it pauses.')
         if refresh:
             hint += ' ' + _('Your display runs at {} Hz.').format(refresh)
-        self.row(f, _('Frame generation'), self.choice(f, 'frame_generation', FRAME_GENERATION, 34), hint)
-        self.row(f, _('Multiplier'), self.choice(f, 'frame_gen_multiplier', FRAME_GEN_MULTIPLIERS, 34),
-                 _('FSR 3 makes one frame (2×). DLSS makes up to three on a GeForce RTX 50 (4×), '
-                   'one on an RTX 40.'))
-        self.check(f, 'show_fps', _('Show the FPS counter'))
+        self.choice(f, 'frame_generation', FRAME_GENERATION, _('Frame generation'), hint)
+        self.choice(f, 'frame_gen_multiplier', FRAME_GEN_MULTIPLIERS, _('Multiplier'),
+                    _('FSR 3 makes one frame (2×). DLSS makes up to three on a GeForce RTX 50 (4×), '
+                      'one on an RTX 40.'))
 
     def build_controls(self):
         f = self.page('controls', _('Controls'),
@@ -1359,7 +1316,7 @@ class Launcher:
                      'Insert opens the in-game settings menu.'))
         from uncharted_widgets import Slider
         self.row(f, _('Mouse sensitivity'),
-                 Slider(self.tk, self.target(f), self.var('mouse_sensitivity'), MOUSE_SENS_MIN, MOUSE_SENS_MAX, 0.05,
+                 Slider(self.tk, f, self.var('mouse_sensitivity'), MOUSE_SENS_MIN, MOUSE_SENS_MAX, 0.05,
                         COLORS, self.px, self.font_ui_md, width=300, log=True, entry=True),
                  _('How far the camera turns for a mouse movement; 1.00 is the default. Drag the slider or '
                    'type a number (0.1 to 10) for a faster turn.'))
@@ -1367,48 +1324,39 @@ class Launcher:
 
         self.section(f, _('Keyboard and mouse buttons'))
         self.note(f, _('Click a box, then press a key or a mouse button (the wheel counts too). '
-                       '✕ removes a binding. Each action can have two.'), top=2)
-        card = self.target(f)
-        table = self.tk.Frame(card, bg=CARD)
-        table.grid(row=self.next_row(card), column=0, columnspan=2, sticky='w', pady=(10, 0))
+                       '✕ removes a binding. Each action can have two.'))
         rows = [(a, t) for a, t, _k, _p in BUTTON_ACTIONS] + [(a, t) for a, t, _k in STICK_ACTIONS]
-        for r, (action, title) in enumerate(rows):
-            self.ttk.Label(table, text=_(title)).grid(row=r, column=0, sticky='w', padx=(0, 24), pady=3)
+        for action, title in rows:
+            holder = self.tk.Frame(f, bg=CARD)
             for slot in (0, 1):
-                button = self.tk.Button(table, width=16, relief='flat', bg=CARD_HI, fg=TEXT,
+                button = self.tk.Button(holder, width=16, relief='flat', bg=CARD_HI, fg=TEXT,
                                         activebackground='#2a2c31', activeforeground=TEXT,
                                         font=self.font_ui, cursor='hand2', bd=0, padx=8, pady=4,
                                         command=lambda a=action, i=slot: self.capture_key(a, i))
-                button.grid(row=r, column=1 + slot * 2, sticky='w', pady=3)
-                clear = self.tk.Label(table, text='\ue711' if self.font_icon else '✕', bg=CARD, fg=MUTED,
+                button.pack(side='left', padx=(self.px(10) if slot else 0, 0))
+                clear = self.tk.Label(holder, text='\ue711' if self.font_icon else '✕', bg=CARD, fg=MUTED,
                                       font=self.font_icon_sm or self.font_ui, cursor='hand2', padx=8)
-                clear.grid(row=r, column=2 + slot * 2, sticky='w', padx=(2, 10))
+                clear.pack(side='left', padx=(2, 0))
                 clear.bind('<Button-1>', lambda _e, a=action, i=slot: self.set_key(a, i, ''))
                 clear.bind('<Enter>', lambda _e, w=clear: w.configure(fg=TEXT))
                 clear.bind('<Leave>', lambda _e, w=clear: w.configure(fg=MUTED))
                 self.key_buttons[(action, slot)] = button
+            self.row(f, _(title), holder)
         self.show_keys()
-        holder = self.tk.Frame(card, bg=CARD)
-        holder.grid(row=self.next_row(card), column=0, columnspan=2, sticky='w', pady=(12, 0))
-        self.pill(holder, _('Default keys'), self.reset_keys).pack(side='left')
+        self.action(f, _('Default keys'), self.reset_keys, _('Puts every key and mouse button back as it was.'))
 
         self.section(f, _('Controller'))
-        self.note(f, _('Which controller button gives each PS4 button (Xbox / PlayStation names).'), top=2)
+        self.note(f, _('Which controller button gives each PS4 button (Xbox / PlayStation names).'))
         self.pad_vars = {}
+        values = [v for v, _t in PAD_BUTTONS]
         for action, title, _k, _p in BUTTON_ACTIONS:
-            var = self.tk.StringVar(value=(self.app.get('pad_bindings') or {}).get(action, DEFAULT_PAD[action]))
+            value = (self.app.get('pad_bindings') or {}).get(action, DEFAULT_PAD[action])
+            var = self.tk.StringVar(value=value if value in values else 'none')
             self.pad_vars[action] = var
-            values = [v for v, _t in PAD_BUTTONS]
-            box = self.ttk.Combobox(f, values=[_(t) for _v, t in PAD_BUTTONS], state='readonly', width=26)
-            box.current(values.index(var.get()) if var.get() in values else values.index('none'))
-            box.bind('<<ComboboxSelected>>', lambda _e, b=box, v=var: v.set(values[b.current()]))
-            var.trace_add('write', lambda *_a, b=box, v=var: b.current(values.index(v.get())))
-            self.row(f, _(title), box)
+            self.choice(f, None, PAD_BUTTONS, _(title), variable=var)
         self.check(f, 'pad_invert_y', _('Invert the right stick vertically'))
-        card = self.target(f)
-        holder = self.tk.Frame(card, bg=CARD)
-        holder.grid(row=self.next_row(card), column=0, columnspan=2, sticky='w', pady=(12, 0))
-        self.pill(holder, _('Default controller buttons'), self.reset_pad).pack(side='left')
+        self.action(f, _('Default controller buttons'), self.reset_pad,
+                    _('Puts every controller button back as it was.'))
 
     def key_list(self, action):
         value = (self.app.get('key_bindings') or {}).get(action, DEFAULT_KEYS[action])
@@ -1523,23 +1471,15 @@ class Launcher:
         extra = self.ttk.Entry(f, textvariable=self.var('extra_env'), width=60)
         self.row(f, _('Environment'), extra, _('Extra variables for the game, NAME=value separated by spaces.'))
         self.section(f, _('Shader cache'))
-        self.note(f, _('Compiled shaders are kept so the game does not stutter again. Clear the cache only '
-                       'when the picture is broken after an update.'), top=2)
-        card = self.target(f)
-        holder = self.tk.Frame(card, bg=CARD)
-        holder.grid(row=self.next_row(card), column=0, columnspan=2, sticky='w', pady=(12, 0))
-        self.pill(holder, _('Clear shader cache'), self.clear_cache).pack(side='left')
-        self.pill(holder, _('Open the saves folder'),
-                  lambda: self.open_path(self.var('user_dir').get(), 'user_dir')).pack(side='left', padx=(8, 0))
+        self.action(f, _('Clear shader cache'), self.clear_cache,
+                    _('Compiled shaders are kept so the game does not stutter again. Clear the cache only '
+                      'when the picture is broken after an update.'))
         self.section(f, _('Updates'))
         self.check(f, 'check_updates', _('Look for a new version when the launcher starts'))
-        card = self.target(f)
-        holder = self.tk.Frame(card, bg=CARD)
-        holder.grid(row=self.next_row(card), column=0, columnspan=2, sticky='w', pady=(12, 0))
-        self.pill(holder, _('Check for updates'),
-                  lambda: threading.Thread(target=self.check_update, args=(True,), daemon=True).start()
-                  ).pack(side='left')
-        self.pill(holder, _('Releases page'), lambda: webbrowser.open(RELEASES_PAGE)).pack(side='left', padx=(8, 0))
+        self.action(f, _('Check for updates'),
+                    lambda: threading.Thread(target=self.check_update, args=(True,), daemon=True).start())
+        self.action(f, _('Releases page'), lambda: webbrowser.open(RELEASES_PAGE),
+                    _('Opens the port\'s releases on GitHub in your browser.'))
 
     def build_log(self):
         tk = self.tk
