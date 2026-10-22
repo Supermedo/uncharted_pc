@@ -51,6 +51,9 @@ GAMES = [
     ('u2', 'Among Thieves', 'Uncharted 2 · 2009', 'big2-ps4_Shipping.elf'),
     ('u3', "Drake's Deception", 'Uncharted 3 · 2011', 'big3-ps4_Shipping.elf'),
 ]
+# Each game's accent, from its world: Drake's Fortune's jungle, Among Thieves' Himalayan ice,
+# Drake's Deception's Rub' al Khali sand.
+GAME_ACCENTS = {'u1': '#a9cb86', 'u2': '#a6cbe2', 'u3': '#e8b06a'}
 # Console language (system parameter 1), as the PS4 numbers them.
 LANGUAGES = [('1', 'English (United States)'), ('18', 'English (United Kingdom)'), ('2', 'French'),
              ('22', 'French (Canada)'), ('4', 'German'), ('5', 'Italian'), ('3', 'Spanish'),
@@ -64,6 +67,9 @@ PRESENT_MODES = [('Mailbox', 'Mailbox (low latency, no tearing)'), ('Fifo', 'FIF
 # the prerecorded cutscenes keep 60 frames per second at every setting.
 FRAME_RATES = [('60', '60 FPS (as on PS4)'), ('120', '120 FPS'), ('144', '144 FPS (experimental)'),
                ('165', '165 FPS (experimental)'), ('240', '240 FPS (experimental)')]
+# A cap below the frame rate (BB_FPS_LIMIT, with the display-rate wait off: BB_VBLANK_HZ=0): an
+# even, steady rate on PCs that can't keep up.
+FPS_LIMITS = [('', 'Off'), ('30', '30 FPS'), ('40', '40 FPS'), ('45', '45 FPS'), ('50', '50 FPS')]
 # The games render 1920x1080; the window (or the screen in fullscreen) gets that image scaled
 # to its size: FSR 1 (EASU) or bilinear, then RCAS sharpening (BB_RCAS_ATTENUATION, lower
 # is sharper).
@@ -134,7 +140,7 @@ RESERVED_KEYS = {'Insert': 'Insert opens the in-game settings menu.',
                  'Alt_L': 'Left Alt frees the mouse cursor while held.'}
 
 APP_DEFAULTS = {'game_dir': '', 'game_dir_u1': '', 'game_dir_u2': '', 'game_dir_u3': '', 'user_dir': '', 'start': 'u1', 'language': '1', 'player_name': '',
-                'fullscreen': False, 'present_mode': 'Mailbox', 'frame_rate': '60', 'show_fps': False,
+                'fullscreen': False, 'present_mode': 'Mailbox', 'frame_rate': '60', 'fps_limit': '', 'show_fps': False,
                 'window_size': '1920x1080', 'scaler': 'fsr1', 'sharpening': '500',
                 'anti_aliasing': 'off', 'aa_sharpness': '0.2', 'frame_generation': 'off',
                 'frame_gen_multiplier': '2', 'extra_env': '', 'close_on_play': False,
@@ -341,6 +347,9 @@ def game_environment(s, start=None):
     env['BB_FULLSCREEN'] = '1' if s['fullscreen'] else '0'
     env['BB_PRESENT_MODE'] = s['present_mode']
     env['BB_VBLANK_HZ'] = str(s.get('frame_rate') or '60')
+    if str(s.get('fps_limit') or '').isdigit():
+        env['BB_VBLANK_HZ'] = '0'
+        env['BB_FPS_LIMIT'] = str(s['fps_limit'])
     env['BB_WINDOW_SIZE'] = str(s.get('window_size') or '1920x1080')
     env['BB_FSR1'] = '1' if s.get('scaler', 'fsr1') == 'fsr1' else '0'
     sharpening = str(s.get('sharpening') or 'off')
@@ -368,12 +377,21 @@ BG, PANEL, SURFACE, CARD, LINE = '#08090a', '#0c0d0f', '#0f1012', '#17181b', '#2
 TEXT, MUTED, GOLD, GOLD_HI, GOLD_DIM = '#f3efe6', '#8e8a82', '#e7c36a', '#f3d78a', '#a88942'
 CARD_HI = '#202226'
 COLORS = {'surface': SURFACE, 'card': CARD, 'card_hi': CARD_HI, 'line': LINE, 'text': TEXT, 'muted': MUTED,
-          'gold': GOLD, 'gold_hi': GOLD_HI, 'track': '#2c2e33', 'knob': '#9a958b', 'knob_on': '#f7f1e2',
+          'gold': GOLD, 'gold_hi': GOLD_HI, 'gold_dim': GOLD_DIM, 'track': '#2c2e33', 'knob': '#9a958b', 'knob_on': '#f7f1e2',
           'button': '#25272b', 'button_hi': '#30333a'}
-# Sidebar icons (Segoe Fluent Icons on Windows 11, Segoe MDL2 Assets on Windows 10).
-NAV_ICONS = {'play': '\ue768', 'game': '\ue7fc', 'display': '\ue7f4', 'controls': '\ue765',
-             'advanced': '\ue713', 'log': '\ue8a5'}
+# Menu row icons (Segoe Fluent Icons on Windows 11, Segoe MDL2 Assets on Windows 10).
+NAV_ICONS = {'play': '\ue80f', 'game': '\ue8f1', 'display': '\ue7f4', 'controls': '\ue7fc',
+             'advanced': '\ue90f', 'log': '\ue9d9'}
 RUST, RUST_HI = GOLD, GOLD_HI
+# The menu row on every page (home and the settings pages) and the home screen's tile row.
+HOME_MENU = [('play', 'Home'), ('game', 'Game folder'), ('display', 'Display and graphics'),
+             ('controls', 'Controls'), ('advanced', 'Advanced'), ('log', 'Log')]
+HOME_TILES = [key for key, _t, _s, _e in GAMES] + ['settings']
+
+
+def rgb(color):
+    """'#rrggbb' as an (r, g, b) tuple for Pillow."""
+    return tuple(int(color[i:i + 2], 16) for i in (1, 3, 5))
 
 
 class Launcher:
@@ -387,7 +405,14 @@ class Launcher:
         self.output = queue.Queue()
         self.ui_calls = queue.Queue()
         self.banner_key = self.banner_scaled = self.cover_image = None
-        self.card_hot = None
+        self.hero_video = self.video_photo = None
+        self.tile_clip = self.tile_clip_key = self.tile_photo = None
+        self.video_masks, self.clip_masks = {}, {}
+        try:
+            from uncharted_media import HoverMusic
+            self.music = HoverMusic(root, CONFIG_DIR / 'media-cache')
+        except Exception:
+            self.music = None
         self.info, self.available = None, {}
         self.update_box = None
         root.title(f'{NAME} — The Nathan Drake Collection for Windows · by {AUTHOR}')
@@ -415,11 +440,13 @@ class Launcher:
             pass
 
     def load_fonts(self):
-        """Cinzel for headings (Uncharted-style capitals); Segoe UI for body text."""
+        """Cinzel for the brand (Uncharted-style capitals); M PLUS 1p (close to the PS3 system
+        font) for game names and headings; Segoe UI for body text."""
         from uncharted_fonts import font_path
 
         self.brand_family = 'Cinzel'
-        for name in ('Cinzel-Regular.ttf', 'Cinzel-SemiBold.ttf', 'Cinzel-Bold.ttf'):
+        for name in ('Cinzel-Regular.ttf', 'Cinzel-SemiBold.ttf', 'Cinzel-Bold.ttf',
+                     'MPLUS1p-Regular.ttf', 'MPLUS1p-Medium.ttf'):
             path = font_path(name)
             if path:
                 try:
@@ -428,16 +455,24 @@ class Launcher:
                     pass
         if not font_path('Cinzel-Bold.ttf'):
             self.brand_family = 'Georgia'
+        # GDI lists the medium weight as a family of its own.
+        self.ps_family = 'M PLUS 1p' if font_path('MPLUS1p-Regular.ttf') else 'Segoe UI'
+        self.ps_medium = 'M PLUS 1p Medium' if font_path('MPLUS1p-Medium.ttf') else 'Segoe UI Semibold'
         self.font_brand_xl = (self.brand_family, 24, 'bold')
         self.font_brand_lg = (self.brand_family, 18, 'bold')
         self.font_brand_md = (self.brand_family, 13, 'bold')
         self.font_brand_sm = (self.brand_family, 10)
+        self.font_game = (self.ps_medium, 13)
+        self.font_game_sub = (self.ps_family, 9)
+        self.font_hero = (self.ps_medium, 21)
+        self.font_hero_sub = (self.ps_family, 10)
+        self.font_eyebrow = (self.ps_medium, 9)
         self.font_ui = ('Segoe UI', 10)
         self.font_ui_sm = ('Segoe UI', 9)
         self.font_ui_md = ('Segoe UI Semibold', 10)
         self.font_button = ('Segoe UI Semibold', 10)
         self.font_play = ('Segoe UI Semibold', 13)
-        self.font_title = ('Segoe UI Semibold', 22)
+        self.font_title = (self.ps_medium, 22)
         self.font_card = ('Segoe UI Semibold', 9)
         import tkinter.font as tkfont
         families = set(tkfont.families(self.root))
@@ -488,8 +523,7 @@ class Launcher:
         s.configure('Shell.TLabel', background=SURFACE, foreground=TEXT)
         s.configure('Muted.TLabel', background=CARD, foreground=MUTED, font=('Segoe UI', 9))
         s.configure('ShellMuted.TLabel', background=SURFACE, foreground=MUTED, font=('Segoe UI', 9))
-        s.configure('Section.TLabel', background=SURFACE, foreground=GOLD_DIM,
-                    font=(self.brand_family, 10, 'bold'))
+        s.configure('Section.TLabel', background=SURFACE, foreground=GOLD_DIM, font=(self.ps_medium, 11))
         s.configure('TCheckbutton', background=SURFACE, foreground=TEXT, padding=(0, 3))
         s.map('TCheckbutton', background=[('active', SURFACE)], foreground=[('disabled', MUTED)])
         s.configure('Ghost.TButton', background=CARD, foreground=MUTED, padding=(16, 8), borderwidth=0)
@@ -521,38 +555,11 @@ class Launcher:
             self.vars[key] = v
         return self.vars[key]
 
-    def choice(self, parent, key, options, width=36):
-        var = self.var(key)
-        values = [v for v, _t in options]
-        box = self.ttk.Combobox(parent, values=[_(t) for _v, t in options], state='readonly', width=width)
-        if var.get() not in values:
-            var.set(values[0])
-
-        def show(*_args):
-            box.current(values.index(var.get()) if var.get() in values else 0)
-        show()
-        box.bind('<<ComboboxSelected>>', lambda _e: var.set(values[box.current()]))
-        var.trace_add('write', show)
-        return box
-
-    def next_row(self, parent):
-        return parent.grid_size()[1]
-
-    def target(self, parent):
-        """Where a page's rows go: its current card (one is opened when rows come before a section)."""
-        if parent in self.page_cards:
-            if self.page_cards[parent] is None:
-                self.new_card(parent, None)
-            self.page_cards[parent].refit()
-            return self.page_cards[parent].inner
-        return parent
-
-    def new_card(self, page, title):
-        from uncharted_widgets import Card
-        card = Card(self.tk, page, COLORS, self.px, title, self.font_card)
-        card.canvas.grid(row=self.next_row(page), column=0, columnspan=2, sticky='ew', pady=(0, self.px(14)))
-        self.page_cards[page] = card
-        return card
+    def choice(self, parent, key, options, title, hint=None, variable=None):
+        """A setting with a list of values (`variable`, else the setting `key`)."""
+        from uncharted_settings import ChoiceRow
+        lst = self.lists[parent]
+        return lst.add(ChoiceRow(lst, title, variable or self.var(key), [(v, _(t)) for v, t in options], hint))
 
     def toggle(self, parent, variable, background=CARD):
         from uncharted_widgets import Toggle
@@ -565,92 +572,66 @@ class Launcher:
                           background, padding, icon, self.font_icon_sm)
 
     def row(self, parent, title, widget, hint=None):
-        parent = self.target(parent)
-        r = self.next_row(parent)
-        self.ttk.Label(parent, text=title).grid(row=r, column=0, sticky='nw', padx=(0, 24), pady=(9, 0))
-        widget.grid(row=r, column=1, sticky='w', pady=(5, 0), in_=parent)
-        widget.lift()
-        if hint:
-            self.ttk.Label(parent, text=hint, style='Muted.TLabel', wraplength=self.px(560), justify='left').grid(
-                row=r + 1, column=1, sticky='w', pady=(3, 4))
-        return widget
+        """A row with its own controls (made as children of `parent`, the page's list)."""
+        from uncharted_settings import WidgetRow
+        lst = self.lists[parent]
+        return lst.add(WidgetRow(lst, title, widget, hint))
 
     def check(self, parent, key, title, hint=None):
-        parent = self.target(parent)
-        r = self.next_row(parent)
-        line = self.tk.Frame(parent, bg=CARD)
-        line.grid(row=r, column=0, columnspan=2, sticky='w', pady=(7, 0))
-        self.toggle(line, self.var(key)).pack(side='left')
-        label = self.tk.Label(line, text=title, bg=CARD, fg=TEXT, font=self.font_ui, cursor='hand2')
-        label.pack(side='left', padx=(self.px(12), 0))
-        label.bind('<Button-1>', lambda _e: self.var(key).set(not self.var(key).get()))
-        if hint:
-            self.ttk.Label(parent, text=hint, style='Muted.TLabel', wraplength=self.px(640), justify='left').grid(
-                row=r + 1, column=0, columnspan=2, sticky='w', padx=(self.px(52), 0), pady=(2, 2))
+        from uncharted_settings import ToggleRow
+        lst = self.lists[parent]
+        return lst.add(ToggleRow(lst, title, self.var(key), hint,
+                                 lambda master, var, bg: self.toggle(master, var, bg)))
 
-    def note(self, parent, text, top=12):
-        parent = self.target(parent)
-        self.ttk.Label(parent, text=text, style='Muted.TLabel', wraplength=self.px(680), justify='left').grid(
-            row=self.next_row(parent), column=0, columnspan=2, sticky='w', pady=(top, 0))
+    def action(self, parent, title, command, hint=None, value=''):
+        from uncharted_settings import ActionRow
+        lst = self.lists[parent]
+        return lst.add(ActionRow(lst, title, command, hint, value))
 
-    def section(self, parent, title, top=18):
-        if parent in self.page_cards:
-            return self.new_card(parent, title).inner
-        self.ttk.Label(parent, text=title, style='Section.TLabel').grid(
-            row=self.next_row(parent), column=0, columnspan=2, sticky='w', pady=(top, 2))
-        return parent
+    def note(self, parent, text):
+        self.lists[parent].note(text)
+
+    def section(self, parent, title, top=22):
+        self.lists[parent].heading(title, top)
 
     def folder(self, parent, key, title, prompt, hint=None, on_change=None):
+        """A folder setting: the row shows it; Enter or a click chooses another."""
         var = self.var(key)
-        holder = self.tk.Frame(self.target(parent), bg=CARD)
-        self.ttk.Entry(holder, textvariable=var, width=54).pack(side='left')
 
         def browse():
             chosen = self.filedialog.askdirectory(title=prompt, initialdir=var.get() or str(PORT_DIR))
             if chosen:
                 var.set(str(Path(chosen)))
-        self.pill(holder, _('Browse…'), browse, padding=(14, 6)).pack(side='left', padx=(8, 0))
-        self.pill(holder, _('Open'), lambda: self.open_path(var.get(), key), kind='ghost',
-                  padding=(12, 6)).pack(side='left', padx=(4, 0))
+        row = self.action(parent, title, browse, hint)
+
+        def show(*_args):
+            path = var.get()
+            text = path if len(path) <= 56 else '…' + path[-55:]
+            row.value.configure(text=text or _('Not set'), fg='#b9b2a5' if path else MUTED)
+        show()
+        var.trace_add('write', show)
         if on_change:
             var.trace_add('write', lambda *_a: on_change())
-        return self.row(parent, title, holder, hint)
+        return row
 
     def page(self, name, title, subtitle):
+        """A settings page: its title, then a console-style list (uncharted_settings). Returns the
+        list's frame, the parent for rows and the controls placed into them."""
+        from uncharted_settings import SettingsList
         tk = self.tk
         outer = tk.Frame(self.content, bg=SURFACE)
-        shell = tk.Frame(outer, bg=SURFACE)
-        shell.pack(fill='both', expand=True, padx=self.px(18), pady=(self.px(14), 0))
-        head = tk.Frame(shell, bg=SURFACE)
-        head.pack(fill='x', padx=self.px(26), pady=(self.px(18), self.px(14)))
+        head = tk.Frame(outer, bg=SURFACE)
+        head.pack(fill='x', padx=self.px(20), pady=(self.px(22), self.px(12)))
         tk.Label(head, text=title, bg=SURFACE, fg=TEXT, font=self.font_title).pack(anchor='w')
         tk.Label(head, text=subtitle, bg=SURFACE, fg=MUTED, font=self.font_ui).pack(anchor='w', pady=(2, 0))
-        # The page body scrolls when it is taller than the window (Display holds many options).
-        body = tk.Frame(shell, bg=SURFACE)
-        body.pack(fill='both', expand=True)
-        canvas = tk.Canvas(body, bg=SURFACE, highlightthickness=0, bd=0)
-        bar = self.ttk.Scrollbar(body, orient='vertical', command=canvas.yview)
-        canvas.configure(yscrollcommand=bar.set)
-        canvas.pack(side='left', fill='both', expand=True)
-        inner = self.ttk.Frame(canvas, style='Shell.TFrame', padding=(26, 0, 26, 12))
-        inner.columnconfigure(1, weight=1)
-        self.page_cards[inner] = None
-        window = canvas.create_window(0, 0, window=inner, anchor='nw')
-
-        def fit(_event=None):
-            canvas.itemconfigure(window, width=canvas.winfo_width())
-            canvas.configure(scrollregion=(0, 0, canvas.winfo_width(), inner.winfo_reqheight()))
-            if inner.winfo_reqheight() > canvas.winfo_height():
-                bar.pack(side='right', fill='y')
-            else:
-                bar.pack_forget()
-                canvas.yview_moveto(0)
-        inner.bind('<Configure>', fit)
-        canvas.bind('<Configure>', fit)
-
-        self.scrollers[name] = (canvas, bar)
+        fonts = {'row': (self.ps_family, 11), 'value': (self.ps_family, 10), 'hint': ('Segoe UI', 9),
+                 'heading': (self.ps_medium, 10), 'icon': self.font_icon_sm}
+        lst = SettingsList(tk, self.ttk, outer, COLORS, self.px, fonts)
+        lst.outer.pack(fill='both', expand=True)
+        self.lists[lst.inner] = self.lists[name] = lst
+        self.scrollers[name] = (lst.canvas, lst.bar)
         self.pages[name] = outer
-        return inner
+        return lst.inner
 
     def on_wheel(self, event):
         """The mouse wheel scrolls the page under the pointer (also over its buttons and lists;
@@ -669,277 +650,588 @@ class Launcher:
 
     # ---- layout ------------------------------------------------------------------------------
     def build(self):
-        tk, ttk = self.tk, self.ttk
-        side_w = self.px(248)
-        side = tk.Frame(self.root, bg=BG, width=side_w)
-        side.pack(side='left', fill='y')
-        side.pack_propagate(False)
-        brand_wrap = side_w - 36
-        tk.Label(side, text='UNCHARTED', bg=BG, fg=GOLD, font=self.font_brand_lg, anchor='w').pack(
-            anchor='w', padx=18, pady=(28, 0))
-        tk.Label(side, text='NATHAN DRAKE', bg=BG, fg=MUTED, font=self.font_brand_sm, anchor='w').pack(
-            anchor='w', padx=18, pady=(8, 0))
-        tk.Label(side, text='COLLECTION', bg=BG, fg=MUTED, font=self.font_brand_sm, anchor='w').pack(
-            anchor='w', padx=18, pady=(1, 0))
-        tk.Label(side, text=_('by {}').format(AUTHOR), bg=BG, fg=TEXT, font=self.font_ui_md,
-                 anchor='w', wraplength=brand_wrap, justify='left').pack(anchor='w', padx=18, pady=(10, 0))
-        tk.Label(side, text=_('version {}').format(VERSION), bg=BG, fg='#5c564c', font=self.font_ui_sm,
-                 anchor='w').pack(anchor='w', padx=18, pady=(1, 16))
-        tk.Frame(side, bg=LINE, height=1).pack(fill='x', padx=18, pady=(0, 14))
-        self.nav, self.nav_pills, self.nav_icons, self.nav_marks, self.current_page = {}, {}, {}, {}, None
-        for name, title in (('play', _('Play')), ('game', _('Game')), ('display', _('Display')),
-                            ('controls', _('Controls')), ('advanced', _('Advanced')), ('log', _('Log'))):
-            row = tk.Frame(side, bg=BG, cursor='hand2')
-            row.pack(fill='x', padx=(0, 12), pady=2)
-            mark = tk.Frame(row, bg=BG, width=self.px(3))
-            mark.pack(side='left', fill='y')
-            pill = tk.Frame(row, bg=BG, cursor='hand2')
-            pill.pack(side='left', fill='x', expand=True, padx=(self.px(9), 0))
-            widgets = [row, pill]
-            if self.font_icon:
-                icon = tk.Label(pill, text=NAV_ICONS[name], bg=BG, fg=MUTED, font=self.font_icon,
-                                padx=self.px(12), pady=self.px(9), cursor='hand2')
-                icon.pack(side='left')
-                self.nav_icons[name] = icon
-                widgets.append(icon)
-            item = tk.Label(pill, text=title, bg=BG, fg=TEXT, anchor='w', font=self.font_ui_md,
-                            padx=self.px(2 if self.font_icon else 14), pady=self.px(9), cursor='hand2')
-            item.pack(side='left', fill='x', expand=True)
-            widgets.append(item)
-            for widget in widgets:
-                widget.bind('<Button-1>', lambda _e, n=name: self.show(n))
-                widget.bind('<Enter>', lambda _e, n=name: self._nav_hover(n, True))
-                widget.bind('<Leave>', lambda _e, n=name: self._nav_hover(n, False))
-            self.nav[name], self.nav_pills[name], self.nav_marks[name] = item, pill, mark
-        tk.Frame(side, bg=BG).pack(fill='both', expand=True)
-        self.side = side
-        self.side_note = tk.Label(side, text=_('Native port: the original PS4 game code runs directly on Windows.'),
-                                  bg=BG, fg=MUTED, font=('Segoe UI', 9), justify='left',
-                                  wraplength=side_w - 36)
-        self.side_note.pack(anchor='w', padx=18, pady=(0, 18))
-
-        tk.Frame(self.root, bg=LINE, width=1).pack(side='left', fill='y')
-        right = tk.Frame(self.root, bg=SURFACE)
-        right.pack(side='left', fill='both', expand=True)
-        bar = tk.Frame(right, bg=PANEL, height=self.px(78))
-        bar.pack(fill='x', side='bottom')
-        bar.pack_propagate(False)
-        tk.Frame(bar, bg=LINE, height=1).pack(fill='x')
-        dock = tk.Frame(bar, bg=PANEL)
-        dock.pack(fill='both', expand=True)
-        self.status = tk.Label(dock, text='', bg=PANEL, fg=MUTED, font=('Segoe UI', 10), anchor='w', justify='left')
-        self.status.pack(side='left', padx=24, pady=14)
-        self.play_button = self.pill(dock, _('Play'), self.play, kind='primary', background=PANEL,
-                                     padding=(30, 9), icon='\ue768' if self.font_icon else None)
-        self.play_button.pack(side='right', padx=(10, 22), pady=12)
-        self.stop_button = self.pill(dock, _('Stop'), self.stop, background=PANEL, padding=(24, 9),
-                                     icon='\ue71a' if self.font_icon else None)
-        self.stop_button.configure(state='disabled')
-        self.stop_button.pack(side='right', pady=12)
-        self.content = tk.Frame(right, bg=SURFACE)
-        self.content.pack(fill='both', expand=True)
-
-        self.pages, self.scrollers, self.page_cards = {}, {}, {}
+        """One canvas over the whole window (build_play) holds every page: the home screen, or a
+        settings page placed on it under the same menu row, over the same (darker) background."""
+        tk = self.tk
+        self.current_page, self.brand_image = None, None
+        try:
+            # The logo-style heading (home screen): spaced gold capitals over the collection's name.
+            from PIL import ImageTk
+            import uncharted_art
+            self.brand_image = ImageTk.PhotoImage(uncharted_art.brand_heading(self.px(240), self.dpi))
+        except Exception:
+            pass
+        self.pages, self.scrollers, self.lists = {}, {}, {}
         self.root.bind_all('<MouseWheel>', self.on_wheel)
         self.root.bind_class('TCombobox', '<MouseWheel>', self.on_wheel)
         self.build_play()
+        # The settings pages go into `content`; the status, Stop and Play along their bottom.
+        self.content = tk.Frame(self.stage, bg=SURFACE)
+        self.dock = tk.Frame(self.stage, bg=BG)
+        self.status = tk.Label(self.dock, text='', bg=BG, fg=MUTED, font=('Segoe UI', 10), anchor='w',
+                               justify='left')
+        self.status.pack(side='left', padx=(self.px(56), 0))
+        self.play_button = self.pill(self.dock, _('Play'), self.play, kind='primary', background=BG,
+                                     padding=(30, 8), icon='\ue768' if self.font_icon else None)
+        self.play_button.pack(side='right', padx=(self.px(10), self.px(56)))
+        self.stop_button = self.pill(self.dock, _('Stop'), self.stop, background=BG, padding=(24, 8),
+                                     icon='\ue71a' if self.font_icon else None)
+        self.stop_button.configure(state='disabled')
+        self.stop_button.pack(side='right')
         self.build_game()
         self.build_display()
         self.build_controls()
         self.build_advanced()
         self.build_log()
+        self.stage.pack(fill='both', expand=True)
         self.refresh()
 
-    def _nav_style(self, name, active=False, hover=False):
-        if active:
-            bg, fg, icon = '#17181b', TEXT, GOLD
-        elif hover:
-            bg, fg, icon = '#111214', TEXT, TEXT
-        else:
-            bg, fg, icon = BG, MUTED, MUTED
-        self.nav_pills[name].configure(bg=bg)
-        self.nav[name].configure(bg=bg, fg=fg)
-        if name in self.nav_icons:
-            self.nav_icons[name].configure(bg=bg, fg=icon)
-        self.nav_marks[name].configure(bg=GOLD if active else BG)
-
-    def _nav_hover(self, name, inside):
-        if name == self.current_page:
-            return
-        self._nav_style(name, hover=inside)
-
-    def _card_hover(self, key):
-        if self.card_hot == key:
-            return
-        self.card_hot = key
-        for name in self.cards:
-            self.draw_card(name)
-
     def show(self, name):
+        """'play' is the home screen; the others are settings pages under the same menu row."""
         for page in self.pages.values():
             page.pack_forget()
-        self.pages[name].pack(fill='both', expand=True)
         self.current_page = name
-        for n in self.nav:
-            self._nav_style(n, active=(n == name))
+        self.menu_index = next(i for i, (n, _t) in enumerate(HOME_MENU) if n == name)
+        self.home_row = 1
         if name == 'play':
             self.refresh()
+            key = HOME_TILES[self.tile_index]
+            if self.music and not self.process and key != 'settings':
+                self.music.hover(key)
+        else:
+            self.pages[name].pack(fill='both', expand=True)
+            self.quiet_media()
+            self.draw_stage()
+
+    def quiet_media(self):
+        """No music or cover video, and the header video paused, away from the Play page or while
+        a game runs."""
+        if self.music:
+            self.music.stop()
+        if self.hero_video:
+            self.hero_video.pause(True)
+        self.stop_tile_clip()
+
+    def stop_tile_clip(self):
+        if self.tile_clip:
+            self.tile_clip.stop()
+        self.tile_clip = self.tile_clip_key = self.tile_photo = None
 
     def build_play(self):
-        tk, ttk = self.tk, self.ttk
-        page = tk.Frame(self.content, bg=SURFACE)
-        self.pages['play'] = page
-        self.hero = tk.Canvas(page, height=self.px(260), bg=SURFACE, highlightthickness=0, bd=0)
-        self.hero.pack(fill='x')
-        self.hero.bind('<Configure>', self._sync_hero_height)
-        shell = tk.Frame(page, bg=SURFACE)
-        shell.pack(fill='both', expand=True, padx=self.px(22), pady=(self.px(6), self.px(10)))
-        head = tk.Frame(shell, bg=SURFACE)
-        head.pack(fill='x', padx=self.px(22), pady=(self.px(14), self.px(8)))
-        tk.Label(head, text=_('Library'), bg=SURFACE, fg=TEXT,
-                 font=('Segoe UI Semibold', 14)).pack(side='left')
-        tk.Label(head, text=_('Double-click a cover to launch'), bg=SURFACE, fg=MUTED,
-                 font=self.font_ui_sm).pack(side='right')
-        cards = tk.Frame(shell, bg=SURFACE)
-        cards.pack(fill='x', padx=self.px(14), pady=(0, self.px(6)))
-        self.cards, self.card_images = {}, {}
-        for column, (key, _title, _subtitle, _exe) in enumerate(GAMES):
-            cards.columnconfigure(column, weight=1, uniform='games')
-            card = tk.Canvas(cards, height=self.px(460), bg=SURFACE, highlightthickness=0, bd=0, cursor='hand2')
-            card.grid(row=0, column=column, sticky='nsew', padx=(0 if column == 0 else 18, 0))
-            card.bind('<Configure>', lambda _e, k=key: self.draw_card(k))
-            card.bind('<Button-1>', lambda _e, k=key: self.var('start').set(k))
-            card.bind('<Double-Button-1>', lambda _e, k=key: (self.var('start').set(k), self.play()))
-            card.bind('<Enter>', lambda _e, k=key: self._card_hover(k))
-            card.bind('<Leave>', lambda _e, k=key: self._card_hover(None))
-            self.cards[key] = card
-        cards.bind('<Configure>', self.fit_posters)
-        tk.Frame(shell, bg=SURFACE, height=1).pack(fill='x', padx=self.px(22), pady=(self.px(4), self.px(8)))
-        row = tk.Frame(shell, bg=SURFACE)
-        row.pack(fill='x', padx=self.px(22), pady=(0, self.px(8)))
-        self.toggle(row, self.var('fullscreen'), SURFACE).pack(side='left')
-        fullscreen = tk.Label(row, text=_('Fullscreen'), bg=SURFACE, fg=TEXT, font=self.font_ui, cursor='hand2')
+        """The home screen: one canvas over the whole window (the settings view is hidden while it
+        shows), console style: a menu row at the top, the tile row (the three games, Settings),
+        the focused game's name and Start, and the window options along the bottom."""
+        tk = self.tk
+        import tkinter.font as tkfont
+        self.font_home_title = (self.ps_medium, 26)
+        self.measure_play = tkfont.Font(root=self.root, font=self.font_play).measure
+        self.stage = tk.Canvas(self.root, bg=BG, highlightthickness=0, bd=0)
+        self.stage.bind('<Configure>', lambda _e: self.schedule_stage())
+        self.stage.bind('<Motion>', lambda e: self.home_hover(self.hit_at(e.x, e.y)))
+        self.stage.bind('<Leave>', lambda _e: self.home_hover(None))
+        self.stage.bind('<Button-1>', lambda e: self.home_click(self.hit_at(e.x, e.y)))
+        self.stage.bind('<Double-Button-1>', lambda e: self.home_click(self.hit_at(e.x, e.y), True))
+        for sequence, action in (('<Left>', (0, -1)), ('<Right>', (0, 1)), ('<Up>', (-1, 0)),
+                                 ('<Down>', (1, 0)), ('<Return>', 'enter'), ('<KP_Enter>', 'enter'),
+                                 ('<Escape>', 'back')):
+            self.root.bind(sequence, lambda _e, a=action: self.home_key(a))
+        # Fullscreen, Add to Steam and Desktop shortcut along the bottom.
+        self.home_options = tk.Frame(self.stage, bg=BG)
+        self.toggle(self.home_options, self.var('fullscreen'), BG).pack(side='left')
+        fullscreen = tk.Label(self.home_options, text=_('Fullscreen'), bg=BG, fg=TEXT, font=self.font_ui,
+                              cursor='hand2')
         fullscreen.pack(side='left', padx=(self.px(10), 0))
         fullscreen.bind('<Button-1>', lambda _e: self.var('fullscreen').set(not self.var('fullscreen').get()))
-        self.pill(row, _('Add to Steam'), self.add_to_steam, background=SURFACE, padding=(14, 6)).pack(
+        self.pill(self.home_options, _('Add to Steam'), self.add_to_steam, background=BG, padding=(14, 6)).pack(
             side='left', padx=(self.px(24), 0))
-        self.pill(row, _('Desktop shortcut'), self.shortcut, background=SURFACE, padding=(14, 6)).pack(
+        self.pill(self.home_options, _('Desktop shortcut'), self.shortcut, background=BG, padding=(14, 6)).pack(
             side='left', padx=(self.px(8), 0))
-        self.ready = tk.Label(shell, text='', bg=SURFACE, fg=MUTED, font=self.font_ui_sm,
-                              wraplength=self.px(820), justify='left')
-        self.ready.pack(anchor='w', padx=self.px(22), pady=(0, self.px(16)))
+        self.home_hits, self.home_hot, self.home_images = [], None, {}
+        self.ready_text, self.clock_item, self.stage_job = '', None, None
+        start = self.var('start').get()
+        self.home_row, self.menu_index = 1, 0
+        self.tile_index = HOME_TILES.index(start) if start in HOME_TILES else 0
+        self.pictures, self.pictures_size, self.fade_job, self.fade_start = {}, None, None, 0.0
+        self.back_photo = self.back_shown = self.back_target = self.back_from = None
         self.var('start').trace_add('write', lambda *_a: self.refresh())
+        self.root.after(1000, self.tick_clock)
 
-    def fit_posters(self, _event=None):
-        """Poster tiles keep the cover shape, but stay short enough that the caption is on screen."""
-        sample = self.cards.get('u1')
-        if sample is None:
-            return
-        width = sample.winfo_width()
-        if width < 80:
-            return
-        page = self.pages.get('play')
-        natural = int(round(width * 365 / 273)) + self.px(78)
-        avail = natural
-        if page is not None and page.winfo_height() > 240:
-            # Leave the library heading, the fullscreen row, and the status line on screen.
-            avail = page.winfo_height() - self.hero.winfo_height() - self.px(196)
-        total = max(self.px(168), min(natural, avail))
-        for card in self.cards.values():
-            if int(card['height']) != total:
-                card.configure(height=total)
+    def schedule_stage(self):
+        """Redraw once the window stops changing size (the background is made per size)."""
+        if self.stage_job:
+            self.root.after_cancel(self.stage_job)
+        self.stage_job = self.root.after(60, self.draw_stage)
 
-    def _tile_content_size(self, canvas_w, canvas_h):
-        """Size passed to poster_tile so the bitmap, including its shadow pad, stays inside the card."""
-        inner_w = max(48, canvas_w - 8)
-        inner_h = max(80, canvas_h - 8)
-        while inner_w > 48 and inner_w + 2 * max(10, inner_w // 28) > canvas_w - 2:
-            inner_w -= 2
-        pad = max(10, inner_w // 28)
-        while inner_h > 80 and inner_h + 2 * pad > canvas_h - 2:
-            inner_h -= 2
-        return inner_w, inner_h
+    def home_key(self, action):
+        """Arrow keys move the focus (Up: the menu row, Down: the tiles), Enter opens or starts
+        what has it. On a settings page they move through its list (Up past its first row: the
+        menu row); Esc closes a pop-up list or goes back home."""
+        if getattr(self, 'capturing', None):
+            return None
+        if self.current_page != 'play':
+            lst = self.lists.get(self.current_page)
+            typing = self.root.focus_get() is not None and \
+                self.root.focus_get().winfo_class() in ('Entry', 'TEntry', 'Text')
+            if action == 'back':
+                if not (lst and lst.back()):
+                    self.show('play')
+                return 'break'
+            if typing or (lst and lst.popup):
+                return lst.key(action) if lst and not typing else None
+            if self.home_row == 0:  # the menu row: Down goes back into the page
+                if action == 'enter':
+                    self.show(HOME_MENU[self.menu_index][0])
+                elif action[0] > 0:
+                    self.home_row = 1
+                    self.draw_stage()
+                elif action[1]:
+                    self.menu_index = min(len(HOME_MENU) - 1, max(0, self.menu_index + action[1]))
+                    self.draw_stage()
+                return 'break'
+            result = lst.key(action) if lst else None
+            if result == 'top' or (lst is None and action == (-1, 0)):  # Up past the first row
+                self.home_row = 0
+                self.draw_stage()
+                return 'break'
+            return result
+        if action == 'enter':
+            self.home_activate()
+        elif action != 'back':
+            self.home_move(*action)
+        return 'break'
 
-    def draw_card(self, key):
-        """Rounded cover tile with shadow; gold ring when selected."""
-        card = self.cards[key]
-        w, h = card.winfo_width(), card.winfo_height()
-        if w < 48 or h < 48:
+    def home_move(self, rows, columns):
+        if rows:
+            self.home_row = 0 if rows < 0 else 1
+        elif self.home_row == 0:
+            self.menu_index = min(len(HOME_MENU) - 1, max(0, self.menu_index + columns))
+        else:
+            self.focus_tile(min(len(HOME_TILES) - 1, max(0, self.tile_index + columns)))
+        self.draw_stage()
+
+    def focus_tile(self, index):
+        """A game tile with the focus is the game Start runs (and its music plays)."""
+        self.tile_index = index
+        key = HOME_TILES[index]
+        if key != 'settings' and self.var('start').get() != key:
+            self.var('start').set(key)
+        if self.music:
+            self.music.hover(None if self.process or key == 'settings' else key)
+
+    def home_activate(self):
+        if self.home_row == 0:
+            self.show(HOME_MENU[self.menu_index][0])
+        elif HOME_TILES[self.tile_index] == 'settings':
+            self.show('display')
+        elif not self.process:
+            self.play()
+
+    def hit_at(self, x, y):
+        return next((hit for (x0, y0, x1, y1), hit in reversed(self.home_hits)
+                     if x0 <= x < x1 and y0 <= y < y1), None)
+
+    def home_hover(self, hit):
+        if hit == self.home_hot:
             return
-        title, subtitle = next((t, sub) for k, t, sub, _e in GAMES if k == key)
-        present = self.available.get(key, True)
-        chosen = key == self.var('start').get()
-        hot = key == self.card_hot
-        inner_w, inner_h = self._tile_content_size(w, h)
-        page = tuple(int(SURFACE[i:i + 2], 16) for i in (1, 3, 5))
-        wanted = (inner_w, inner_h, present, chosen, hot)
-        if self.card_images.get(key, (None,))[0] != wanted:
-            image = None
+        self.home_hot = hit
+        self.stage.configure(cursor='hand2' if hit else '')
+        self.draw_stage()
+
+    def home_click(self, hit, double=False):
+        if not hit:
+            return
+        kind = hit[0]
+        if kind == 'menu':
+            self.home_row, self.menu_index = 0, hit[1]
+            self.show(HOME_MENU[hit[1]][0])
+        elif kind == 'tile':
+            self.home_row = 1
+            self.focus_tile(hit[1])
+            if HOME_TILES[hit[1]] == 'settings':
+                self.show('display')
+            elif double and not self.process:
+                self.play()
+            else:
+                self.draw_stage()
+        elif kind == 'start':
+            self.play()
+        elif kind == 'stop':
+            self.stop()
+
+    def home_image(self, key, make):
+        """A cached PhotoImage of a Pillow picture, made ahead by prepare_pictures when it could
+        be; None without Pillow."""
+        if key not in self.home_images:
             try:
                 from PIL import ImageTk
-                import uncharted_art
-                scene = uncharted_art.poster_tile(key, inner_w, inner_h, title, subtitle, selected=chosen,
-                                                  hover=hot and not chosen, dimmed=not present, page=page)
-                image = ImageTk.PhotoImage(scene)
+                picture = self.pictures.get(key)
+                self.home_images[key] = ImageTk.PhotoImage(picture if picture is not None else make())
             except Exception:
-                image = None
-            self.card_images[key] = (wanted, image)
-        card.delete('all')
-        image = self.card_images[key][1]
-        if image:
-            x = max(0, (w - image.width()) // 2)
-            card.create_image(x, 0, image=image, anchor='nw')
-        else:
-            card.create_rectangle(0, 0, w, h, fill=CARD, outline=LINE)
+                self.home_images[key] = None
+        return self.home_images[key]
 
-    def _sync_hero_height(self, _event=None):
-        """Keep the header at the banner's 16:9 aspect ratio."""
-        c = self.hero
-        w = max(c.winfo_width(), 400)
-        h = max(self.px(180), min(self.px(280), int(w * 576 / 1024)))
-        if int(c['height']) != h:
-            c.configure(height=h)
-        self.draw_hero()
+    def tile_sizes(self, w, h):
+        """The focused tile's side and the others' for a window size."""
+        big = max(self.px(150), min(self.px(250), int(min(w * 0.18, h * 0.27))))
+        return big, int(big * 0.64)
 
-    def draw_hero(self):
-        """Collection banner up top; selected game and folder status along the bottom edge."""
-        c = self.hero
+    def draw_stage(self):
+        """The window, drawn again after each change (pictures are cached): the background and the
+        menu row on every page; then the home screen's tiles, or the settings page."""
+        self.stage_job = None
+        c = self.stage
+        w, h = c.winfo_width(), c.winfo_height()
+        if self.current_page is None or w < 200 or h < 200:
+            return
+        try:
+            import uncharted_art as art
+        except ImportError:
+            art = None
+        px = self.px
+        home = self.current_page == 'play'
         c.delete('all')
-        w, h = max(c.winfo_width(), 400), int(c['height'])
+        self.home_hits = []
         start = self.var('start').get()
-        title, subtitle = next((t, sub) for k, t, sub, _e in GAMES if k == start)
-        game_dir = game_folder(self.current(), start)
-        key = (w, h, start, game_dir)
-        if self.banner_key != key:
-            self.banner_key = key
-            # The collection banner when this machine has it (launcher art is not distributed),
-            # otherwise the background art of the player's own dump.
-            self.banner_scaled = self.photo_collection_banner(w, h) or \
-                self.scaled_art(Path(game_dir or '.') / 'sce_sys' / 'pic1.png', w)
-            self.cover_image = None
-        if self.banner_scaled:
-            c.create_image(w // 2, h // 2, image=self.banner_scaled)
-        c.create_rectangle(0, h - 1, w, h, fill=GOLD_DIM, outline='')
-        info = self.info
-        sub = (f"{info['id']}  ·  {_('version')} {info['version']}" if info
-               else _('Set your game folder on the Game page'))
-        c.create_text(self.px(24), h - self.px(14), text=sub, anchor='sw', fill=GOLD,
-                      font=self.font_brand_sm)
-        c.create_text(w - self.px(24), h - self.px(14), text=f'{_(title)}  ·  {_(subtitle)}',
-                      anchor='se', fill='#f6f1e6', font=self.font_brand_md)
+        # The background: the selected game's picture (darker behind a settings page), or the art
+        # folder's background video on the home screen.
+        own = art is not None and art.has_background(start)
+        video = None if own else self.sync_hero_video(w, h, start, hidden=not home)
+        if (w, h) != self.pictures_size:
+            self.pictures_size = (w, h)
+            self.prepare_pictures(w, h)
+        back = self.background(start, w, h, dim=not home)
+        if back is not None:
+            self.show_background(back)
+            c.create_image(0, 0, image=self.back_photo, anchor='nw')
+        if video and home:
+            c.create_image(w // 2, h // 2, image=self.video_photo)  # see-through until a frame
+        margin = px(56)
 
-    def photo_collection_banner(self, width, height):
+        # The menu row: round icons, the focused or pointed one lit with its name under it, the
+        # page on screen marked in gold.
+        top = px(46)
+        for i, (name, label) in enumerate(HOME_MENU):
+            x = margin + px(20) + i * px(56)
+            focused = self.home_row == 0 and self.menu_index == i
+            hot = self.home_hot == ('menu', i)
+            here = name == self.current_page
+            if (focused or hot) and art:
+                alpha = 64 if focused else 34
+                dot = self.home_image(('dot', alpha), lambda a=alpha: art.glow_dot(px(44), a))
+                if dot:
+                    c.create_image(x, top, image=dot)
+            colour = GOLD if here else TEXT if focused or hot else '#cfc9bd'
+            if self.font_icon:
+                c.create_text(x, top, text=NAV_ICONS[name], font=(self.font_icon[0], 15), fill=colour)
+            else:
+                c.create_text(x, top, text=_(label)[:1], font=self.font_ui_md, fill=colour)
+            if here:
+                c.create_rectangle(x - px(9), top + px(19), x + px(9), top + px(19) + max(2, px(2)),
+                                   fill=GOLD, outline='')
+            if focused or hot:
+                c.create_text(x, top + px(36), text=_(label), font=self.font_ui_sm, fill=TEXT)
+            self.home_hits.append(((x - px(22), top - px(22), x + px(22), top + px(22)), ('menu', i)))
+        self.clock_item = c.create_text(w - margin, top, text=self.clock_text(), anchor='e',
+                                        font=(self.ps_family, 12), fill='#e4ded2')
+        band = px(58)
+        if self.update_box:
+            c.create_window(w - margin, top + px(34), window=self.update_box, anchor='ne')
+
+        if not home:
+            # The page as a panel under the menu row; the status, Stop and Play along the bottom.
+            panel_x, panel_y = margin - px(20), px(92)
+            panel_w = min(w - 2 * panel_x, px(1120))
+            c.create_window(panel_x, panel_y, window=self.content, anchor='nw', width=panel_w,
+                            height=h - band - panel_y)
+            c.create_window(0, h - band, window=self.dock, anchor='nw', width=w, height=band)
+            return
+
+        # The tile row: the focused tile larger, a gold ring while the row has the focus.
+        big, small = self.tile_sizes(w, h)
+        tile_top, x = px(122), margin
+        for i, key in enumerate(HOME_TILES):
+            side = big if i == self.tile_index else small
+            ring = i == self.tile_index and self.home_row == 1
+            hot = self.home_hot == ('tile', i)
+            image = None
+            if art and key == 'settings':
+                image = self.home_image(('blank', side, ring, hot),
+                                        lambda s=side, r=ring, o=hot: art.home_blank_tile(s, focused=r, hover=o))
+            elif art:
+                dim = not self.available.get(key, True)
+                image = self.home_image(('tile', key, side, ring, hot, dim),
+                                        lambda k=key, s=side, r=ring, o=hot, d=dim:
+                                        art.home_tile(k, s, focused=r, hover=o, dimmed=d))
+            if image:
+                pad = (image.width() - side) // 2
+                c.create_image(x - pad, tile_top - pad, image=image, anchor='nw')
+            else:
+                c.create_rectangle(x, tile_top, x + side, tile_top + side, fill=CARD,
+                                   outline=GOLD if ring else LINE)
+            if key == 'settings':
+                if self.font_icon:
+                    c.create_text(x + side / 2, tile_top + side * 0.44, text='\ue713',
+                                  font=(self.font_icon[0], max(12, side // 6)), fill=TEXT)
+                c.create_text(x + side / 2, tile_top + side * 0.78, text=_('Settings'),
+                              font=self.font_ui_sm if side < big else self.font_ui_md, fill=TEXT)
+            elif i == self.tile_index and not self.process:
+                self.draw_tile_clip(key, x, tile_top, side, side)
+            self.home_hits.append(((x, tile_top, x + side, tile_top + side), ('tile', i)))
+            x += side + px(16)
+
+        # The focused tile's block: accent rule, series line, name, Start, the folder status.
+        if HOME_TILES[self.tile_index] == 'settings':
+            accent, eyebrow, title = GOLD, _('Launcher'), _('Settings')
+            meta = _('Display and graphics, controls, the game folder and more. Esc comes back here.')
+        else:
+            focus = HOME_TILES[self.tile_index]
+            title, eyebrow = next((t, sub) for k, t, sub, _e in GAMES if k == focus)
+            accent, title, eyebrow, meta = GAME_ACCENTS.get(focus, GOLD), _(title), _(eyebrow), self.ready_text
+        y = tile_top + big + px(38)
+        c.create_rectangle(margin, y, margin + px(28), y + max(2, px(2)), fill=accent, outline='')
+        self.shadow_text(margin, y + px(14), eyebrow.upper(), 'nw', accent, self.font_eyebrow)
+        self.shadow_text(margin, y + px(32), title, 'nw', '#f6f1e6', self.font_home_title)
+        button_y = y + px(88)
+        if HOME_TILES[self.tile_index] == 'settings':
+            self.home_pill(margin, button_y, _('Open settings'), ('tile', self.tile_index), True)
+        elif self.process:
+            self.home_pill(margin, button_y, _('Close game'), ('stop',))
+            meta = _('The game is running in its own window.')
+        else:
+            self.home_pill(margin, button_y, _('Start'), ('start',), True)
+        self.shadow_text(margin, button_y + px(58), meta, 'nw', '#b3ab9d', self.font_ui_sm,
+                         width=max(px(300), int(w * 0.55)))
+
+        # The collection's heading and the port's credit, bottom right.
+        if self.brand_image:
+            c.create_image(w - margin, h - band - px(46), image=self.brand_image, anchor='se')
+        self.shadow_text(w - margin, h - band - px(22), _('Port by {}  ·  version {}').format(AUTHOR, VERSION),
+                         'se', '#8e8a82', self.font_ui_sm)
+
+        # Along the bottom: the window options and the keys.
+        c.create_rectangle(0, h - band, w, h, fill=BG, outline='')
+        c.create_line(0, h - band, w, h - band, fill='#15161a')
+        c.create_window(margin, h - band // 2, window=self.home_options, anchor='w')
+        c.create_text(w - margin, h - band // 2, anchor='e', fill=MUTED, font=self.font_ui_sm,
+                      text=_('← →  Choose        ↑ ↓  Menu        Enter  Start'))
+
+    def home_pill(self, x, y, text, hit, primary=False):
+        """A canvas button (smooth corners); returns its right edge."""
+        px = self.px
+        width, height = max(px(140), self.measure_play(text) + px(60)), px(44)
+        hot = self.home_hot == hit
+        if primary:
+            fill, fg = rgb(GOLD_HI if hot else GOLD) + (255,), '#1a1408'
+        else:
+            fill, fg = (255, 255, 255, 52 if hot else 30), TEXT
+        try:
+            import uncharted_art as art
+            image = self.home_image(('pill', width, height, fill),
+                                    lambda: art.pill_image(width, height, fill,
+                                                           None if primary else (255, 255, 255, 70)))
+        except ImportError:
+            image = None
+        if image:
+            self.stage.create_image(x, y, image=image, anchor='nw')
+        else:
+            self.stage.create_rectangle(x, y, x + width, y + height, fill=GOLD if primary else CARD, outline='')
+        self.stage.create_text(x + width / 2, y + height / 2, text=text, font=self.font_play, fill=fg)
+        self.home_hits.append(((x, y, x + width, y + height), hit))
+        return x + width
+
+    def clock_text(self):
+        name = str(self.var('player_name').get()).strip() or _('Player')
+        return f"{name}        {time.strftime('%H:%M')}"
+
+    def tick_clock(self):
+        if self.clock_item and self.current_page == 'play':
+            self.stage.itemconfigure(self.clock_item, text=self.clock_text())
+        self.root.after(15000, self.tick_clock)
+
+    def shadow_text(self, x, y, text, anchor, fill, font, width=0):
+        """Text that stays readable over a bright background: a soft dark copy one pixel below."""
+        offset = max(1, self.px(1))
+        self.stage.create_text(x + offset, y + offset, text=text, anchor=anchor, fill='#000000', font=font,
+                               width=width)
+        self.stage.create_text(x, y, text=text, anchor=anchor, fill=fill, font=font, width=width)
+
+    def draw_tile_clip(self, key, x, y, w, h):
+        """The hovered game's video (art folder: u1_video.mp4 …) over its cover picture, like the
+        PS3 menu's: in its own wide shape across the middle, the dimmed cover above and below,
+        within the cover's rounded corners. The cover shows until the first frame arrives (the
+        picture starts see-through)."""
         try:
             from PIL import ImageTk
-            import uncharted_art
-            page = tuple(int(BG[i:i + 2], 16) for i in (1, 3, 5))
-            scene = uncharted_art.collection_banner(width, height, page)
-            return ImageTk.PhotoImage(scene) if scene is not None else None
-        except Exception:
-            return None
+            import uncharted_media
+        except ImportError:
+            return
+        clip = self.tile_clip
+        if not clip or self.tile_clip_key != key:
+            path = uncharted_media.clip_for(key)
+            if not path:
+                return
+            self.stop_tile_clip()
+            self.tile_clip_key = key
+            self.tile_clip = clip = uncharted_media.VideoClip(path, (w, h), self.round_clip,
+                                                              CONFIG_DIR / 'media-cache', cover=False,
+                                                              fill=self.dimmed_cover(key))
+            self.root.after(15, lambda: self.pump_tile_clip(clip))
+        if clip.failed:
+            return
+        clip.resize((w, h))
+        if not self.tile_photo or (self.tile_photo.width(), self.tile_photo.height()) != (w, h):
+            self.tile_photo = ImageTk.PhotoImage('RGBA', (w, h))
+        self.stage.create_image(x, y, image=self.tile_photo, anchor='nw')
 
-    def draw_banner(self):
-        self.draw_hero()
+    def pump_tile_clip(self, clip):
+        """Show the newest frame of the cover's video; runs while that video is the current one."""
+        if clip is not self.tile_clip:
+            return
+        frame = clip.latest()
+        photo = self.tile_photo
+        if frame is not None and photo and frame.size == (photo.width(), photo.height()):
+            photo.paste(frame)
+        self.root.after(15, lambda: self.pump_tile_clip(clip))
+
+    @staticmethod
+    def dimmed_cover(key):
+        """What shows above and below the wide video in a cover (helper thread): the cover
+        itself, darkened so the video stands out."""
+        cache = {}
+
+        def fill(size):
+            if cache.get('size') != size:
+                from PIL import Image
+                import uncharted_art
+                cover = uncharted_art.card_scene(key, *size)
+                cache.update(size=size, image=Image.blend(cover, Image.new('RGB', size, (6, 5, 4)), 0.6))
+            return cache['image']
+        return fill
+
+    def round_clip(self, image):
+        """Tile video frames (helper thread): the tile's rounded corners."""
+        from uncharted_art import rounded_mask
+        if self.clip_masks.get('size') != image.size:
+            self.clip_masks = {'size': image.size, 'mask': rounded_mask(image.size, max(4, image.size[0] // 12))}
+        image = image.convert('RGBA')
+        image.putalpha(self.clip_masks['mask'])
+        return image
+
+    def background(self, key, width, height, dim=False):
+        """A game's background picture for the window (uncharted_art.home_backdrop; `dim`: darker,
+        behind a settings page), or None without Pillow. Usually made ahead (prepare_pictures)."""
+        wanted = ('back', key, width, height, dim)
+        if wanted not in self.pictures:
+            try:
+                import uncharted_art
+                self.pictures[wanted] = uncharted_art.home_backdrop(key, width, height, rgb(BG),
+                                                                    0.72 if dim else 0)
+            except Exception:
+                self.pictures[wanted] = None
+        return self.pictures[wanted]
+
+    def prepare_pictures(self, width, height):
+        """For a new window size: every game's backgrounds and tiles, made on a helper thread so
+        moving between games never waits for them (making one takes 0.1 to 0.3 s)."""
+        self.pictures, self.home_images = {}, {}
+        pictures, (big, small) = self.pictures, self.tile_sizes(width, height)
+        games = [self.var('start').get()] + [k for k in HOME_TILES[:3] if k != self.var('start').get()]
+        dimmed = {key: not self.available.get(key, True) for key in games}
+
+        def make(wanted, build):
+            if wanted not in pictures:
+                pictures[wanted] = build()
+
+        def work():
+            try:
+                import uncharted_art as art
+                for dim in (False, True):
+                    for key in games:
+                        make(('back', key, width, height, dim),
+                             lambda: art.home_backdrop(key, width, height, rgb(BG), 0.72 if dim else 0))
+                for key in games:
+                    for side, ring in ((big, True), (big, False), (small, False)):
+                        make(('tile', key, side, ring, False, dimmed[key]),
+                             lambda: art.home_tile(key, side, focused=ring, dimmed=dimmed[key]))
+                for side, ring in ((big, True), (big, False), (small, False)):
+                    make(('blank', side, ring, False), lambda: art.home_blank_tile(side, focused=ring))
+            except Exception:
+                pass  # what is missing is made when it is first shown
+        threading.Thread(target=work, daemon=True).start()
+
+    def show_background(self, picture):
+        """Puts a background picture (the window's size) on screen, cross-fading from the one shown
+        over a quarter of a second; a newer one during a fade carries on from the frame shown."""
+        from PIL import ImageTk
+        photo = self.back_photo
+        if photo is None or (photo.width(), photo.height()) != picture.size:
+            self.back_photo = ImageTk.PhotoImage(picture)
+            self.back_shown = self.back_target = picture
+            return
+        if picture is self.back_target:
+            return
+        self.back_from, self.back_target, self.fade_start = self.back_shown, picture, time.perf_counter()
+        if not self.fade_job:
+            self.fade_job = self.root.after(1, self.fade_step)
+
+    def fade_step(self):
+        from PIL import Image
+        t = min(1.0, (time.perf_counter() - self.fade_start) / 0.25)
+        t = t * t * (3 - 2 * t)
+        frame = self.back_target if t >= 1 else Image.blend(self.back_from, self.back_target, t)
+        self.back_photo.paste(frame)
+        self.back_shown = frame
+        self.fade_job = self.root.after(15, self.fade_step) if t < 1 else None
+
+    def sync_hero_video(self, w, h, start, hidden=False):
+        """The selected game's video (else the background video) of the art folder, playing in the
+        header; paused while `hidden` (a game background covers the header). Returns the player,
+        or None when there is no video or PyAV is missing."""
+        try:
+            import uncharted_media
+            path = uncharted_media.header_video()
+        except Exception:
+            uncharted_media, path = None, None
+        video = self.hero_video
+        if video and (video.path != path or video.failed):
+            video.stop()
+            self.hero_video = video = None
+        if path and not video:
+            self.hero_video = video = uncharted_media.VideoClip(path, (w, h), self.shade_video,
+                                                                  CONFIG_DIR / 'media-cache')
+            self.root.after(15, lambda: self.pump_video(video))
+        if not video:
+            return None
+        video.resize((w, h))
+        video.pause(hidden or self.current_page not in (None, 'play') or bool(self.process))
+        if not self.video_photo or (self.video_photo.width(), self.video_photo.height()) != (w, h):
+            from PIL import ImageTk
+            self.video_photo = ImageTk.PhotoImage('RGB', (w, h))
+        return video
+
+    def pump_video(self, video):
+        """Show the newest decoded frame; runs while this player is the header's."""
+        if video is not self.hero_video:
+            return
+        frame = video.latest()
+        photo = self.video_photo
+        if frame is not None and photo and frame.size == (photo.width(), photo.height()):
+            photo.paste(frame)
+        self.root.after(15, lambda: self.pump_video(video))
+
+    def shade_video(self, image):
+        """Video frames (helper thread): a little darker, faded into the page along the bottom so
+        the names stay readable, like the still banner."""
+        from PIL import Image
+        masks = self.video_masks
+        if masks.get('size') != image.size:
+            page = tuple(int(BG[i:i + 2], 16) for i in (1, 3, 5))
+            fade = Image.linear_gradient('L').resize(image.size)
+            masks.update(size=image.size, page=Image.new('RGB', image.size, page),
+                         dark=Image.new('RGB', image.size, (6, 5, 4)),
+                         fade=fade.point(lambda v: 0 if v < 110 else min(255, (v - 110) * 255 // 140)))
+        image = Image.blend(image, masks['dark'], 0.22)
+        return Image.composite(masks['page'], image, masks['fade'])
 
     def photo_hero(self, key, width, height):
         """Blurred cover backdrop when the dump has no pic1.png."""
@@ -964,11 +1256,10 @@ class Launcher:
         except Exception:
             return None
 
-    def scaled_art(self, path, width):
+    def scaled_art(self, path, width, height):
         """The art cut to the banner, darkened (the parchment is light) and faded into the page."""
         try:
             from PIL import Image, ImageTk
-            height = int(self.hero['height'])
             with Image.open(path) as image:
                 scaled = image.convert('RGB').resize((width, round(image.height * width / image.width)), Image.LANCZOS)
             top = max(0, (scaled.height - height) // 10)  # pic1's figure has its face near the top
@@ -988,45 +1279,52 @@ class Launcher:
                       'Leave it empty if every game has a folder of its own, below.'),
                     on_change=self.refresh)
         self.folder(f, 'user_dir', _('Saves folder'), _('Where saves and the shader cache are kept'),
-                    _('Empty: the user folder next to the launcher.'))
+                    _('Where saves and the shader cache are kept. Empty: the user folder next to the launcher.'))
+        self.action(f, _('Open the game folder'), lambda: self.open_path(self.var('game_dir').get(), 'game_dir'))
+        self.action(f, _('Open the saves folder'), lambda: self.open_path(self.var('user_dir').get(), 'user_dir'))
         self.section(f, _('Separate game folders'))
         self.note(f, _('Only when the games are not in one collection folder (each dumped on its own). A game with '
-                       'a folder here is taken from it; the others from the collection folder above.'), top=2)
+                       'a folder here is taken from it; the others from the collection folder above.'))
         for key, _title, subtitle, _exe in GAMES:
             self.folder(f, f'game_dir_{key}', _(subtitle.split(' · ')[0]), _('The folder of this game'),
-                        _('Empty: the collection folder.'), on_change=self.refresh)
+                        _('The folder of this game. Empty: the collection folder.'), on_change=self.refresh)
         self.section(f, _('Console'))
-        self.row(f, _('Language'), self.choice(f, 'language', LANGUAGES, 30),
-                 _('The language the PS4 would be set to; the games use it for text and speech.'))
+        self.choice(f, 'language', LANGUAGES, _('Language'),
+                    _('The language the PS4 would be set to; the games use it for text and speech.'))
         name = self.ttk.Entry(f, textvariable=self.var('player_name'), width=30)
         self.row(f, _('Player name'), name, _('Shown where the game uses the PSN name.'))
 
     def build_display(self):
-        f = self.page('display', _('Display'), _('How the game window is shown.'))
+        f = self.page('display', _('Display and graphics'), _('How the game window is shown, and the picture.'))
         self.check(f, 'fullscreen', _('Fullscreen'))
-        self.row(f, _('Presentation'), self.choice(f, 'present_mode', PRESENT_MODES, 34),
-                 _('Mailbox shows each frame as soon as it is ready without tearing; FIFO waits for the display.'))
+        self.choice(f, 'present_mode', PRESENT_MODES, _('Presentation'),
+                    _('Mailbox shows each frame as soon as it is ready without tearing; FIFO waits for the display.'))
         refresh = display_refresh_rate()
         hint = _('Gameplay keeps its normal speed at every setting; the cutscene videos always play at '
                  '60 FPS. Above your display\'s refresh rate use Mailbox or Immediate.')
         if refresh:
             hint += ' ' + _('Your display runs at {} Hz.').format(refresh)
-        self.row(f, _('Frame rate'), self.choice(f, 'frame_rate', FRAME_RATES, 34), hint)
+        self.choice(f, 'frame_rate', FRAME_RATES, _('Frame rate'), hint)
+        self.choice(f, 'fps_limit', FPS_LIMITS, _('FPS limit'),
+                    _('Caps the frame rate below it, for an even, steady rate when your PC can\'t keep up '
+                      '(for example 30 on a 60 Hz display).'))
+        self.check(f, 'show_fps', _('Show the FPS counter'))
         self.section(f, _('Resolution'))
-        self.row(f, _('Window size'), self.choice(f, 'window_size', WINDOW_SIZES, 34),
-                 _('The games render at 1920 × 1080. A larger window, or fullscreen on a 1440p or 4K '
-                   'screen, gets the image upscaled to fit.'))
-        self.row(f, _('Upscaling'), self.choice(f, 'scaler', SCALERS, 34),
-                 _('FSR 1 keeps edges sharp when the image is enlarged; bilinear is softer.'))
-        self.row(f, _('Sharpening'), self.choice(f, 'sharpening', SHARPENING, 34),
-                 _('AMD RCAS after FSR 1 (only while the image is enlarged).'))
+        self.choice(f, 'window_size', WINDOW_SIZES, _('Window size'),
+                    _('The games render at 1920 × 1080. A larger window, or fullscreen on a 1440p or 4K '
+                      'screen, gets the image upscaled to fit.'))
+        self.choice(f, 'scaler', SCALERS, _('Upscaling'),
+                    _('FSR 1 keeps edges sharp when the image is enlarged; bilinear is softer.'))
+        self.choice(f, 'sharpening', SHARPENING, _('Sharpening'),
+                    _('AMD RCAS after FSR 1 (only while the image is enlarged).'))
         self.section(f, _('Anti-aliasing'))
         modes = ANTI_ALIASING + ([FSR411] if fsr411_assets() else [])
-        self.row(f, _('Anti-aliasing'), self.choice(f, 'anti_aliasing', modes, 34),
-                 _('Temporal anti-aliasing at the games\' 1920 × 1080, with their own motion vectors: '
-                   'smoother edges and less shimmering than the games\' own. DLSS needs a GeForce RTX; '
-                   'FSR 4 runs best on a Radeon RX 7000/9000 or a GeForce RTX 40/50.'))
-        self.row(f, _('Anti-aliasing sharpness'), self.choice(f, 'aa_sharpness', AA_SHARPNESS, 34))
+        self.choice(f, 'anti_aliasing', modes, _('Anti-aliasing'),
+                    _('Temporal anti-aliasing at the games\' 1920 × 1080, with their own motion vectors: '
+                      'smoother edges and less shimmering than the games\' own. DLSS needs a GeForce RTX; '
+                      'FSR 4 runs best on a Radeon RX 7000/9000 or a GeForce RTX 40/50.'))
+        self.choice(f, 'aa_sharpness', AA_SHARPNESS, _('Anti-aliasing sharpness'),
+                    _('Sharpening after the temporal anti-aliasing.'))
         self.section(f, _('Frame generation'))
         hint = _('Frames made between two of the game\'s, for smoother motion: 60 FPS shows as 120. '
                  'Use Mailbox or Immediate presentation and a display of at least that refresh rate. '
@@ -1034,11 +1332,10 @@ class Launcher:
                  'with the 60 or 120 FPS frame rate: above about 165 FPS it pauses.')
         if refresh:
             hint += ' ' + _('Your display runs at {} Hz.').format(refresh)
-        self.row(f, _('Frame generation'), self.choice(f, 'frame_generation', FRAME_GENERATION, 34), hint)
-        self.row(f, _('Multiplier'), self.choice(f, 'frame_gen_multiplier', FRAME_GEN_MULTIPLIERS, 34),
-                 _('FSR 3 makes one frame (2×). DLSS makes up to three on a GeForce RTX 50 (4×), '
-                   'one on an RTX 40.'))
-        self.check(f, 'show_fps', _('Show the FPS counter'))
+        self.choice(f, 'frame_generation', FRAME_GENERATION, _('Frame generation'), hint)
+        self.choice(f, 'frame_gen_multiplier', FRAME_GEN_MULTIPLIERS, _('Multiplier'),
+                    _('FSR 3 makes one frame (2×). DLSS makes up to three on a GeForce RTX 50 (4×), '
+                      'one on an RTX 40.'))
 
     def build_controls(self):
         f = self.page('controls', _('Controls'),
@@ -1051,7 +1348,7 @@ class Launcher:
                      'Insert opens the in-game settings menu.'))
         from uncharted_widgets import Slider
         self.row(f, _('Mouse sensitivity'),
-                 Slider(self.tk, self.target(f), self.var('mouse_sensitivity'), MOUSE_SENS_MIN, MOUSE_SENS_MAX, 0.05,
+                 Slider(self.tk, f, self.var('mouse_sensitivity'), MOUSE_SENS_MIN, MOUSE_SENS_MAX, 0.05,
                         COLORS, self.px, self.font_ui_md, width=300, log=True, entry=True),
                  _('How far the camera turns for a mouse movement; 1.00 is the default. Drag the slider or '
                    'type a number (0.1 to 10) for a faster turn.'))
@@ -1059,48 +1356,39 @@ class Launcher:
 
         self.section(f, _('Keyboard and mouse buttons'))
         self.note(f, _('Click a box, then press a key or a mouse button (the wheel counts too). '
-                       '✕ removes a binding. Each action can have two.'), top=2)
-        card = self.target(f)
-        table = self.tk.Frame(card, bg=CARD)
-        table.grid(row=self.next_row(card), column=0, columnspan=2, sticky='w', pady=(10, 0))
+                       '✕ removes a binding. Each action can have two.'))
         rows = [(a, t) for a, t, _k, _p in BUTTON_ACTIONS] + [(a, t) for a, t, _k in STICK_ACTIONS]
-        for r, (action, title) in enumerate(rows):
-            self.ttk.Label(table, text=_(title)).grid(row=r, column=0, sticky='w', padx=(0, 24), pady=3)
+        for action, title in rows:
+            holder = self.tk.Frame(f, bg=CARD)
             for slot in (0, 1):
-                button = self.tk.Button(table, width=16, relief='flat', bg=CARD_HI, fg=TEXT,
+                button = self.tk.Button(holder, width=16, relief='flat', bg=CARD_HI, fg=TEXT,
                                         activebackground='#2a2c31', activeforeground=TEXT,
                                         font=self.font_ui, cursor='hand2', bd=0, padx=8, pady=4,
                                         command=lambda a=action, i=slot: self.capture_key(a, i))
-                button.grid(row=r, column=1 + slot * 2, sticky='w', pady=3)
-                clear = self.tk.Label(table, text='\ue711' if self.font_icon else '✕', bg=CARD, fg=MUTED,
+                button.pack(side='left', padx=(self.px(10) if slot else 0, 0))
+                clear = self.tk.Label(holder, text='\ue711' if self.font_icon else '✕', bg=CARD, fg=MUTED,
                                       font=self.font_icon_sm or self.font_ui, cursor='hand2', padx=8)
-                clear.grid(row=r, column=2 + slot * 2, sticky='w', padx=(2, 10))
+                clear.pack(side='left', padx=(2, 0))
                 clear.bind('<Button-1>', lambda _e, a=action, i=slot: self.set_key(a, i, ''))
                 clear.bind('<Enter>', lambda _e, w=clear: w.configure(fg=TEXT))
                 clear.bind('<Leave>', lambda _e, w=clear: w.configure(fg=MUTED))
                 self.key_buttons[(action, slot)] = button
+            self.row(f, _(title), holder)
         self.show_keys()
-        holder = self.tk.Frame(card, bg=CARD)
-        holder.grid(row=self.next_row(card), column=0, columnspan=2, sticky='w', pady=(12, 0))
-        self.pill(holder, _('Default keys'), self.reset_keys).pack(side='left')
+        self.action(f, _('Default keys'), self.reset_keys, _('Puts every key and mouse button back as it was.'))
 
         self.section(f, _('Controller'))
-        self.note(f, _('Which controller button gives each PS4 button (Xbox / PlayStation names).'), top=2)
+        self.note(f, _('Which controller button gives each PS4 button (Xbox / PlayStation names).'))
         self.pad_vars = {}
+        values = [v for v, _t in PAD_BUTTONS]
         for action, title, _k, _p in BUTTON_ACTIONS:
-            var = self.tk.StringVar(value=(self.app.get('pad_bindings') or {}).get(action, DEFAULT_PAD[action]))
+            value = (self.app.get('pad_bindings') or {}).get(action, DEFAULT_PAD[action])
+            var = self.tk.StringVar(value=value if value in values else 'none')
             self.pad_vars[action] = var
-            values = [v for v, _t in PAD_BUTTONS]
-            box = self.ttk.Combobox(f, values=[_(t) for _v, t in PAD_BUTTONS], state='readonly', width=26)
-            box.current(values.index(var.get()) if var.get() in values else values.index('none'))
-            box.bind('<<ComboboxSelected>>', lambda _e, b=box, v=var: v.set(values[b.current()]))
-            var.trace_add('write', lambda *_a, b=box, v=var: b.current(values.index(v.get())))
-            self.row(f, _(title), box)
+            self.choice(f, None, PAD_BUTTONS, _(title), variable=var)
         self.check(f, 'pad_invert_y', _('Invert the right stick vertically'))
-        card = self.target(f)
-        holder = self.tk.Frame(card, bg=CARD)
-        holder.grid(row=self.next_row(card), column=0, columnspan=2, sticky='w', pady=(12, 0))
-        self.pill(holder, _('Default controller buttons'), self.reset_pad).pack(side='left')
+        self.action(f, _('Default controller buttons'), self.reset_pad,
+                    _('Puts every controller button back as it was.'))
 
     def key_list(self, action):
         value = (self.app.get('key_bindings') or {}).get(action, DEFAULT_KEYS[action])
@@ -1215,36 +1503,29 @@ class Launcher:
         extra = self.ttk.Entry(f, textvariable=self.var('extra_env'), width=60)
         self.row(f, _('Environment'), extra, _('Extra variables for the game, NAME=value separated by spaces.'))
         self.section(f, _('Shader cache'))
-        self.note(f, _('Compiled shaders are kept so the game does not stutter again. Clear the cache only '
-                       'when the picture is broken after an update.'), top=2)
-        card = self.target(f)
-        holder = self.tk.Frame(card, bg=CARD)
-        holder.grid(row=self.next_row(card), column=0, columnspan=2, sticky='w', pady=(12, 0))
-        self.pill(holder, _('Clear shader cache'), self.clear_cache).pack(side='left')
-        self.pill(holder, _('Open the saves folder'),
-                  lambda: self.open_path(self.var('user_dir').get(), 'user_dir')).pack(side='left', padx=(8, 0))
+        self.action(f, _('Clear shader cache'), self.clear_cache,
+                    _('Compiled shaders are kept so the game does not stutter again. Clear the cache only '
+                      'when the picture is broken after an update.'))
         self.section(f, _('Updates'))
+        self.note(f, _('This is version {} of the port by {}.').format(VERSION, AUTHOR))
         self.check(f, 'check_updates', _('Look for a new version when the launcher starts'))
-        card = self.target(f)
-        holder = self.tk.Frame(card, bg=CARD)
-        holder.grid(row=self.next_row(card), column=0, columnspan=2, sticky='w', pady=(12, 0))
-        self.pill(holder, _('Check for updates'),
-                  lambda: threading.Thread(target=self.check_update, args=(True,), daemon=True).start()
-                  ).pack(side='left')
-        self.pill(holder, _('Releases page'), lambda: webbrowser.open(RELEASES_PAGE)).pack(side='left', padx=(8, 0))
+        self.action(f, _('Check for updates'),
+                    lambda: threading.Thread(target=self.check_update, args=(True,), daemon=True).start())
+        self.action(f, _('Releases page'), lambda: webbrowser.open(RELEASES_PAGE),
+                    _('Opens the port\'s releases on GitHub in your browser.'))
 
     def build_log(self):
         tk = self.tk
         page = tk.Frame(self.content, bg=SURFACE)
         self.pages['log'] = page
         shell = tk.Frame(page, bg=SURFACE)
-        shell.pack(fill='both', expand=True, padx=self.px(18), pady=(self.px(14), self.px(14)))
+        shell.pack(fill='both', expand=True, pady=(self.px(4), self.px(14)))
         head = tk.Frame(shell, bg=SURFACE)
-        head.pack(fill='x', padx=self.px(26), pady=(self.px(18), self.px(14)))
+        head.pack(fill='x', padx=self.px(20), pady=(self.px(18), self.px(14)))
         tk.Label(head, text=_('Log'), bg=SURFACE, fg=TEXT, font=self.font_title).pack(side='left')
         self.pill(head, _('Copy'), self.copy_log, background=SURFACE, padding=(16, 6)).pack(side='right')
         body = tk.Frame(shell, bg=SURFACE)
-        body.pack(fill='both', expand=True, padx=self.px(26), pady=(0, self.px(8)))
+        body.pack(fill='both', expand=True, padx=self.px(20), pady=(0, self.px(8)))
         self.log = tk.Text(body, bg=CARD, fg='#d9d4ca', insertbackground=TEXT, font=('Cascadia Mono', 9), wrap='none',
                            relief='flat', state='disabled', highlightbackground=LINE, highlightthickness=1,
                            padx=self.px(12), pady=self.px(10))
@@ -1266,8 +1547,6 @@ class Launcher:
         # Nothing set yet: no cover is dimmed.
         unset = not any(game_folder(s, k) for k, _t, _s, _e in GAMES)
         self.available = {key: unset or game_available(s, key) for key, _t, _s, _e in GAMES}
-        for key in self.cards:
-            self.draw_card(key)
         if not info:
             ready = _('Choose the game folder (the one with eboot.bin) on the Game page.')
         else:
@@ -1275,12 +1554,12 @@ class Launcher:
             ready = f"{info['title']} · {info['id']} · {_('version')} {info['version']}"
             if missing:
                 ready += '\n' + _('Not in this folder: ') + ', '.join(missing)
-        self.ready.configure(text=ready)
+        self.ready_text = ready
         if not self.process:
             title = next(t for k, t, _s, _e in GAMES if k == start)
             self.status.configure(text=_('Ready: {}').format(title) if info else _('No game folder yet.'),
                                   fg=MUTED)
-        self.draw_hero()
+        self.draw_stage()
 
     # ---- actions -----------------------------------------------------------------------------
     def collect(self):
@@ -1317,11 +1596,13 @@ class Launcher:
             self.process = None
             return
         self.job = GameJob(self.process)
+        self.quiet_media()
         self.entered, self.last_problem, self.stopping = False, '', False
         threading.Thread(target=self.read_output, args=(self.process,), daemon=True).start()
         self.play_button.configure(state='disabled')
         self.stop_button.configure(state='normal')
         self.status.configure(text=_('Preparing the game; it opens in its own window…'), fg=GOLD)
+        self.draw_stage()
         if self.app.get('close_on_play'):
             self.root.after(5000, self.root.destroy)
 
@@ -1436,7 +1717,7 @@ class Launcher:
             return
         tk = self.tk
         text = _('Version {} is available.').format(version)
-        box = tk.Frame(self.side, bg=CARD, highlightthickness=1, highlightbackground=GOLD_DIM)
+        box = tk.Frame(self.stage, bg=CARD, highlightthickness=1, highlightbackground=GOLD_DIM)
         self.update_label = tk.Label(box, text=text, bg=CARD, fg=GOLD, font=self.font_ui_md,
                                      wraplength=self.px(190), justify='left')
         self.update_label.pack(anchor='w', padx=12, pady=(10, 8))
@@ -1447,8 +1728,8 @@ class Launcher:
         self.update_button.pack(side='left')
         self.pill(buttons, _("What's new"), lambda: webbrowser.open(page), padding=(12, 6)).pack(
             side='left', padx=(6, 0))
-        box.pack(fill='x', padx=18, pady=(0, 14), before=self.side_note)
-        self.update_box = box
+        self.update_box = box  # shown under the clock (draw_stage)
+        self.draw_stage()
         if not self.process:
             self.status.configure(text=text, fg=GOLD)
 
@@ -1579,6 +1860,11 @@ class Launcher:
             self.collect()
         except Exception:  # never keep the window open over a settings problem
             pass
+        if self.music:
+            self.music.stop()
+        if self.hero_video:
+            self.hero_video.stop()
+        self.stop_tile_clip()
         self.root.destroy()
 
 

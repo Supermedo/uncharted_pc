@@ -21,6 +21,11 @@ Starting
   from your game folder. "Desktop shortcut" puts it on the desktop.
 - Your own covers: put u1.jpg, u2.jpg and u3.jpg (and a wide collection_banner.jpg for the
   top of the Play page) in a folder named art next to Uncharted.exe. Updates keep it.
+  The same folder can hold, per game (u1, u2, u3), what plays while its cover is hovered, like
+  the PS3 menu: u1_background.jpg (the top of the Play page; it stays until another game is
+  hovered), u1_music.mp3 (also .ogg, .m4a, .flac, .wav, .at9) and u1_video.mp4 (also .webm,
+  .mkv; shown inside the cover). background.mp4 plays in the header while no game is hovered.
+  A PS3 disc's ICON1.PAM and SND0.AT3, copied into art\u1\ etc., work too.
 - Display page -> Frame rate: 60 FPS as on PS4, or 120 FPS. Gameplay keeps its normal speed
   and the cutscene videos still play at 60. Higher rates are experimental. Above your
   display's refresh rate use the Mailbox or Immediate presentation.

@@ -1,6 +1,6 @@
-"""Launcher widgets with a modern look on Tk: rounded cards, toggle switches, a slider and pill
-buttons. Edges are anti-aliased: the shapes are drawn with PIL at four times the size and scaled
-down (Tk's canvas draws them jagged)."""
+"""Launcher widgets with a modern look on Tk: toggle switches, a slider and pill buttons. Edges
+are anti-aliased: the shapes are drawn with PIL at four times the size and scaled down (Tk's
+canvas draws them jagged)."""
 import math
 from PIL import Image, ImageDraw, ImageTk
 
@@ -56,59 +56,6 @@ def _corner(radius, fill, background, outline, which):
         box = {'nw': (0, 0, r, r), 'ne': (r, 0, 2 * r, r), 'sw': (0, r, r, 2 * r), 'se': (r, r, 2 * r, 2 * r)}[which]
         return image.crop(box).resize((radius, radius), Image.LANCZOS)
     return _photo(('corner', radius, fill, background, outline, which), build)
-
-
-class Card:
-    """A rounded panel; widgets go into `inner` (a frame, grid columns 0 = label, 1 = control)."""
-
-    def __init__(self, tk, parent, colors, px, title=None, font=None):
-        self.colors, self.px = colors, px
-        self.radius = px(12)
-        self.pad = px(20)
-        bg, card = colors['surface'], colors['card']
-        self.canvas = tk.Canvas(parent, bg=bg, highlightthickness=0, bd=0, height=10)
-        self.inner = tk.Frame(self.canvas, bg=card)
-        self.inner.columnconfigure(1, weight=1)
-        self.window = self.canvas.create_window(self.pad, self.pad - px(4), window=self.inner, anchor='nw')
-        self.canvas.bind('<Configure>', self._draw)
-        self.inner.bind('<Configure>', self._fit)
-        self._fit_pending = False
-        self.refit()
-        if title:
-            tk.Label(self.inner, text=title.upper(), bg=card, fg=colors['gold'], font=font, anchor='w').grid(
-                row=0, column=0, columnspan=4, sticky='w', pady=(0, px(6)))
-
-    def refit(self):
-        """Measure the content again once Tk is idle (the inner frame only reports its size while it
-        is shown, so new content cannot wait for that)."""
-        if not self._fit_pending:
-            self._fit_pending = True
-            self.canvas.after_idle(self._fit)
-
-    def _fit(self, _event=None):
-        self._fit_pending = False
-        height = self.inner.winfo_reqheight() + 2 * self.pad - self.px(6)
-        if int(self.canvas['height']) != height:
-            self.canvas.configure(height=height)
-
-    def _draw(self, _event=None):
-        c, colors = self.canvas, self.colors
-        w, h, r = c.winfo_width(), c.winfo_height(), self.radius
-        if w < 2 * r + 2 or h < 2 * r + 2:
-            return
-        c.itemconfigure(self.window, width=w - 2 * self.pad)
-        self.refit()  # text wraps differently at a new width
-        c.delete('bg')
-        fill, line, bg = colors['card'], colors['line'], colors['surface']
-        c.create_rectangle(r, 0, w - r, h, fill=fill, outline='', tags='bg')
-        c.create_rectangle(0, r, w, h - r, fill=fill, outline='', tags='bg')
-        c.create_line(r, 0, w - r, 0, fill=line, tags='bg')
-        c.create_line(r, h - 1, w - r, h - 1, fill=line, tags='bg')
-        c.create_line(0, r, 0, h - r, fill=line, tags='bg')
-        c.create_line(w - 1, r, w - 1, h - r, fill=line, tags='bg')
-        for which, x, y, anchor in (('nw', 0, 0, 'nw'), ('ne', w, 0, 'ne'), ('sw', 0, h, 'sw'), ('se', w, h, 'se')):
-            c.create_image(x, y, image=_corner(r, fill, bg, line, which), anchor=anchor, tags='bg')
-        c.tag_lower('bg')
 
 
 class Toggle:
