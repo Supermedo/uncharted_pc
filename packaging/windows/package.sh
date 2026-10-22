@@ -3,7 +3,7 @@
 # frozen with PyInstaller so players need no Python), Play Uncharted.exe, bb-probe.exe with the
 # MSYS2 CLANG64 DLLs it needs, the preparation scripts and run.py. Run from an MSYS2 CLANG64
 # shell after `bash build.sh`. Freezing uses a Windows Python 3.10+ (python.org; WINPYTHON
-# overrides) and a private venv in out/pyenv with PyInstaller and Pillow.
+# overrides) and a private venv in out/pyenv with PyInstaller, Pillow and PyAV (header video, music).
 set -euo pipefail
 cd -- "$(dirname -- "$0")/../.."
 source ./msys2-env.sh
@@ -22,11 +22,11 @@ export USERPROFILE=${USERPROFILE:-$(cygpath -w "/c/Users/$(id -un)")}
 if [[ ! -x out/pyenv/Scripts/python.exe ]]; then
     "$python" -m venv out/pyenv
 fi
-out/pyenv/Scripts/python.exe -m pip install -q --disable-pip-version-check pyinstaller pillow
+out/pyenv/Scripts/python.exe -m pip install -q --disable-pip-version-check pyinstaller pillow av
 # The scripts run inside Uncharted.exe (--script): the standard modules they import come along.
 hidden=()
 for module in argparse base64 collections hashlib json re shutil struct tempfile zlib ctypes.wintypes \
-              uncharted_art uncharted_fonts uncharted_widgets bbport_steam PIL.ImageTk; do
+              uncharted_art uncharted_fonts uncharted_widgets uncharted_media bbport_steam PIL.ImageTk av; do
     hidden+=(--hidden-import "$module")
 done
 out/pyenv/Scripts/python.exe -m PyInstaller --noconfirm --clean --log-level WARN --windowed \
