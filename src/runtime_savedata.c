@@ -168,17 +168,20 @@ static int32_t mount(int32_t user, const char *title, const DirName *dir, uint32
         if (!slots[i].used && slot<0) slot=i;
     }
     if (slot<0) { pthread_mutex_unlock(&lock); return ERR_MOUNT_FULL; }
-    if (!exists && (make_dirs(host) || make_dirs(meta))) { pthread_mutex_unlock(&lock); return ERR_INTERNAL; }
+    char point[32];
+    snprintf(point,sizeof(point),"/savedata%d",slot&15);
+    /* The mount point must exist in the file layer before the game is told it is mounted. */
+    if (runtime_file_mount(point,host)) { pthread_mutex_unlock(&lock); return ERR_MOUNT_FULL; }
+    if (!exists && (make_dirs(host) || make_dirs(meta))) {
+        runtime_file_unmount(point); pthread_mutex_unlock(&lock); return ERR_INTERNAL;
+    }
     if (!exists) { Param empty={0}; write_param(meta,&empty); }
     slots[slot].used=1;
     snprintf(slots[slot].host,sizeof(slots[slot].host),"%s",host);
     snprintf(slots[slot].meta,sizeof(slots[slot].meta),"%s",meta);
     memset(result,0,sizeof(*result));
-    char point[32];
-    snprintf(point,sizeof(point),"/savedata%d",slot&15);
     memcpy(result->point.data,point,strlen(point)+1);
     result->status=exists ? 0 : 1; /* CREATED */
-    runtime_file_mount(result->point.data,host);
     ++mounts_done;
     pthread_mutex_unlock(&lock);
     printf("Runtime: save data '%s' mounted at %s (%s%s)\n",dir->data,result->point.data,

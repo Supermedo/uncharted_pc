@@ -31,7 +31,8 @@ typedef struct stat HostStat;
 #endif
 #define ERR(n) ((int32_t)(UINT32_C(0x80020000)|(n)))
 #define MAX_FILES 1024
-#define MAX_MOUNTS 16
+/* 5 fixed mounts (/app0, /hostapp, /temp0, /download0, /data) + one per save-data slot (16), with room to spare */
+#define MAX_MOUNTS 32
 
 typedef struct { int64_t sec, nsec; } GuestTimespec;
 typedef struct {
