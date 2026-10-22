@@ -67,6 +67,9 @@ PRESENT_MODES = [('Mailbox', 'Mailbox (low latency, no tearing)'), ('Fifo', 'FIF
 # the prerecorded cutscenes keep 60 frames per second at every setting.
 FRAME_RATES = [('60', '60 FPS (as on PS4)'), ('120', '120 FPS'), ('144', '144 FPS (experimental)'),
                ('165', '165 FPS (experimental)'), ('240', '240 FPS (experimental)')]
+# A cap below the frame rate (BB_FPS_LIMIT, with the display-rate wait off: BB_VBLANK_HZ=0): an
+# even, steady rate on PCs that can't keep up.
+FPS_LIMITS = [('', 'Off'), ('30', '30 FPS'), ('40', '40 FPS'), ('45', '45 FPS'), ('50', '50 FPS')]
 # The games render 1920x1080; the window (or the screen in fullscreen) gets that image scaled
 # to its size: FSR 1 (EASU) or bilinear, then RCAS sharpening (BB_RCAS_ATTENUATION, lower
 # is sharper).
@@ -137,7 +140,7 @@ RESERVED_KEYS = {'Insert': 'Insert opens the in-game settings menu.',
                  'Alt_L': 'Left Alt frees the mouse cursor while held.'}
 
 APP_DEFAULTS = {'game_dir': '', 'game_dir_u1': '', 'game_dir_u2': '', 'game_dir_u3': '', 'user_dir': '', 'start': 'u1', 'language': '1', 'player_name': '',
-                'fullscreen': False, 'present_mode': 'Mailbox', 'frame_rate': '60', 'show_fps': False,
+                'fullscreen': False, 'present_mode': 'Mailbox', 'frame_rate': '60', 'fps_limit': '', 'show_fps': False,
                 'window_size': '1920x1080', 'scaler': 'fsr1', 'sharpening': '500',
                 'anti_aliasing': 'off', 'aa_sharpness': '0.2', 'frame_generation': 'off',
                 'frame_gen_multiplier': '2', 'extra_env': '', 'close_on_play': False,
@@ -344,6 +347,9 @@ def game_environment(s, start=None):
     env['BB_FULLSCREEN'] = '1' if s['fullscreen'] else '0'
     env['BB_PRESENT_MODE'] = s['present_mode']
     env['BB_VBLANK_HZ'] = str(s.get('frame_rate') or '60')
+    if str(s.get('fps_limit') or '').isdigit():
+        env['BB_VBLANK_HZ'] = '0'
+        env['BB_FPS_LIMIT'] = str(s['fps_limit'])
     env['BB_WINDOW_SIZE'] = str(s.get('window_size') or '1920x1080')
     env['BB_FSR1'] = '1' if s.get('scaler', 'fsr1') == 'fsr1' else '0'
     sharpening = str(s.get('sharpening') or 'off')
@@ -1106,7 +1112,7 @@ class Launcher:
         """Tile video frames (helper thread): the tile's rounded corners."""
         from uncharted_art import rounded_mask
         if self.clip_masks.get('size') != image.size:
-            self.clip_masks = {'size': image.size, 'mask': rounded_mask(image.size, max(4, image.size[0] // 26))}
+            self.clip_masks = {'size': image.size, 'mask': rounded_mask(image.size, max(4, image.size[0] // 12))}
         image = image.convert('RGBA')
         image.putalpha(self.clip_masks['mask'])
         return image
@@ -1299,6 +1305,9 @@ class Launcher:
         if refresh:
             hint += ' ' + _('Your display runs at {} Hz.').format(refresh)
         self.choice(f, 'frame_rate', FRAME_RATES, _('Frame rate'), hint)
+        self.choice(f, 'fps_limit', FPS_LIMITS, _('FPS limit'),
+                    _('Caps the frame rate below it, for an even, steady rate when your PC can\'t keep up '
+                      '(for example 30 on a 60 Hz display).'))
         self.check(f, 'show_fps', _('Show the FPS counter'))
         self.section(f, _('Resolution'))
         self.choice(f, 'window_size', WINDOW_SIZES, _('Window size'),

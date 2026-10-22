@@ -514,7 +514,7 @@ def home_tile(key, side, *, focused=False, hover=False, dimmed=False):
     picture's (left, top, width, height) in the image."""
     side = max(side, 24)
     pad = max(8, side // 12)
-    radius = max(4, side // 26)
+    radius = max(4, side // 12)
     image = _tile_art(key)
     if image is None:
         image = SCENES[key](side * 2, side * 2)
@@ -529,7 +529,7 @@ def home_blank_tile(side, *, focused=False, hover=False):
     side = max(side, 24)
     pad = max(8, side // 12)
     art = Image.new('RGBA', (side, side), (22, 23, 26, 215))
-    return _tile_frame(art, side, pad, max(4, side // 26), focused, hover)
+    return _tile_frame(art, side, pad, max(4, side // 12), focused, hover)
 
 
 def _tile_frame(art, side, pad, radius, focused, hover):

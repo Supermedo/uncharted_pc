@@ -28,6 +28,15 @@ class SettingsList:
         self.inner.bind('<Configure>', self._fit)
         self.canvas.bind('<Configure>', self._fit)
         self.rows, self.lit, self.popup = [], None, None
+        # The drop-down stays where it opened: a click beside the rows or scrolling closes it.
+        for widget in (self.canvas, self.inner, self.help):
+            widget.bind('<Button-1>', lambda _e: self.popup and self.popup.close(), add='+')
+        self.canvas.configure(yscrollcommand=self._scrolled)
+
+    def _scrolled(self, first, last):
+        if self.popup:
+            self.popup.close()
+        self.bar.set(first, last)
 
     def _fit(self, _event=None):
         canvas, inner = self.canvas, self.inner
@@ -74,6 +83,9 @@ class SettingsList:
             self.scroll_to(row)
 
     def click(self, row):
+        if self.popup:  # a click outside the drop-down closes it
+            self.popup.close()
+            return
         self.light(row)
         row.frame.focus_set()  # arrow keys go to the list, not to a text box clicked before
         row.activate()
@@ -250,19 +262,16 @@ class WidgetRow(Row):
 
 
 class ChoicePopup:
-    """The list of a choice's values over the settings list; the current one is marked."""
+    """A drop-down list of a choice's values under its row (above it when there is no room); the
+    current one is marked. A click outside it, Esc or scrolling closes it."""
 
     def __init__(self, row):
         owner = row.owner
         tk, colors, px = owner.tk, owner.colors, owner.px
         self.row, self.owner = row, owner
-        self.cover = tk.Frame(owner.outer, bg='#050506')
-        self.cover.place(x=0, y=0, relwidth=1, relheight=1)
-        self.cover.bind('<Button-1>', lambda _e: self.close())
-        box = tk.Frame(self.cover, bg=colors['card'], highlightthickness=1, highlightbackground=colors['gold_dim'])
-        box.place(relx=0.5, rely=0.42, anchor='center')
-        tk.Label(box, text=row.title.cget('text'), bg=colors['card'], fg=colors['gold'],
-                 font=owner.fonts['heading'], anchor='w').pack(fill='x', padx=px(22), pady=(px(16), px(8)))
+        box = tk.Frame(owner.outer, bg=colors['card'], highlightthickness=1, highlightbackground=colors['gold_dim'])
+        self.cover = box
+        tk.Frame(box, bg=colors['card'], height=px(4)).pack(fill='x')
         self.items = []
         current = row.var.get()
         for value, text in row.options:
@@ -278,12 +287,25 @@ class ChoicePopup:
                 widget.bind('<Enter>', lambda _e, i=len(self.items): self.light(i))
                 widget.bind('<Button-1>', lambda _e, v=value: self.pick(v))
             self.items.append((value, item, dot, label))
-        tk.Label(box, text='Enter  Choose        Esc  Back', bg=colors['card'], fg=colors['muted'],
-                 font=owner.fonts['hint']).pack(anchor='e', padx=px(22), pady=(px(8), px(14)))
+        tk.Frame(box, bg=colors['card'], height=px(4)).pack(fill='x')
+        # Under the row, right-aligned with its value; above it, or as far up as needed, when the
+        # list would run past the bottom.
+        owner.outer.update_idletasks()
+        ox, oy = owner.outer.winfo_rootx(), owner.outer.winfo_rooty()
+        fx, fy = row.frame.winfo_rootx() - ox, row.frame.winfo_rooty() - oy
+        width = max(box.winfo_reqwidth(), px(260))
+        height = box.winfo_reqheight()
+        room = owner.outer.winfo_height()
+        x = max(0, fx + row.frame.winfo_width() - width)
+        y = fy + row.frame.winfo_height() + 2
+        if y + height > room:
+            y = fy - height - 2 if fy - height - 2 >= 0 else max(0, room - height)
+        box.place(x=x, y=y, width=width)
+        box.lift()
         self.index = None
         self.light(next((i for i, item in enumerate(self.items) if item[0] == current), 0))
         owner.popup = self
-        self.cover.focus_set()
+        box.focus_set()
 
     def light(self, index):
         colors = self.owner.colors
