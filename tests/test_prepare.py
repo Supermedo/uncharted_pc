@@ -53,6 +53,22 @@ class SelfTests(unittest.TestCase):
         self.assertEqual(ph[0]['vaddr'], 0)
         self.assertEqual(missing, [])
 
+    def test_plain_elf_matches_self(self):
+        # Executables dumped already decrypted (Itemzflow) are a bare ELF64, with no SELF wrapper.
+        wrapped = parse_self(fixture())
+        plain = parse_self(bytes(fixture()[64:]) + bytes(0x1000 - 0x1d0) + bytes(range(16)))
+        self.assertEqual(plain[0][0x1000:0x1010], wrapped[0][0x1000:0x1010])
+        self.assertEqual(plain[2], wrapped[2])
+        self.assertEqual(plain[4], [])
+
+    def test_plain_elf_missing_required_segment_rejected(self):
+        with self.assertRaisesRegex(ValueError, 'required segment 0'):
+            parse_self(bytes(fixture()[64:0x1d0]))
+
+    def test_unknown_magic_rejected(self):
+        with self.assertRaisesRegex(ValueError, 'expected PS4 SELF or ELF64'):
+            parse_self(b'MZ' + bytes(300))
+
     def test_truncated_payload_rejected(self):
         with self.assertRaisesRegex(ValueError, 'out of bounds'):
             parse_self(fixture()[:-1])
