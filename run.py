@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-2.0-or-later
-"""Prepares an Uncharted executable of the Nathan Drake Collection and starts bb-probe.exe.
+"""Prepares an Uncharted executable of the Nathan Drake Collection and starts bb-probe.
 
 BB_GAME_DIR   the game folder (CUSA02343, CUSA02320, ...; the one with eboot.bin)
 BB_GAME_DIR_U1 / _U2 / _U3   optional: the folder of a game that was dumped on its own; used for
@@ -11,12 +11,17 @@ Extra arguments go to bb-probe. When the game starts another executable of the c
 (sceSystemServiceLoadExec), that one is prepared and started in its place.
 The in-game "Apply and restart" runs this script again through BB_RESTART_COMMAND;
 `--after PID` waits for the previous game process to end first (its GPU device and memory).
+Works on Linux and Windows.
 """
 import ctypes
 import os
 from pathlib import Path
+import shlex
 import subprocess
 import sys
+import time
+
+WINDOWS = os.name == 'nt'
 
 PORT = Path(__file__).resolve().parent
 EXECUTABLES = {'u1': 'eboot.bin', 'u2': 'big2-ps4_Shipping.elf', 'u3': 'big3-ps4_Shipping.elf'}
@@ -29,6 +34,21 @@ def fail(message):
 
 
 def wait_for(pid):
+    if not WINDOWS:
+        # A zombie still answers kill(0), so check its state until the parent reaps it.
+        while True:
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                return
+            except PermissionError:
+                pass
+            try:
+                if Path(f'/proc/{pid}/stat').read_text().split()[2] == 'Z':
+                    return
+            except (FileNotFoundError, IndexError):
+                return
+            time.sleep(0.25)
     kernel32 = ctypes.windll.kernel32
     SYNCHRONIZE = 0x00100000
     handle = kernel32.OpenProcess(SYNCHRONIZE, False, pid)
@@ -39,6 +59,8 @@ def wait_for(pid):
 
 def no_console():
     """Started without a console (the launcher): console programs must not open their own."""
+    if not WINDOWS:
+        return 0
     return 0 if ctypes.windll.kernel32.GetConsoleWindow() else subprocess.CREATE_NO_WINDOW
 
 
@@ -126,11 +148,12 @@ def main():
     if not env.get('BB_FSR411_DIR') and not (PORT / 'fsr4_411').is_dir() and (data / 'fsr4_411').is_dir():
         env['BB_FSR411_DIR'] = str(data / 'fsr4_411')
 
-    probe = Path(env['BB_PROBE']) if env.get('BB_PROBE') else find_executable('bb-probe.exe')
+    probe = Path(env['BB_PROBE']) if env.get('BB_PROBE') else find_executable(
+        'bb-probe.exe' if WINDOWS else 'bb-probe')
     if not probe or not probe.is_file():
-        fail('bb-probe.exe not found: build it with build.sh (MSYS2 CLANG64) or use a packaged build.')
+        fail('bb-probe not found: build it with build.sh or use a packaged build.')
     # Development builds run from the MSYS2 tree: its CLANG64 DLLs (SDL3, FFmpeg, ...).
-    if not (probe.parent / 'SDL3.dll').is_file():
+    if WINDOWS and not (probe.parent / 'SDL3.dll').is_file():
         clang64 = Path(env.get('MSYS2_ROOT', r'C:\msys64')) / 'clang64' / 'bin'
         if clang64.is_dir():
             env['PATH'] = f'{clang64}{os.pathsep}{env.get("PATH", "")}'
@@ -155,7 +178,9 @@ def main():
         run_script('content_profile.py', game, '--out', out, '--sku', env.get('BB_CONTENT_SKU', 'full'))
         this = ['--run'] if getattr(sys, 'frozen', False) else [str(Path(__file__).resolve())]
         env['BB_EXE'] = exe
-        env['BB_RESTART_COMMAND'] = subprocess.list2cmdline([sys.executable, *this, '--after', str(os.getpid()), *args])
+        restart = [sys.executable, *this, '--after', str(os.getpid()), *args]
+        env['BB_RESTART_COMMAND'] = (subprocess.list2cmdline(restart) if WINDOWS
+                                     else shlex.join(restart))
         command = [str(probe), str(out / 'boot-linked.bin'), '--content-profile', str(out / 'content.bin'),
                    '--app0', str(game), '--user', str(user_dir), '--timeout', env.get('BB_TIMEOUT', '0')]
         if guest_argv:

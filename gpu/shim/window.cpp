@@ -51,6 +51,11 @@ WindowSDL::WindowSDL(s32 width_, s32 height_, const char* title) : width{width_}
     if (!SDL_InitSubSystem(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD)) {
         UNREACHABLE_MSG("Failed to initialize SDL video: {}", SDL_GetError());
     }
+    // bbport: controller input does not reset the desktop idle timer; without this the session
+    // can lock while the game is being played with a pad and the window stops being mapped.
+    if (!SDL_DisableScreenSaver()) {
+        LOG_WARNING(Frontend, "Failed to disable the screen saver: {}", SDL_GetError());
+    }
     SDL_PropertiesID props = SDL_CreateProperties();
     SDL_SetStringProperty(props, SDL_PROP_WINDOW_CREATE_TITLE_STRING, title);
     SDL_SetNumberProperty(props, SDL_PROP_WINDOW_CREATE_X_NUMBER, SDL_WINDOWPOS_CENTERED);

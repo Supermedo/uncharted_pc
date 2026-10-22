@@ -43,14 +43,14 @@ fi
 if [[ -z ${CC:-} ]]; then echo 'Install GCC/Clang or set CC.' >&2; exit 1; fi
 # Dependencies come from pkg-config (Vulkan loader/headers, SDL3). On NixOS the
 # environment is provided by shell.nix; re-enter it automatically if needed.
-if ! { command -v pkg-config >/dev/null && pkg-config --exists vulkan sdl3 && command -v cmake >/dev/null && command -v ninja >/dev/null; }; then
+if ! { command -v pkg-config >/dev/null && pkg-config --exists vulkan sdl3 libavcodec libavformat libavutil && command -v cmake >/dev/null && command -v ninja >/dev/null; }; then
     if [[ -z ${BB_IN_NIX_SHELL:-} ]] && command -v nix-shell >/dev/null; then
         exec env BB_IN_NIX_SHELL=1 nix-shell shell.nix --run "bash build.sh $*"
     fi
-    echo 'Need pkg-config with vulkan and sdl3, cmake and ninja (see shell.nix).' >&2; exit 1
+    echo 'Need pkg-config with vulkan, sdl3 and FFmpeg (libavcodec/libavformat/libavutil), cmake and ninja (see shell.nix).' >&2; exit 1
 fi
-read -r -a includes <<< "$(pkg-config --cflags vulkan sdl3)"
-read -r -a libraries <<< "$(pkg-config --libs vulkan sdl3)"
+read -r -a includes <<< "$(pkg-config --cflags vulkan sdl3 libavcodec libavformat libavutil)"
+read -r -a libraries <<< "$(pkg-config --libs vulkan sdl3 libavcodec libavformat libavutil)"
 # GPU library (shadPS4 video core + drivers), built by CMake into out/gpu/libbbgpu.so.
 # BB_PGO: generate (instrumented build that writes pgo/ while the game runs), use, off.
 # Default: use the profile in pgo/ when there is one. BB_LTO=OFF disables link-time optimization.
