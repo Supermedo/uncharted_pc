@@ -707,13 +707,16 @@ static void install_game_callbacks(Segment *segments, uint64_t ns, uint64_t imag
         if (used+256>4096) break;
         unsigned char *t=thunks+used, *f=image+c->offset;
         size_t k=0;
-        /* pushfq; push rax rcx rdx r8-r11 rbx; mov rbx, rsp; and rsp, -16; sub rsp, 0xa0 (works at
-         * a function's start and inside it) */
+        /* pushfq; push rax rcx rdx r8-r11 rbx; mov rbx, rsp; and rsp, -16; sub rsp, 0xb0 (works at
+         * a function's start and inside it). The callback's 5th argument ([rsp+0x20]) is rbx: the
+         * saved registers rbx r11 r10 r9 r8 rdx rcx rax rflags, then (at a function's start) the
+         * return address. */
         static const unsigned char save[]={0x9c,0x50,0x51,0x52,0x41,0x50,0x41,0x51,0x41,0x52,0x41,0x53,0x53,
-                                           0x48,0x89,0xe3,0x48,0x83,0xe4,0xf0,0x48,0x81,0xec,0xa0,0x00,0x00,0x00};
+                                           0x48,0x89,0xe3,0x48,0x83,0xe4,0xf0,0x48,0x81,0xec,0xb0,0x00,0x00,0x00,
+                                           0x48,0x89,0x5c,0x24,0x20};
         memcpy(t+k,save,sizeof(save)); k+=sizeof(save);
-        for (int x=0;x<8;++x) {                                     /* movdqu [rsp+0x20+16x], xmmx */
-            const uint32_t disp=0x20u+16u*(uint32_t)x;
+        for (int x=0;x<8;++x) {                                     /* movdqu [rsp+0x30+16x], xmmx */
+            const uint32_t disp=0x30u+16u*(uint32_t)x;
             t[k++]=0xf3; t[k++]=0x0f; t[k++]=0x7f; t[k++]=(unsigned char)(0x84|x<<3); t[k++]=0x24;
             memcpy(t+k,&disp,4); k+=4;
         }
@@ -724,8 +727,8 @@ static void install_game_callbacks(Segment *segments, uint64_t ns, uint64_t imag
         t[k++]=0x4d; t[k++]=0x89; t[k++]=0xf1;                      /* mov r9, r14 */
         t[k++]=0x48; t[k++]=0xb8; memcpy(t+k,&host,8); k+=8;        /* movabs rax, callback */
         t[k++]=0xff; t[k++]=0xd0;                                   /* call rax */
-        for (int x=0;x<8;++x) {                                     /* movdqu xmmx, [rsp+0x20+16x] */
-            const uint32_t disp=0x20u+16u*(uint32_t)x;
+        for (int x=0;x<8;++x) {                                     /* movdqu xmmx, [rsp+0x30+16x] */
+            const uint32_t disp=0x30u+16u*(uint32_t)x;
             t[k++]=0xf3; t[k++]=0x0f; t[k++]=0x6f; t[k++]=(unsigned char)(0x84|x<<3); t[k++]=0x24;
             memcpy(t+k,&disp,4); k+=4;
         }

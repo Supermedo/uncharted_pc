@@ -100,7 +100,10 @@ typedef struct {
     uint64_t offset;
     const unsigned char *signature;
     size_t signature_size, moved;
-    void (__attribute__((ms_abi)) *callback)(uint64_t rdi, uint64_t rsi, uint64_t image, uint64_t r14);
+    /* regs: the registers the hook saved (rbx r11 r10 r9 r8 rdx rcx rax rflags, then at a
+     * function's start the return address) */
+    void (__attribute__((ms_abi)) *callback)(uint64_t rdi, uint64_t rsi, uint64_t image, uint64_t r14,
+                                             const uint64_t *regs);
     const unsigned char *patch;
 } RuntimeGuestCallback;
 const RuntimeGuestCallback *runtime_guest_callbacks(size_t *count);
