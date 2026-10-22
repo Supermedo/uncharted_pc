@@ -91,6 +91,39 @@ void runtime_file_configure(const char *app0,const char *user) {
         runtime_file_mount(guest,path);
     }
 }
+#ifndef _WIN32
+/* PS4 (and Windows) paths ignore case, Linux's do not: the game asks for
+ * cubemap/train-wreck-a/Train_Wreck_a_07.dds, the dump has train_wreck_a_07.dds. Only when the
+ * exact path is missing, each missing component below the mount (path+root) is matched without
+ * case against its directory. ASCII case folding keeps the length, so the name is fixed in place. */
+static void fix_case(char *path,size_t root) {
+    struct stat s;
+    if (!stat(path,&s)) return;
+    char *p=path+root;
+    while (*p=='/') ++p;
+    while (*p) {
+        char *end=strchr(p,'/');
+        if (end) *end=0;
+        if (stat(path,&s)) {
+            char saved=p[-1];
+            p[-1]=0;
+            DIR *d=opendir(p-1==path ? "/" : path);
+            p[-1]=saved;
+            int found=0;
+            if (d) {
+                struct dirent *e;
+                while ((e=readdir(d))) if (!strcasecmp(e->d_name,p) && strlen(e->d_name)==strlen(p)) {
+                    memcpy(p,e->d_name,strlen(p)); found=1; break;
+                }
+                closedir(d);
+            }
+            if (!found) { if (end) *end='/'; return; }
+        }
+        if (!end) return;
+        *end='/'; p=end+1;
+    }
+}
+#endif
 /* Resolve a guest path to a host path; returns 0 or a host errno. */
 static int translate(const char *guest,char *out,size_t size) {
     if (!guest || !*guest) return ENOENT;
@@ -106,10 +139,15 @@ static int translate(const char *guest,char *out,size_t size) {
         if (!strncmp(buffer,mounts[i].guest,n) && (buffer[n]=='/' || !buffer[n]) && n>best) { best=n; m=&mounts[i]; }
     }
     int result=0;
+    size_t root=0;
     if (!m) result=ENOENT;
     else if ((size_t)snprintf(out,size,"%s%s",m->host,buffer+best)>=size) result=ENAMETOOLONG;
+    else root=strlen(m->host);
     pthread_mutex_unlock(&lock);
     if (result==ENOENT) fprintf(stderr,"Runtime: no mount for guest path %s\n",guest);
+#ifndef _WIN32
+    if (!result) fix_case(out,root);
+#endif
     return result;
 }
 static int host_flags(int flags) {
