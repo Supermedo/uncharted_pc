@@ -21,6 +21,7 @@ import sys
 PORT = Path(__file__).resolve().parent
 sys.path.insert(0, str(PORT / 'scripts'))
 import cheats
+import ui_aspect
 EXECUTABLES = {'u1': 'eboot.bin', 'u2': 'big2-ps4_Shipping.elf', 'u3': 'big3-ps4_Shipping.elf'}
 LOADEXEC_EXIT = 101  # runtime_services.c: the game asked for another executable
 
@@ -240,7 +241,8 @@ def main():
         this = ['--run'] if getattr(sys, 'frozen', False) else [str(Path(__file__).resolve())]
         env['BB_EXE'] = exe
         env['BB_CHEATS'] = game_cheats(all_cheats, exe)
-        patches = cheats.build(game / exe, out, [c for c in env['BB_CHEATS'].split(',') if c])
+        patches = cheats.build(game / exe, out, [c for c in env['BB_CHEATS'].split(',') if c],
+                               ui_aspect.compile_ui(game / exe, env.get('BB_GAME_RES')))
         env['BB_RESTART_COMMAND'] = subprocess.list2cmdline([sys.executable, *this, '--after', str(os.getpid()), *args])
         command = [str(probe), str(out / 'boot-linked.bin'), '--content-profile', str(out / 'content.bin'),
                    '--app0', str(game), '--user', str(user_dir), '--timeout', env.get('BB_TIMEOUT', '0')]
