@@ -220,7 +220,10 @@ void TileManager::RecordTilingDispatch(vk::Pipeline pipeline, const vk::Descript
             },
         }};
         cmdbuf.pushDescriptorSetKHR(vk::PipelineBindPoint::eCompute, layout, 0, set_writes);
-        cmdbuf.dispatch(dim_x, 1, 1);
+        // Large textures can need 65536 groups; Vulkan only guarantees 65535 per axis.
+        const u32 groups_x = std::min(dim_x, 32768u);
+        const u32 groups_y = std::max(1u, dim_x / 32768u + u32(dim_x % 32768u != 0));
+        cmdbuf.dispatch(groups_x, groups_y, 1);
     });
 }
 
