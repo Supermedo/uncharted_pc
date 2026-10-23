@@ -55,6 +55,16 @@ vertical field of view is kept) and does not stretch. Menus keep their 16:9 layo
 middle with the backdrop filling the width. Movies play with bars at the sides. The launcher
 picks the width from a height and a shape (16:9, 21:9, 32:9) or follows the window or screen.
 
+Uncharted 1 1.02 (`eboot.bin`) also gets `scripts/ui_aspect.py`, byte patches written into the same patch
+file as the cheats. They are applied only when the executable's SHA-256 and every site match. Camera::Setup
+builds y_scale from x_scale times the aspect, so the field of view needs its own change (its numerator
+becomes 1/k, k = aspect / (16/9)). The UI is laid out in a virtual 1280x720 space that the 2D vertex
+transforms (`x * 2/1280 - 1`) stretch over the screen, which made everything too wide: the x scale
+constants become 2/(1280 k), the x offset -1 becomes -1/k (menus and the crosshair stay a centred 16:9
+area), and the safe area the game fills at start (left 50, right 1229) moves out by half the extra width
+so edge-anchored HUD elements keep to the screen edges. The weapon and ammo HUD has fixed positions and
+stays in the 16:9 area. Other executables keep the game's own layout.
+
 ## Limits
 
 - Checked on Uncharted 2 1.02: 2560x1440, 2880x1620, 3200x1800 and 3440x1440 render correctly,
