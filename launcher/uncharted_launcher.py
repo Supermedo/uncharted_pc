@@ -70,6 +70,10 @@ FRAME_RATES = [('60', '60 FPS (as on PS4)'), ('120', '120 FPS'), ('144', '144 FP
 WINDOW_SIZES = [('1280x720', '1280 × 720'), ('1600x900', '1600 × 900'),
                 ('1920x1080', "1920 × 1080 (the games' own)"), ('2560x1440', '2560 × 1440'),
                 ('3840x2160', '3840 × 2160 (4K)')]
+# Wide-screen render sizes (Uncharted: Drake's Fortune only for now; scripts/uncharted_ultrawide.py).
+ULTRAWIDE_SIZES = [('off', "Off (16:9, the game's own)"), ('2560x1080', '2560 × 1080 (21:9)'),
+                   ('3440x1440', '3440 × 1440 (21:9)'), ('3840x1620', '3840 × 1620 (21:9, lighter than 5K2K)'),
+                   ('5120x2160', '5120 × 2160 (5K2K, needs a strong GPU)')]
 SCALERS = [('fsr1', 'FSR 1 (AMD FidelityFX, sharp)'), ('bilinear', 'Smooth (bilinear)')]
 SHARPENING = [('off', 'Off'), ('1000', 'Low'), ('500', 'Medium'), ('250', 'High'), ('0', 'Maximum')]
 # Temporal anti-aliasing at the games' 1920x1080 (BB_UPSCALER): it takes the scene before the
@@ -135,7 +139,7 @@ RESERVED_KEYS = {'Insert': 'Insert opens the in-game settings menu.',
 
 APP_DEFAULTS = {'game_dir': '', 'game_dir_u1': '', 'game_dir_u2': '', 'game_dir_u3': '', 'user_dir': '', 'start': 'u1', 'language': '1', 'player_name': '',
                 'fullscreen': False, 'present_mode': 'Mailbox', 'frame_rate': '60', 'show_fps': False,
-                'window_size': '1920x1080', 'scaler': 'fsr1', 'sharpening': '500',
+                'window_size': '1920x1080', 'ultrawide': 'off', 'scaler': 'fsr1', 'sharpening': '500',
                 'anti_aliasing': 'off', 'aa_sharpness': '0.2', 'frame_generation': 'off',
                 'frame_gen_multiplier': '2', 'extra_env': '', 'close_on_play': False,
                 'mouse_look': True, 'mouse_sensitivity': '1.0', 'mouse_invert_y': False,
@@ -351,6 +355,8 @@ def game_environment(s, start=None):
     env['BB_FSR_SHARPNESS'] = str(s.get('aa_sharpness') or '0')
     env['BB_FRAME_GEN'] = str(s.get('frame_generation') or 'off')
     env['BB_FRAME_GEN_MULTIPLIER'] = str(s.get('frame_gen_multiplier') or '2')
+    if str(s.get('ultrawide') or 'off') != 'off':
+        env['BB_ULTRAWIDE'] = str(s['ultrawide'])  # the extra variables below may still override it
     for item in str(s['extra_env']).split():
         if '=' in item:
             key, value = item.split('=', 1)
@@ -1016,6 +1022,10 @@ class Launcher:
         self.row(f, _('Window size'), self.choice(f, 'window_size', WINDOW_SIZES, 34),
                  _('The games render at 1920 × 1080. A larger window, or fullscreen on a 1440p or 4K '
                    'screen, gets the image upscaled to fit.'))
+        self.row(f, _('Ultrawide'), self.choice(f, 'ultrawide', ULTRAWIDE_SIZES, 34),
+                 _('Experimental, Uncharted: Drake\'s Fortune only. Renders at this wide size with a wider field '
+                   'of view and corrected menus. Larger sizes use more video memory (set up automatically) '
+                   'and need a stronger GPU. Off keeps the original 16:9.'))
         self.row(f, _('Upscaling'), self.choice(f, 'scaler', SCALERS, 34),
                  _('FSR 1 keeps edges sharp when the image is enlarged; bilinear is softer.'))
         self.row(f, _('Sharpening'), self.choice(f, 'sharpening', SHARPENING, 34),

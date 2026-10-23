@@ -96,6 +96,18 @@ def prepare(game, exe, out):
     stamp.write_text(source, encoding='utf-8')
 
 
+def ultrawide_size(env, config):
+    """Render size for the wide-screen patch: BB_ULTRAWIDE, else the ultrawide key of bbport.ini
+    (for example 2560x1080); '' when off. Applied by scripts/uncharted_ultrawide.py."""
+    value = env.get('BB_ULTRAWIDE')
+    if value is None and Path(config).is_file():
+        for line in Path(config).read_text(encoding='utf-8', errors='replace').splitlines():
+            key, sep, rest = line.partition('=')
+            if sep and key.strip() == 'ultrawide' and not line.lstrip().startswith('#'):
+                value = rest.strip()
+    return (value or '').strip()
+
+
 def main():
     args = sys.argv[1:]
     if len(args) >= 2 and args[0] == '--after':
@@ -153,11 +165,26 @@ def main():
         out = out_root / Path(exe).stem.split('-')[0]
         prepare(game, file, out)
         run_script('content_profile.py', game, '--out', out, '--sku', env.get('BB_CONTENT_SKU', 'full'))
+        # Wide-screen game patches (21:9, 32:9, ...): patches.bin for this executable, or none.
+        patches = out / 'patches.bin'
+        run_script('uncharted_ultrawide.py', '--exe', file, '--elf', out / 'eboot.elf',
+                   '--size', ultrawide_size(env, env['BB_CONFIG']) or 'off', '--out', patches)
+        # The enlarged memory budgets of a wide size need more direct memory than the default: raise BB_DMEM_MB.
+        needed = patches.with_suffix('.dmem')
+        if patches.is_file() and needed.is_file():
+            try:
+                need = int(needed.read_text().strip())
+                if int(env.get('BB_DMEM_MB') or 0) < need:
+                    env['BB_DMEM_MB'] = str(need)
+            except ValueError:
+                pass
         this = ['--run'] if getattr(sys, 'frozen', False) else [str(Path(__file__).resolve())]
         env['BB_EXE'] = exe
         env['BB_RESTART_COMMAND'] = subprocess.list2cmdline([sys.executable, *this, '--after', str(os.getpid()), *args])
         command = [str(probe), str(out / 'boot-linked.bin'), '--content-profile', str(out / 'content.bin'),
                    '--app0', str(game), '--user', str(user_dir), '--timeout', env.get('BB_TIMEOUT', '0')]
+        if patches.is_file():
+            command += ['--patches', str(patches)]
         if guest_argv:
             command += ['--guest-argv', str(guest_argv)]
         loadexec.unlink(missing_ok=True)
