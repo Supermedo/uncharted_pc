@@ -146,11 +146,12 @@ def main():
     guest_argv = None
     # Uncharted 2 reads the results of GPU work (grenade explosions, vehicle damage, the convoy
     # of chapter 21) from memory it also writes: merging leaves them on the GPU, so it runs with
-    # accurate GPU memory (BB_GPU_MERGE=0) unless the player chose otherwise.
+    # accurate GPU memory (BB_GPU_MERGE=0) unless the player chose otherwise. Uncharted 3 runs the
+    # same engine and showed the same floating NPCs, so it does too.
     player_merge = env.get('BB_GPU_MERGE')
     while True:
         if player_merge is None:
-            if exe == EXECUTABLES['u2']:
+            if exe in (EXECUTABLES['u2'], EXECUTABLES['u3']):
                 env['BB_GPU_MERGE'] = '0'
             else:
                 env.pop('BB_GPU_MERGE', None)
