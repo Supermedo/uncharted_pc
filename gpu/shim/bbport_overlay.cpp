@@ -140,12 +140,15 @@ void Store(std::atomic<T>& target, T value, bool changed) {
 
 void Checkbox(const char* label, std::atomic<bool>& value) {
     bool v = value;
-    Store(value, v, ImGui::Checkbox(label, &v));
+    // The widget runs first: as one argument list, v could be read before it changed.
+    const bool changed = ImGui::Checkbox(label, &v);
+    Store(value, v, changed);
 }
 
 void Slider(const char* label, std::atomic<float>& value, float lo, float hi) {
     float v = value;
-    Store(value, v, ImGui::SliderFloat(label, &v, lo, hi, "%.2f"));
+    const bool changed = ImGui::SliderFloat(label, &v, lo, hi, "%.2f");
+    Store(value, v, changed);
 }
 
 void Hint(const char* text) {
