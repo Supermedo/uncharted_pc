@@ -11,9 +11,10 @@ Frozen with PyInstaller the same Uncharted.exe also runs the game without the wi
 needs no Python installation.
 """
 import ctypes
+import hashlib
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import queue
 import re
 import runpy
@@ -2107,7 +2108,7 @@ class Launcher:
     def check_update(self, manual=False):
         """Helper thread: asks GitHub for the newest release and offers it when it is newer."""
         try:
-            version, url, page = latest_release()
+            version, url, digest, page = latest_release()
         except (OSError, ValueError, KeyError) as failure:
             if manual:
                 self.ui_calls.put(lambda error=failure: self.messagebox.showerror(
@@ -2116,12 +2117,12 @@ class Launcher:
 
         def show():
             if version_tuple(version) > version_tuple(VERSION):
-                self.offer_update(version, url, page)
+                self.offer_update(version, url, digest, page)
             elif manual:
                 self.messagebox.showinfo(NAME, _('You have the latest version ({}).').format(VERSION))
         self.ui_calls.put(show)
 
-    def offer_update(self, version, url, page):
+    def offer_update(self, version, url, digest, page):
         if self.update_box:
             return
         tk = self.tk
@@ -2132,7 +2133,8 @@ class Launcher:
         self.update_label.pack(anchor='w', padx=12, pady=(10, 8))
         buttons = tk.Frame(box, bg=CARD)
         buttons.pack(anchor='w', padx=12, pady=(0, 12))
-        self.update_button = self.pill(buttons, _('Update'), lambda: self.install_update(version, url, page),
+        self.update_button = self.pill(buttons, _('Update'),
+                                       lambda: self.install_update(version, url, digest, page),
                                        kind='primary', padding=(14, 6))
         self.update_button.pack(side='left')
         self.pill(buttons, _("What's new"), lambda: webbrowser.open(page), padding=(12, 6)).pack(
@@ -2142,7 +2144,7 @@ class Launcher:
         if not self.process:
             self.status.configure(text=text, fg=GOLD)
 
-    def install_update(self, version, url, page):
+    def install_update(self, version, url, digest, page):
         if self.process:
             self.messagebox.showinfo(NAME, _('Close the game before updating.'))
             return
@@ -2163,18 +2165,10 @@ class Launcher:
                 shutil.rmtree(UPDATE_DIR, ignore_errors=True)
                 UPDATE_DIR.mkdir(parents=True, exist_ok=True)
                 archive = UPDATE_DIR / 'update.zip'
-                request = urllib.request.Request(url, headers={'User-Agent': 'uncharted-launcher'})
-                with urllib.request.urlopen(request, timeout=60) as response, open(archive, 'wb') as out:
-                    total, done, shown = int(response.headers.get('Content-Length') or 0), 0, -1
-                    while chunk := response.read(1 << 20):
-                        out.write(chunk)
-                        done += len(chunk)
-                        percent = done * 100 // total if total else 0
-                        if percent != shown:
-                            shown = percent
-                            self.ui_calls.put(lambda p=percent: progress(p))
+                download_update(url, digest, archive,
+                                lambda percent: self.ui_calls.put(lambda p=percent: progress(p)))
                 with zipfile.ZipFile(archive) as package:
-                    package.extractall(UPDATE_DIR / 'new')
+                    extract_update(package, UPDATE_DIR / 'new')
                 archive.unlink()
                 new = next((p.parent for p in (UPDATE_DIR / 'new').rglob('Uncharted.exe')), None)
                 if not new:
@@ -2183,7 +2177,7 @@ class Launcher:
                 subprocess.Popen([str(new / 'Uncharted.exe'), '--install-update', str(PORT_DIR), str(os.getpid())],
                                  cwd=str(new), stdin=subprocess.DEVNULL, creationflags=NO_WINDOW)
                 self.ui_calls.put(self.close)
-            except (OSError, zipfile.BadZipFile) as failure:
+            except (OSError, ValueError, zipfile.BadZipFile) as failure:
                 def failed(error=failure):
                     self.update_button.configure(state='normal')
                     self.update_label.configure(text=_('Version {} is available.').format(version))
@@ -2501,15 +2495,69 @@ def version_tuple(text):
 
 
 def latest_release():
-    """(version, zip URL, page URL) of the newest GitHub release."""
+    """(version, zip URL, SHA-256 digest, page URL) of the newest GitHub release."""
     request = urllib.request.Request(RELEASES_API, headers={'Accept': 'application/vnd.github+json',
                                                             'User-Agent': 'uncharted-launcher'})
     with urllib.request.urlopen(request, timeout=15) as response:
         release = json.load(response)
     version = '.'.join(re.findall(r'\d+', release['tag_name']))
-    url = next((asset['browser_download_url'] for asset in release.get('assets', [])
-                if asset.get('name', '').lower().endswith('.zip')), None)
-    return version, url, release.get('html_url') or RELEASES_PAGE
+    asset = next((item for item in release.get('assets', [])
+                  if item.get('name', '').lower() == 'uncharted-windows.zip'), None)
+    digest = (asset.get('digest') or '').lower() if asset else ''
+    verified = bool(re.fullmatch(r'sha256:[0-9a-f]{64}', digest))
+    return (version, asset.get('browser_download_url') if asset and verified else None,
+            digest if verified else None, release.get('html_url') or RELEASES_PAGE)
+
+
+def download_update(url, digest, destination, progress=lambda _percent: None):
+    """Download a release asset and publish it only after its GitHub SHA-256 matches."""
+    if not digest or not re.fullmatch(r'sha256:[0-9a-f]{64}', digest.lower()):
+        raise ValueError('the release does not provide a valid SHA-256 digest')
+    expected = digest.split(':', 1)[1].lower()
+    temporary = destination.with_suffix(destination.suffix + '.part')
+    request = urllib.request.Request(url, headers={'User-Agent': 'uncharted-launcher'})
+    try:
+        checksum = hashlib.sha256()
+        with urllib.request.urlopen(request, timeout=60) as response, temporary.open('wb') as out:
+            total, done, shown = int(response.headers.get('Content-Length') or 0), 0, -1
+            while chunk := response.read(1 << 20):
+                out.write(chunk)
+                checksum.update(chunk)
+                done += len(chunk)
+                percent = done * 100 // total if total else 0
+                if percent != shown:
+                    shown = percent
+                    progress(percent)
+        if checksum.hexdigest() != expected:
+            raise OSError('downloaded update does not match its SHA-256 digest')
+        os.replace(temporary, destination)
+    finally:
+        try:
+            temporary.unlink()
+        except FileNotFoundError:
+            pass
+
+
+def extract_update(package, destination):
+    """Extract regular ZIP entries without allowing absolute or parent paths."""
+    entries = []
+    for info in package.infolist():
+        name = info.filename.replace('\\', '/')
+        path = PurePosixPath(name)
+        mode = info.external_attr >> 16
+        if (not name or not path.parts or path.is_absolute() or '..' in path.parts
+                or any(':' in part for part in path.parts)
+                or (mode & 0o170000) == 0o120000):
+            raise ValueError(f'unsafe path in update archive: {info.filename}')
+        entries.append((info, path))
+    for info, path in entries:
+        target = destination.joinpath(*path.parts)
+        if info.is_dir():
+            target.mkdir(parents=True, exist_ok=True)
+            continue
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with package.open(info) as source, target.open('wb') as output:
+            shutil.copyfileobj(source, output)
 
 
 def install_update(target, wait_pid):
