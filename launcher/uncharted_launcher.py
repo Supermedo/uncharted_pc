@@ -286,6 +286,26 @@ def load_json(path, default):
         return default
 
 
+def atomic_write_text(path, text):
+    """Replace a text file only after its complete contents reach a sibling temporary file."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile('w', encoding='utf-8', dir=path.parent,
+                                         prefix=f'.{path.name}.', suffix='.tmp',
+                                         delete=False) as stream:
+            temporary = Path(stream.name)
+            stream.write(text)
+        os.replace(temporary, path)
+    finally:
+        if temporary:
+            try:
+                temporary.unlink()
+            except FileNotFoundError:
+                pass
+
+
 def ini_path():
     return Path(os.environ.get('BB_CONFIG', DATA_DIR / 'bbport.ini'))
 
@@ -306,7 +326,7 @@ def set_ini(key, value):
             out.append(line)
     if not found:
         out.append(f'{key}={value}')
-    path.write_text('\n'.join(out) + '\n', encoding='utf-8')
+    atomic_write_text(path, '\n'.join(out) + '\n')
 
 
 def game_info(folder):
@@ -448,8 +468,7 @@ def write_input_ini(s):
     lines += [f'key.{action}={keys.get(action, "")}' for action in DEFAULT_KEYS]
     lines += [f'pad.{action}={pad.get(action, "none")}' for action in DEFAULT_PAD]
     path = input_ini_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text('\n'.join(lines) + '\n', encoding='utf-8')
+    atomic_write_text(path, '\n'.join(lines) + '\n')
     return path
 
 
@@ -1908,8 +1927,7 @@ class Launcher:
             self.app[key] = v.get()
         if getattr(self, 'pad_vars', None):
             self.app['pad_bindings'] = {a: v.get() for a, v in self.pad_vars.items()}
-        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-        CONFIG_FILE.write_text(json.dumps(self.app, indent=2) + '\n', encoding='utf-8')
+        atomic_write_text(CONFIG_FILE, json.dumps(self.app, indent=2) + '\n')
         try:
             set_ini('show_fps', '1' if self.app['show_fps'] else '0')
         except OSError:
