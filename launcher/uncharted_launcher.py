@@ -2568,6 +2568,23 @@ def play_without_window(settings):
         return process.wait()
 
 
+def requested_game(args):
+    """The game named on the command line (--game u2, --game=u2 or --u2), or None."""
+    keys = [key for key, _title, _sub, _exe in GAMES]
+    for index, arg in enumerate(args):
+        if arg in ('--game', '-g') and index + 1 < len(args):
+            name = args[index + 1]
+        elif arg.startswith('--game='):
+            name = arg[len('--game='):]
+        elif arg.startswith('--'):
+            name = arg[2:]
+        else:
+            continue
+        if name.lower() in keys:
+            return name.lower()
+    return None
+
+
 def main():
     args = sys.argv[1:]
     if args and args[0] in ('--run', '--script'):
@@ -2577,7 +2594,10 @@ def main():
     if FROZEN and UPDATE_DIR not in PORT_DIR.parents:
         shutil.rmtree(UPDATE_DIR, ignore_errors=True)  # what a finished update left behind
     settings = {**APP_DEFAULTS, **load_json(CONFIG_FILE, {})}
-    if '--play' in args and game_available(settings, settings['start']):
+    game = requested_game(args)
+    if game:  # Uncharted.exe --u2: that game, no window (the same as --play with it as the start game)
+        settings['start'] = game
+    if ('--play' in args or game) and game_available(settings, settings['start']):
         sys.exit(play_without_window(settings))
     try:
         ctypes.windll.shcore.SetProcessDpiAwareness(1)
