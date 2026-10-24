@@ -13,6 +13,7 @@ The in-game "Apply and restart" runs this script again through BB_RESTART_COMMAN
 `--after PID` waits for the previous game process to end first (its GPU device and memory).
 """
 import ctypes
+import json
 import os
 from pathlib import Path
 import subprocess
@@ -23,6 +24,7 @@ sys.path.insert(0, str(PORT / 'scripts'))
 import cheats
 EXECUTABLES = {'u1': 'eboot.bin', 'u2': 'big2-ps4_Shipping.elf', 'u3': 'big3-ps4_Shipping.elf'}
 LOADEXEC_EXIT = 101  # runtime_services.c: the game asked for another executable
+PREPARE_CACHE_VERSION = 1
 
 
 def fail(message):
@@ -86,22 +88,30 @@ def game_cheats(enabled, exe):
     return ','.join(c.split(':', 1)[1] for c in enabled.split(',') if key and c.startswith(f'{key}:'))
 
 
+def prepared_cache_valid(linked, manifest, source, sources):
+    try:
+        metadata = json.loads(manifest.read_text(encoding='utf-8'))
+        return (metadata == {'version': PREPARE_CACHE_VERSION, 'source': source,
+                             'linked_size': linked.stat().st_size}
+                and all(linked.stat().st_mtime >= path.stat().st_mtime for path in sources))
+    except (OSError, ValueError, TypeError):
+        return False
+
+
 def prepare(game, exe, out):
     """boot-linked.bin for one executable, kept until the executable or the scripts change."""
     out.mkdir(parents=True, exist_ok=True)
     linked = out / 'boot-linked.bin'
-    # Which executable the files in out/ were made from: another folder (a per-game one) needs a new run.
-    stamp, source = out / 'source.txt', str(game / exe)
+    manifest, source = out / 'prepared.json', str(game / exe)
     sources = [game / exe, *(PORT / 'scripts').glob('*.py'), *(game / 'sce_module').glob('*.prx')]
-    if linked.is_file() and all(linked.stat().st_mtime >= s.stat().st_mtime for s in sources):
-        if not stamp.is_file():
-            stamp.write_text(source, encoding='utf-8')
-        if stamp.read_text(encoding='utf-8', errors='replace') == source:
-            return
+    if prepared_cache_valid(linked, manifest, source, sources):
+        return
     print(f'Preparing {exe} ...')
     run_script('prepare.py', game, '--out', out, '--exe', exe)
     run_script('link_modules.py', game, '--out', out, '--exe', exe)
-    stamp.write_text(source, encoding='utf-8')
+    metadata = {'version': PREPARE_CACHE_VERSION, 'source': source,
+                'linked_size': linked.stat().st_size}
+    manifest.write_text(json.dumps(metadata, indent=2) + '\n', encoding='utf-8')
 
 
 # Render target memory the games need per extra 1080p worth of pixels (measured; docs/resolution.md), and
