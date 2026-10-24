@@ -33,9 +33,30 @@ def fail(message):
 def wait_for(pid):
     kernel32 = ctypes.windll.kernel32
     SYNCHRONIZE = 0x00100000
+    ERROR_INVALID_PARAMETER = 87
+    WAIT_OBJECT_0 = 0
+    WAIT_TIMEOUT = 258
+    WAIT_FAILED = 0xffffffff
     handle = kernel32.OpenProcess(SYNCHRONIZE, False, pid)
-    if handle:
-        kernel32.WaitForSingleObject(handle, 30000)
+    if not handle:
+        error = kernel32.GetLastError()
+        if error == ERROR_INVALID_PARAMETER:  # The process already exited.
+            return
+        fail(f'Cannot wait for previous game process {pid}: OpenProcess failed '
+             f'(Windows error {error}).')
+    try:
+        result = kernel32.WaitForSingleObject(handle, 30000)
+        if result == WAIT_OBJECT_0:
+            return
+        if result == WAIT_TIMEOUT:
+            fail(f'Previous game process {pid} did not exit within 30 seconds; '
+                 'not starting another instance.')
+        if result == WAIT_FAILED:
+            fail(f'Cannot wait for previous game process {pid}: WaitForSingleObject failed '
+                 f'(Windows error {kernel32.GetLastError()}).')
+        fail(f'Cannot wait for previous game process {pid}: WaitForSingleObject returned '
+             f'unexpected status {result}.')
+    finally:
         kernel32.CloseHandle(handle)
 
 
