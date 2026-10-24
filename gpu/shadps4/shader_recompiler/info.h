@@ -151,6 +151,9 @@ struct Info : InfoPersistent {
     bool stores_tess_level_outer{};
     bool stores_tess_level_inner{};
     bool translation_failed{};
+    /// bbport: non-zero when the compute program's 1024-thread CTA runs with this many threads
+    /// per group (vk_shader_util.cpp, BB_CS_SPLIT_1024); the dispatch scales the group count.
+    u32 split_workgroup{};
 
     std::array<Interpolation, IR::NumParams> fs_interpolation{};
 

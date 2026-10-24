@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -2187,7 +2188,23 @@ void Rasterizer::DispatchRecord(const ComputePipeline* pipeline) {
     pipeline->BindResources(set_writes, push_data);
 
     const vk::Pipeline handle = pipeline->Handle();
-    const u32 dim_x = cs_program.dim_x, dim_y = cs_program.dim_y, dim_z = cs_program.dim_z;
+    u32 dim_x = cs_program.dim_x;
+    const u32 dim_y = cs_program.dim_y, dim_z = cs_program.dim_z;
+    // bbport: BB_CS_SPLIT_1024 - the shader's 1024-thread group runs as 1024/target groups of
+    // `target` threads (vk_shader_util.cpp); the extra groups cover the same global indices.
+    if (cs.split_workgroup != 0 && cs_program.num_thread_x.full == 1024) {
+        dim_x *= 1024 / cs.split_workgroup;
+        // bbport: one line per split program, so a log shows every split shader that ran (a
+        // single global flag only ever named the first one).
+        static std::array<u64, 16> printed{};
+        static size_t num_printed = 0;
+        const auto end = printed.begin() + num_printed;
+        if (num_printed < printed.size() && std::find(printed.begin(), end, cs.pgm_hash) == end) {
+            printed[num_printed++] = cs.pgm_hash;
+            std::printf("Compute shader %08x: dispatching %u-thread groups, %ux%ux%u of them\n",
+                        u32(cs.pgm_hash), cs.split_workgroup, dim_x, dim_y, dim_z);
+        }
+    }
     if (FrameCapture::Active()) {
         FrameCapture::Dispatch(cs.pgm_hash, dim_x, dim_y, dim_z);
     }
@@ -2269,6 +2286,16 @@ void Rasterizer::DispatchIndirectRecord(const ComputePipeline* pipeline, VAddr a
     const vk::Pipeline handle = pipeline->Handle();
     const vk::Buffer args = buffer->Handle();
     const u64 args_offset = base;
+    // bbport: BB_CS_SPLIT_1024 - the group count lives in the guest's argument buffer and is
+    // not rewritten, so a split shader would only cover half of its work.
+    if (pipeline->GetStage(Shader::SwStage::Compute).split_workgroup != 0) {
+        static bool warned = false;
+        if (!warned) {
+            warned = true;
+            std::printf("Compute shader %08x: indirect dispatch is not split (BB_CS_SPLIT_1024)\n",
+                        u32(pipeline->GetStage(Shader::SwStage::Compute).pgm_hash));
+        }
+    }
     const void* checkpoint =
         NoteCheckpoint("indirect dispatch", pipeline->GetStage(Shader::SwStage::Compute).pgm_hash,
                        0, size, 0, 0, address + offset);

@@ -426,6 +426,20 @@ void PipelineCache::WarmUpThread() {
         if (spv.empty()) {
             return;
         }
+        // bbport: the stored binary is the guest's 1024-thread module; BB_CS_SPLIT_1024 applies
+        // to it like to a freshly compiled one (vk_shader_util.cpp).
+        if (info.hw_stage == Shader::HwStage::Compute) {
+            const u32 target = SplitWorkgroupTarget();
+            if (target != 0) {
+                std::vector<u32> split_spv = spv;
+                if (SplitWorkgroup(split_spv, target)) {
+                    spv = std::move(split_spv);
+                    stage.program->info.split_workgroup = target;
+                    std::printf("Compute shader %08x: 1024-thread group split into %u (cached)\n",
+                                u32(info.pgm_hash), target);
+                }
+            }
+        }
         stage.module = CompileSPV(spv, device);
     });
     const double t_shaders = elapsed_ms();
