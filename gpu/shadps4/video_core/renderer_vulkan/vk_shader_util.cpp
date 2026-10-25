@@ -100,6 +100,197 @@ static bool PatchMovieScale(std::vector<u32>& code) {
     return true;
 }
 
+u32 SplitWorkgroupTarget() {
+    static const u32 target = [] {
+        // bbport: off unless BB_CS_SPLIT_1024 is set to a non-zero value.
+        const char* env = std::getenv("BB_CS_SPLIT_1024");
+        return env != nullptr && std::atoi(env) != 0 ? 512u : 0u;
+    }();
+    return target;
+}
+
+bool SplitWorkgroup(std::vector<u32>& code, u32 threads) {
+    constexpr u32 OpExecutionMode = 16;
+    constexpr u32 OpConstant = 43;
+    constexpr u32 OpFunction = 54;
+    constexpr u32 OpVariable = 59;
+    constexpr u32 OpLoad = 61;
+    constexpr u32 OpDecorate = 71;
+    constexpr u32 OpMemberDecorate = 72;
+    constexpr u32 OpCompositeExtract = 81;
+    constexpr u32 OpIAdd = 128;
+    constexpr u32 OpIMul = 132;
+    constexpr u32 OpControlBarrier = 224;
+    constexpr u32 OpMemoryBarrier = 225;
+    constexpr u32 ExecutionModeLocalSize = 17;
+    constexpr u32 DecorationBuiltIn = 11;
+    constexpr u32 BuiltInWorkgroupId = 26;
+    constexpr u32 BuiltInLocalInvocationId = 27;
+    constexpr u32 StorageClassWorkgroup = 4;
+    constexpr u32 GuestThreads = 1024;
+
+    if (code.size() < 6 || threads == 0 || threads >= GuestThreads ||
+        GuestThreads % threads != 0) {
+        return false;
+    }
+
+    u32 workgroup_var = 0;
+    u32 local_var = 0;
+    u32 workgroup_load = 0;
+    u32 local_load = 0;
+    u32 workgroup_x = 0;
+    u32 local_x = 0;
+    u32 u32_type = 0;
+    u32 constants[4] = {};
+    u32 num_constants = 0;
+    u32 product = 0;
+    u32 index = 0;
+    u32 multiplies = 0;
+    size_t workgroup_x_at = 0;
+    size_t local_x_at = 0;
+    size_t product_at = 0;
+    size_t local_size_at = 0;
+    size_t multiply_operand_at = 0;
+    size_t insert_at = 0;
+
+    for (size_t at = 5; at < code.size();) {
+        const u32 words = code[at] >> 16;
+        if (words == 0 || at + words > code.size()) {
+            return false;
+        }
+        switch (code[at] & 0xFFFF) {
+        case OpExecutionMode:
+            if (words == 6 && code[at + 2] == ExecutionModeLocalSize &&
+                code[at + 3] == GuestThreads && code[at + 4] == 1 && code[at + 5] == 1) {
+                local_size_at = at + 3;
+            }
+            break;
+        case OpDecorate:
+            if (words == 4 && code[at + 2] == DecorationBuiltIn) {
+                if (code[at + 3] == BuiltInWorkgroupId) {
+                    workgroup_var = code[at + 1];
+                } else if (code[at + 3] == BuiltInLocalInvocationId) {
+                    local_var = code[at + 1];
+                } else {
+                    return false; // NumWorkGroups, WorkgroupSize, SubgroupId, ... depend on the group
+                }
+            }
+            break;
+        case OpMemberDecorate:
+            if (words == 5 && code[at + 3] == DecorationBuiltIn) {
+                return false; // a builtin block member is not the direct-variable shape handled here
+            }
+            break;
+        case OpVariable:
+            if (words == 4 && code[at + 3] == StorageClassWorkgroup) {
+                return false; // the threads of the group share state: they cannot be split
+            }
+            break;
+        case OpControlBarrier:
+        case OpMemoryBarrier:
+            return false; // ditto
+        case OpLoad:
+            if (words == 4) {
+                if (workgroup_var != 0 && code[at + 3] == workgroup_var) {
+                    workgroup_load = code[at + 2];
+                } else if (local_var != 0 && code[at + 3] == local_var) {
+                    local_load = code[at + 2];
+                }
+            }
+            break;
+        case OpCompositeExtract:
+            if (words == 5 && code[at + 4] == 0) {
+                if (workgroup_load != 0 && code[at + 3] == workgroup_load) {
+                    workgroup_x = code[at + 2];
+                    workgroup_x_at = at + 2;
+                } else if (local_load != 0 && code[at + 3] == local_load) {
+                    local_x = code[at + 2];
+                    local_x_at = at + 2;
+                }
+            }
+            break;
+        case OpConstant:
+            if (words == 4 && code[at + 3] == GuestThreads && num_constants < 4) {
+                constants[num_constants++] = code[at + 2];
+                u32_type = code[at + 1];
+            }
+            break;
+        case OpIMul:
+            if (words == 5 && workgroup_x != 0) {
+                const auto is_guest_size = [&constants, num_constants](u32 id) {
+                    for (u32 i = 0; i < num_constants; ++i) {
+                        if (constants[i] == id) {
+                            return true;
+                        }
+                    }
+                    return false;
+                };
+                const bool left_constant = is_guest_size(code[at + 3]);
+                const bool right_constant = is_guest_size(code[at + 4]);
+                if ((code[at + 3] == workgroup_x && right_constant) ||
+                    (code[at + 4] == workgroup_x && left_constant)) {
+                    ++multiplies;
+                    product = code[at + 2];
+                    product_at = at + 2;
+                    multiply_operand_at = left_constant ? at + 3 : at + 4;
+                }
+            }
+            break;
+        case OpIAdd:
+            if (words == 5 && product != 0 && local_x != 0 &&
+                ((code[at + 3] == product && code[at + 4] == local_x) ||
+                 (code[at + 3] == local_x && code[at + 4] == product))) {
+                index = code[at + 2];
+            }
+            break;
+        case OpFunction:
+            if (insert_at == 0) {
+                insert_at = at;
+            }
+            break;
+        default:
+            break;
+        }
+        at += words;
+    }
+
+    if (local_size_at == 0 || insert_at == 0 || workgroup_x == 0 || local_x == 0 ||
+        product == 0 || index == 0 || multiplies != 1) {
+        return false;
+    }
+    // The three values have to feed the global index and nothing else, otherwise halving them
+    // would change another use. (Counting every operand word is a superset: a coincidental
+    // match only makes the rewrite refuse to run.)
+    const auto count_uses = [&code](u32 id, size_t definition) {
+        u32 uses = 0;
+        for (size_t at = 5; at < code.size();) {
+            const u32 words = code[at] >> 16;
+            if (words == 0 || at + words > code.size()) {
+                return uses;
+            }
+            for (size_t i = at + 1; i < at + words; ++i) {
+                if (i != definition && code[i] == id) {
+                    ++uses;
+                }
+            }
+            at += words;
+        }
+        return uses;
+    };
+    if (count_uses(workgroup_x, workgroup_x_at) != 1 || count_uses(local_x, local_x_at) != 1 ||
+        count_uses(product, product_at) != 1) {
+        return false;
+    }
+
+    code[local_size_at] = threads;
+    const u32 new_constant = code[3]; // the header's bound is the first free id
+    const u32 instruction[4] = {(4u << 16) | OpConstant, u32_type, new_constant, threads};
+    code.insert(code.begin() + insert_at, instruction, instruction + 4);
+    code[multiply_operand_at + 4] = new_constant; // the insertion is before the function body
+    code[3] = new_constant + 1;
+    return true;
+}
+
 vk::ShaderModule CompileSPV(std::span<const u32> code, vk::Device device) {
     // Test knob: BB_TEST_SPV_SALT=<n> changes the SPIR-V generator word of every module, so the
     // driver's own on-disk shader cache cannot hit (a cold-driver measurement on a used PC).

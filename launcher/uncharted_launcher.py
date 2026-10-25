@@ -188,6 +188,11 @@ FIXES = {
         'PS4 thread priorities',
         'Game threads get the priorities they have on PS4. Automatic: on.',
         {'on': {'BB_THREAD_PRIO': '1'}, 'off': {'BB_THREAD_PRIO': '0'}}),
+    'fix_cs_split': (
+        'Driver reset on GeForce GTX 10 series',
+        'The game can freeze the screen and reset the display driver on these cards. '
+        'Automatic: off; turn it on if it happens to you.',
+        {'on': {'BB_CS_SPLIT_1024': '1'}, 'off': {'BB_CS_SPLIT_1024': '0'}}),
 }
 FIX_CHOICES = [('auto', 'Automatic'), ('on', 'On'), ('off', 'Off')]
 

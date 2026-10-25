@@ -1191,6 +1191,31 @@ vk::ShaderModule PipelineCache::CompileModule(Shader::Info& info, Shader::Runtim
     auto spv = Shader::Backend::SPIRV::EmitSPIRV(profile, runtime_info, ir_program, binding);
     DumpShader(spv, info.pgm_hash, info.hw_stage, perm_idx, "spv");
 
+    // bbport: BB_CS_SPLIT_1024 - a 1024-thread group that needs 64 registers per thread asks for
+    // 64 * 1024 = 65536 registers, the whole register file of an SM, and Pascal fails the launch
+    // (SKEDCHECK19_CTA_REGISTER_CONSUMPTION). The same work runs as 1024/threads smaller groups;
+    // the dispatch multiplies the group count to match.
+    std::vector<u32> split_spv;
+    u32 split_threads = 0;
+    if (info.hw_stage == HwStage::Compute) {
+        const u32 target = SplitWorkgroupTarget();
+        const auto& size = runtime_info.hw.cs.workgroup_size;
+        if (target != 0 && size[0] == 1024 && size[1] == 1 && size[2] == 1) {
+            split_spv = spv;
+            if (SplitWorkgroup(split_spv, target)) {
+                split_threads = target;
+                std::printf("Compute shader %08x: 1024-thread group split into %u\n",
+                            u32(info.pgm_hash), target);
+                DumpShader(split_spv, info.pgm_hash, info.hw_stage, perm_idx, "split.spv");
+            } else {
+                std::printf("Compute shader %08x: 1024-thread group not split (index pattern, "
+                            "shared memory or barriers)\n",
+                            u32(info.pgm_hash));
+            }
+        }
+    }
+    info.split_workgroup = split_threads;
+
     vk::ShaderModule module;
 
     auto patch = GetShaderPatch(info.pgm_hash, info.hw_stage, perm_idx, "spv");
@@ -1198,8 +1223,11 @@ vk::ShaderModule PipelineCache::CompileModule(Shader::Info& info, Shader::Runtim
     if (is_patched) {
         LOG_INFO(Loader, "Loaded patch for {} shader {:#x}", info.hw_stage, info.pgm_hash);
         module = CompileSPV(*patch, instance.GetDevice());
+        info.split_workgroup = 0; // a user patch replaces the module: keep the guest dispatch
     } else {
-        module = CompileSPV(spv, instance.GetDevice());
+        module = CompileSPV(split_threads != 0 ? std::span<const u32>(split_spv)
+                                               : std::span<const u32>(spv),
+                            instance.GetDevice());
     }
 
     if (!Shader::Backend::SPIRV::IsForcedShader(info.pgm_hash)) {
@@ -1420,6 +1448,7 @@ PipelineCache::Result PipelineCache::GetProgram(PipelineSelection& sel, HwStage 
             const u64 perm_hash = HashCombine(params.hash, perm_idx);
             auto new_info = Shader::Info(hw_stage, sw_stage, params);
             module = CompileModule(new_info, runtime_info, params.code, perm_idx, binding, pools);
+            info.split_workgroup = new_info.split_workgroup;
             fetch_shader = spec.fetch_shader_data;
 
             RegisterShaderMeta(info, spec.fetch_shader_data, spec, perm_hash, perm_idx);
@@ -1469,7 +1498,9 @@ bool PipelineCache::WorkerTranslate(PrepWorker& worker, HwStage hw_stage, SwStag
             auto new_info = Shader::Info(hw_stage, sw_stage, params);
             const auto module = CompileModule(new_info, runtime_info, params.code, perm_idx,
                                               local_binding, *worker.pools);
-            const auto& info = worker.infos.at(program);
+            auto& info = worker.infos.at(program);
+            info.split_workgroup = new_info.split_workgroup;
+            program->info.split_workgroup = new_info.split_workgroup;
             RegisterShaderMeta(info, spec->fetch_shader_data, *spec, perm_hash, perm_idx);
             std::unique_lock lk{programs_mutex};
             Shader::StageSpecialization stored{*spec};
