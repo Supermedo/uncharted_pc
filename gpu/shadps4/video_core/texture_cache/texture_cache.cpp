@@ -80,6 +80,9 @@ TextureCache::TextureCache(const Vulkan::Instance& instance_, Vulkan::Scheduler&
                                            static_cast<u64>(device_local_memory / 100 * percent));
     }
     trigger_gc_memory = static_cast<u64>((device_local_memory - mem_threshold) / 2);
+    base_trigger_gc_memory = trigger_gc_memory;
+    base_pressure_gc_memory = pressure_gc_memory;
+    base_critical_gc_memory = critical_gc_memory;
     // bbport: the marks in the log, so a player's log tells where eviction starts on that card.
     std::printf("Texture cache: VRAM budget %lld MiB; marks: collect %llu, pressure %llu, critical %llu MiB\n",
                 static_cast<long long>(device_local_memory >> 20),
@@ -1190,6 +1193,14 @@ void TextureCache::UntrackImageTail(ImageId image_id) {
     tracker.UpdatePageWatchers<false>(addr, size);
 }
 
+static bool LiveMarksOnBigCards() {
+    static const bool enabled = [] {
+        const char* env = std::getenv("BB_GC_LIVE_MARKS");
+        return !(env && env[0] == '0');
+    }();
+    return enabled;
+}
+
 void TextureCache::GarbageCollectImages() {
     bool urgent_pass = false;
     vmaSetCurrentFrameIndex(instance.GetAllocator(), static_cast<u32>(gc_tick));
@@ -1230,6 +1241,25 @@ void TextureCache::GarbageCollectImages() {
                 // An allocation just went over the budget: this pass is a critical one.
                 urgent_pass = true;
             }
+        } else if (!instance.IsIntegrated() && budget_now >= 8_GB && LiveMarksOnBigCards()) {
+            // bbport: cards of 8 GB and up. The startup marks keep 60% of up to 8 GB free and
+            // compare with everything the process holds, and buffers backing guest memory alone
+            // passed them (a 12 GB card: pressure at 5.3 GB, 5.3 GB used with 0.5 GB of images).
+            // Past the pressure mark images unused for 80 submissions (well under a second) went,
+            // thousands at a time, and came back as uploads: 60 -> 10 FPS drops in U3's London
+            // Underground (fork #6). The marks now never give images less room than the small-card
+            // rule does under the live budget; the startup marks stay the floor.
+            // BB_GC_LIVE_MARKS=0: the startup marks only (A/B).
+            const u64 budget = budget_now;
+            const u64 live_images = Vulkan::Vram::image_bytes.load(std::memory_order_relaxed);
+            const u64 images = std::min(live_images, total_used_memory);
+            const u64 others = total_used_memory - images;
+            const u64 limit = budget / 100 * 90;
+            u64 room = limit > others ? limit - others : 0;
+            room = std::max<u64>(room, std::max<u64>(512_MB, budget / 5));
+            trigger_gc_memory = std::max<u64>(base_trigger_gc_memory, others + room / 100 * 70);
+            pressure_gc_memory = std::max<u64>(base_pressure_gc_memory, others + room / 100 * 85);
+            critical_gc_memory = std::max<u64>(base_critical_gc_memory, others + room);
         }
         // bbport: on integrated GPUs (Steam Deck) the usage covers system-memory heaps holding
         // much more than images (buffers backing guest memory), and the startup budget left

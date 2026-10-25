@@ -433,6 +433,8 @@ private:
     u64 trigger_gc_memory = 0;
     u64 pressure_gc_memory = 0;
     u64 critical_gc_memory = 0;
+    /// bbport: the marks computed at startup (cards of 8 GB and up lift them from the live budget).
+    u64 base_trigger_gc_memory = 0, base_pressure_gc_memory = 0, base_critical_gc_memory = 0;
     u64 total_used_samplers = 0;
     u64 trigger_gc_samplers = 0;
     u64 pressure_gc_samplers = 0;
