@@ -25,6 +25,13 @@ EXECUTABLES = {'u1': 'eboot.bin', 'u2': 'big2-ps4_Shipping.elf', 'u3': 'big3-ps4
 LOADEXEC_EXIT = 101  # runtime_services.c: the game asked for another executable
 
 
+def brightness_fix_default(player_value, exe):
+    """BB_READBACK_SMALL_BUFFERS for exe: on for Uncharted 2 (Nepal's darkening flicker), else unset (None)."""
+    if player_value is not None:
+        return player_value
+    return '1' if exe == EXECUTABLES['u2'] else None
+
+
 def fail(message):
     print(message, file=sys.stderr)
     sys.exit(1)
@@ -208,6 +215,7 @@ def main():
     player_merge = env.get('BB_GPU_MERGE')
     player_tiny = env.get('BB_TINY_READBACK')
     player_copy = env.get('BB_SCALAR_COPY64_SYNC')
+    player_small = env.get('BB_READBACK_SMALL_BUFFERS')
     all_cheats = env.setdefault('BB_CHEATS_ALL', env.get('BB_CHEATS', ''))
     while True:
         if player_merge is None:
@@ -221,6 +229,11 @@ def main():
         if player_copy is None:
             env['BB_SCALAR_COPY64_SYNC'] = '2' if exe == EXECUTABLES['u2'] else '0'
             env['BB_SCALAR_COPY64_DEFER'] = '1' if exe == EXECUTABLES['u2'] else '0'
+        small = brightness_fix_default(player_small, exe)
+        if small is None:
+            env.pop('BB_READBACK_SMALL_BUFFERS', None)
+        else:
+            env['BB_READBACK_SMALL_BUFFERS'] = small
         game, file = locate(env, exe)
         if not game:
             fail('Set BB_GAME_DIR to the game folder (the one with eboot.bin).')
