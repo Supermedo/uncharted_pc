@@ -1,0 +1,29 @@
+From: iannitram <4624371+iannitram@users.noreply.github.com>
+Subject: [PATCH] ffx_vk: never pick a protected memory type unless asked for
+
+RADV lists device-local PROTECTED memory types after the plain ones on some
+GPUs (Ryzen Z1 Extreme / PHOENIX: types 7-10). findMemoryTypeIndex keeps the
+last match, so FSR 3.1 put its device-local resources in protected memory,
+which the device never enabled (VUID-VkMemoryAllocateInfo-memoryTypeIndex-01872):
+full-screen colour noise. Skip protected types like the coherent AMD ones.
+---
+diff --git a/upstream/ffx-1.1.4/sdk/src/backends/vk/ffx_vk.cpp b/upstream/ffx-1.1.4/sdk/src/backends/vk/ffx_vk.cpp
+index b2439b6..99a93f4 100644
+--- a/upstream/ffx-1.1.4/sdk/src/backends/vk/ffx_vk.cpp
++++ b/upstream/ffx-1.1.4/sdk/src/backends/vk/ffx_vk.cpp
+@@ -436,6 +437,15 @@ uint32_t findMemoryTypeIndex(
+             (memoryProperties & VK_MEMORY_PROPERTY_DEVICE_COHERENT_BIT_AMD))
+             continue;
+ 
++        // Protected memory types (VK_MEMORY_PROPERTY_PROTECTED_BIT) need the protectedMemory
++        // feature and protected command buffers; read from an ordinary command buffer they return
++        // garbage. RADV lists device-local protected types after the plain ones on some GPUs (Ryzen
++        // Z1 Extreme / PHOENIX: types 7-10), and this loop keeps the last match, so FSR's
++        // device-local resources landed in protected memory: full-screen noise (VUID-01872).
++        if ((memoryProperties & VK_MEMORY_PROPERTY_PROTECTED_BIT) &&
++            !(requestedProperties & VK_MEMORY_PROPERTY_PROTECTED_BIT))
++            continue;
++
+         if ((memRequirements.memoryTypeBits & (1u << i)) &&
+             (memoryProperties & requestedProperties) == requestedProperties) {
+ 
