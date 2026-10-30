@@ -208,6 +208,7 @@ def main():
     player_merge = env.get('BB_GPU_MERGE')
     player_tiny = env.get('BB_TINY_READBACK')
     player_copy = env.get('BB_SCALAR_COPY64_SYNC')
+    player_small = env.get('BB_READBACK_SMALL_BUFFERS')
     all_cheats = env.setdefault('BB_CHEATS_ALL', env.get('BB_CHEATS', ''))
     while True:
         if player_merge is None:
@@ -217,6 +218,10 @@ def main():
                 env.pop('BB_GPU_MERGE', None)
         if player_tiny is None:
             env['BB_TINY_READBACK'] = '1' if exe == EXECUTABLES['u2'] else '0'
+        # Uncharted 2's auto exposure flickers without small buffer readback. It costs too much
+        # in Uncharted 3 (see vk_rasterizer.cpp), so it stays Uncharted 2 only.
+        if player_small is None:
+            env['BB_READBACK_SMALL_BUFFERS'] = '1' if exe == EXECUTABLES['u2'] else '0'
         # Its mesh raycaster copies land in guest memory too (iSubMesh after checkpoints).
         if player_copy is None:
             env['BB_SCALAR_COPY64_SYNC'] = '2' if exe == EXECUTABLES['u2'] else '0'

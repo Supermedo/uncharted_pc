@@ -172,8 +172,8 @@ FIXES = {
         {'on': {'BB_TINY_READBACK': '1'}, 'off': {'BB_TINY_READBACK': '0'}}),
     'fix_small_buffers': (
         'Brightness flicker fix',
-        'Copies small GPU results back every frame (auto exposure). Automatic: off; it halved the frame '
-        'rate in Uncharted 3\'s Cartagena square.',
+        'Copies small GPU results back every frame (auto exposure). Automatic: on in Uncharted 2 only; '
+        'in Uncharted 3\'s Cartagena square it halved the frame rate.',
         {'on': {'BB_READBACK_SMALL_BUFFERS': '1'}, 'off': {'BB_READBACK_SMALL_BUFFERS': '0'}}),
     'fix_vram': (
         'Small video memory mode',
