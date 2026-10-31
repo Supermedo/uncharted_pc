@@ -50,6 +50,11 @@ jobs:
         run: |
           bash tools/fetch_fsr4_assets.sh
           bash packaging/windows/fetch_xess.sh
+      - name: Launcher icon (launcher/uncharted.png is generated, *.png is git-ignored)
+        run: |
+          python=$(cygpath -u '${{ steps.python.outputs.python-path }}')
+          "$python" -m pip install -q --disable-pip-version-check pillow
+          "$python" packaging/windows/make_uncharted_icon.py out/uncharted-ci.ico launcher/uncharted.png
       - name: Package
         run: WINPYTHON="$(cygpath -u '${{ steps.python.outputs.python-path }}')" bash packaging/windows/package.sh
       - uses: actions/upload-artifact@v4
