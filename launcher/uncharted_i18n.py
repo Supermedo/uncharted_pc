@@ -168,6 +168,10 @@ TRANSLATIONS = {
         'Área (promedio de píxeles)',
         'Bilinear (original)':
         'Bilineal (original)',
+        'Unlock all chapters':
+        'Desbloquear todos los capítulos',
+        'Debug access for playtesting; recorded chapter progress is unchanged.':
+        'Acceso de depuración para pruebas; el progreso registrado de los capítulos no cambia.',
     },
     'pt': {
         'Aim interpolation (ms)':
@@ -310,6 +314,10 @@ TRANSLATIONS = {
         'Área (média de pixels)',
         'Bilinear (original)':
         'Bilinear (original)',
+        'Unlock all chapters':
+        'Desbloquear todos os capítulos',
+        'Debug access for playtesting; recorded chapter progress is unchanged.':
+        'Acesso de depuração para testes; o progresso registrado dos capítulos permanece inalterado.',
     },
     'fr': {
         'Aim interpolation (ms)':
@@ -452,6 +460,10 @@ TRANSLATIONS = {
         'Aire (moyenne des pixels)',
         'Bilinear (original)':
         'Bilinéaire (original)',
+        'Unlock all chapters':
+        'Déverrouiller tous les chapitres',
+        'Debug access for playtesting; recorded chapter progress is unchanged.':
+        'Accès de débogage pour les tests ; la progression enregistrée des chapitres reste inchangée.',
     },
 }
 

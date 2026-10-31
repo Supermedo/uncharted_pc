@@ -202,6 +202,7 @@ APP_DEFAULTS = {'game_dir': '', 'game_dir_u1': '', 'game_dir_u2': '', 'game_dir_
                 'window_size': '1920x1080', 'render_height': '1080', 'aspect': '16:9', 'speakers': 'auto', 'scaler': 'fsr1', 'sharpening': '500',
                 'downsample_filter': 'lanczos2', 'anti_aliasing': 'off', 'aa_sharpness': '0.2', 'frame_generation': 'off',
                 'frame_gen_multiplier': '2', 'extra_env': '', 'close_on_play': False, 'skip_intro': True,
+                'unlock_chapters': False,
                 'pc_mouse_aim': True, 'mouse_aim_sensitivity': '1.0', 'mouse_aim_smoothing_ms': '20',
                 'mouse_look': True, 'mouse_sensitivity': '1.0', 'mouse_invert_y': False,
                 'pad_invert_y': False, 'art_banner': '', 'art_u1': '', 'art_u2': '', 'art_u3': '', 'steam_art': '', 'art_crops': {}, 'shortcut_name': 'Uncharted: The Nathan Drake Collection', 'shortcut_icon': '', 'trophy_game': 'u1', 'pad_vibration': True, 'pad_vibration_strength': '100', 'button_prompts': 'auto', 'key_bindings': {}, 'pad_bindings': {}, 'check_updates': True,
@@ -541,8 +542,10 @@ def game_environment(s, start=None):
     for key, (_title, _hint, choices) in FIXES.items():
         env.update(choices.get(str(s.get(key) or 'auto'), {}))
     env['BB_BUTTON_PROMPTS'] = str(s.get('button_prompts') or 'auto')
-    env['BB_CHEATS'] = ','.join(f'{game}:{cheat}' for game, _t, _s, _e in GAMES for cheat in ('health', 'ammo')
-                                if s.get(f'{game}_infinite_{cheat}'))
+    enabled_cheats = [f'{game}:{cheat}' for game, _t, _s, _e in GAMES for cheat in ('health', 'ammo')
+                      if s.get(f'{game}_infinite_{cheat}')]
+    enabled_cheats += [f'{game}:chapters' for game, _t, _s, _e in GAMES if s.get('unlock_chapters')]
+    env['BB_CHEATS'] = ','.join(enabled_cheats)
     for item in str(s['extra_env']).split():
         if '=' in item:
             key, value = item.split('=', 1)
@@ -1358,6 +1361,8 @@ class Launcher:
         self.check(f, 'skip_intro', _('Skip intro logos'))
         self.note(f, _('Skips the opening Sony/Naughty Dog and Bluepoint logo videos. Story cutscenes '
                        'are preserved.'), top=2)
+        self.check(f, 'unlock_chapters', _('Unlock all chapters'),
+                   _('Debug access for playtesting; recorded chapter progress is unchanged.'))
         self.section(f, _('Separate game folders'))
         self.note(f, _('Only when the games are not in one collection folder (each dumped on its own). A game with '
                        'a folder here is taken from it; the others from the collection folder above.'), top=2)

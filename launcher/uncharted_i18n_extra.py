@@ -127,6 +127,10 @@ EXTRA_TRANSLATIONS = {
         'Fläche (Pixelmittelung)',
         'Bilinear (original)':
         'Bilinear (Original)',
+        'Unlock all chapters':
+        'Alle Kapitel freischalten',
+        'Debug access for playtesting; recorded chapter progress is unchanged.':
+        'Debug-Zugriff zum Testen; der gespeicherte Kapitelfortschritt bleibt unverändert.',
     },
     'it': {
         'Aim interpolation (ms)':
@@ -253,6 +257,10 @@ EXTRA_TRANSLATIONS = {
         'Area (media dei pixel)',
         'Bilinear (original)':
         'Bilineare (originale)',
+        'Unlock all chapters':
+        'Sblocca tutti i capitoli',
+        'Debug access for playtesting; recorded chapter progress is unchanged.':
+        'Accesso di debug per i test; i progressi registrati dei capitoli rimangono invariati.',
     },
     'ja': {
         'Aim interpolation (ms)':
@@ -379,5 +387,9 @@ EXTRA_TRANSLATIONS = {
         '面積平均（ピクセル平均）',
         'Bilinear (original)':
         'バイリニア（従来）',
+        'Unlock all chapters':
+        '全チャプターを解放',
+        'Debug access for playtesting; recorded chapter progress is unchanged.':
+        '動作テスト用のデバッグ機能です。記録済みのチャプター進行状況は変わりません。',
     },
 }
