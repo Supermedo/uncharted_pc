@@ -11,6 +11,7 @@ LANGUAGES = [
     ('es', 'Español'),
     ('pt', 'Português'),
     ('fr', 'Français'),
+    ('ru', 'Русский'),
     ('de', 'Deutsch'),
     ('it', 'Italiano'),
     ('ja', '日本語'),
@@ -22,6 +23,7 @@ def language_code(value=''):
         return value
     current = locale.getlocale()[0] or 'en'
     code = current.split('_', 1)[0].lower()
+    code = {'russian': 'ru', 'french': 'fr'}.get(code, code)
     return code if code in TRANSLATIONS else 'en'
 
 
@@ -372,7 +374,9 @@ TRANSLATIONS = {
 }
 
 for _code, _translations in EXTRA_TRANSLATIONS.items():
-    TRANSLATIONS[_code] = {**shared_translations(_code), **_translations}
+    TRANSLATIONS[_code] = {
+        **shared_translations(_code), **TRANSLATIONS.get(_code, {}), **_translations,
+    }
 
 
 def translate(language, text):
