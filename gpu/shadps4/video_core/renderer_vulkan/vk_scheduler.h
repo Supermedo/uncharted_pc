@@ -845,7 +845,10 @@ public:
     /// it to the copy threads' completion (BbCopy::AfterCopies).
     /// `landing_seq`: the deferred raycaster copies up to it (landing_gate.h) land before the
     /// signal runs.
-    void SignalAfterHostCopies(std::function<void()> signal, u64 landing_seq = 0);
+    /// `off_recorder`: when deferred, `signal` runs on the landing thread, never on the
+    /// recording thread or a copy thread (LandingGate::Post): for the flip interrupt.
+    void SignalAfterHostCopies(std::function<void()> signal, u64 landing_seq = 0,
+                               bool off_recorder = false);
 
     /// bbport: before a guest-visible write that is not deferred (WriteData, end-of-shader
     /// fences, flip): waits until every signal handed to SignalAfterHostCopies ran, so that

@@ -119,7 +119,8 @@ public:
     u64 PendingLanding() const;
     bool LandingGateActive() const;
     void WaitLanding(u64 seq);
-    void RunAfterLanding(u64 seq, std::function<void()> fn);
+    /// `off_caller`: never runs `fn` on the calling thread (LandingGate::Post).
+    void RunAfterLanding(u64 seq, std::function<void()> fn, bool off_caller = false);
     /// Ends the landing thread: nothing more is deferred, every wait on it lets go, what is
     /// pending is dropped (~BufferCache; idempotent).
     void StopLanding();

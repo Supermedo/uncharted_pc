@@ -238,7 +238,8 @@ std::unique_ptr<RecordChunk> Scheduler::AcquireChunk() {
     return chunk;
 }
 
-void Scheduler::SignalAfterHostCopies(std::function<void()> signal, u64 landing_seq) {
+void Scheduler::SignalAfterHostCopies(std::function<void()> signal, u64 landing_seq,
+                                      bool off_recorder) {
     if (!IsRecordingDeferred()) {
         WaitHostCopies();
         if (VideoCore::LandingGate::Active()) {
@@ -250,16 +251,21 @@ void Scheduler::SignalAfterHostCopies(std::function<void()> signal, u64 landing_
     }
     BbCopy::FlushBatch();
     deferred_signals_issued.fetch_add(1, std::memory_order_relaxed);
-    Record([signal = std::move(signal), done = deferred_signals_done,
-            landing_seq](vk::CommandBuffer) mutable {
-        BbCopy::AfterCopies([signal = std::move(signal), done = std::move(done), landing_seq] {
+    Record([signal = std::move(signal), done = deferred_signals_done, landing_seq,
+            off_recorder](vk::CommandBuffer) mutable {
+        BbCopy::AfterCopies([signal = std::move(signal), done = std::move(done), landing_seq,
+                             off_recorder] {
             auto fire = [signal = std::move(signal), done = std::move(done)] {
                 signal();
                 done->fetch_add(1, std::memory_order_release);
             };
             // A signal behind deferred raycaster copies waits for them on the landing thread:
             // this thread must not block (submissions wait for the copy threads).
-            VideoCore::LandingGate::Run(landing_seq, std::move(fire));
+            if (off_recorder) {
+                VideoCore::LandingGate::Post(landing_seq, std::move(fire));
+            } else {
+                VideoCore::LandingGate::Run(landing_seq, std::move(fire));
+            }
         });
     });
     KickRecording(true);

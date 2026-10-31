@@ -631,13 +631,26 @@ void BufferCache::WaitLanding(u64 seq) {
     }
 }
 
-void BufferCache::RunAfterLanding(u64 seq, std::function<void()> fn) {
+void BufferCache::RunAfterLanding(u64 seq, std::function<void()> fn, bool off_caller) {
     {
         std::unique_lock lk{landing_mutex};
-        if (landing_stop || (seq <= landing_done_seq && gated_labels.empty() && !gate_running)) {
+        const bool ready = seq <= landing_done_seq && gated_labels.empty() && !gate_running;
+        if (landing_stop || (ready && !off_caller)) {
             lk.unlock();
             fn();
             return;
+        }
+        if (ready) {
+            // Inline here it would have run on the Vulkan recording (or a copy) thread: an EOP
+            // flip there waits in Scheduler::SyncRecording() for the recording thread itself,
+            // and the game hangs (image frozen, sound going on) at the start of a cutscene.
+            static std::atomic<u64> moved{0};
+            const u64 count = moved.fetch_add(1, std::memory_order_relaxed) + 1;
+            if (count <= 3 || count % 1000 == 0) {
+                std::printf("Landing: a flip ready on the recording or a copy thread runs on the "
+                            "landing thread instead (%llu so far)\n",
+                            static_cast<unsigned long long>(count));
+            }
         }
         gated_labels.push_back({seq, std::move(fn)});
         gate_outstanding.fetch_add(1, std::memory_order_release);
@@ -664,6 +677,13 @@ void Run(u64 seq, std::function<void()> fn) {
         cache->RunAfterLanding(seq, std::move(fn));
     } else {
         fn();
+    }
+}
+void Post(u64 seq, std::function<void()> fn) {
+    if (auto* cache = land_instance.load(std::memory_order_acquire)) {
+        cache->RunAfterLanding(seq, std::move(fn), true);
+    } else {
+        fn(); // shutting down: no landing thread any more (as Run)
     }
 }
 bool Stopped() {
