@@ -368,8 +368,8 @@ static ABI int32_t thread_get_prio(GuestThread *t,int *prio) {
  * the GPU command thread on CPUs with few cores). Off by default since 0.3.11: the 4-core
  * cmdBuf.m_bInUse crash they were for is fixed by the job wait patch (probe.c), and with them on it
  * was only rarer (Mevlock). BB_THREAD_PRIO=1 turns them on. */
-static int host_priority(int prio) {
 #ifdef _WIN32
+static int host_priority(int prio) {
     static int enabled=-1;
     if (enabled<0) { const char *env=getenv("BB_THREAD_PRIO"); enabled=env && env[0]=='1'; }
     if (!enabled) return THREAD_PRIORITY_NORMAL;
@@ -377,10 +377,8 @@ static int host_priority(int prio) {
     if (prio<720) return THREAD_PRIORITY_NORMAL;
     if (prio<0x2f0) return THREAD_PRIORITY_BELOW_NORMAL;
     return THREAD_PRIORITY_LOWEST;
-#else
-    (void)prio; return 0;
-#endif
 }
+#endif
 static void apply_priority(GuestThread *t,int current_thread) {
 #ifdef _WIN32
     if (t->finished) return;
