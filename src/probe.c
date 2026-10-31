@@ -752,10 +752,13 @@ static void install_game_callbacks(Segment *segments, uint64_t ns, uint64_t imag
     const RuntimeGuestCallback *callbacks=runtime_guest_callbacks(&count);
     unsigned char *thunks=NULL;
     size_t used=0;
-    uint8_t installed[32]={0};
-    uint64_t hook_offsets[32]; size_t hooks_done=0;
+    /* Sized from the table, so no entry is dropped for room (a fixed 32 used to cut the table's end
+     * without a word, and 8 KiB of thunks about 25 hooks). */
+    const size_t thunk_bytes=(count ? count : 1)*320;
+    uint8_t installed[count ? count : 1];
+    uint64_t hook_offsets[count ? count : 1]; size_t hooks_done=0;
+    memset(installed,0,sizeof(installed));
     guest_image_size=image_size;
-    if (count>sizeof(installed)) count=sizeof(installed);
     /* A/B tests: BB_CALLBACKS=0 installs none, BB_CALLBACKS_SKIP=<text> none whose name contains the text */
     const char *off=getenv("BB_CALLBACKS"), *skip=getenv("BB_CALLBACKS_SKIP");
     if (off && off[0]=='0') { printf("Callbacks: disabled (BB_CALLBACKS=0)\n"); return; }
@@ -770,15 +773,18 @@ static void install_game_callbacks(Segment *segments, uint64_t ns, uint64_t imag
         int hooked=0;
         for (size_t j=0;j<hooks_done;++j) if (hook_offsets[j]==offset) hooked=1;
         if (hooked) continue;                                          /* an earlier entry took this site */
-        if (hooks_done<sizeof(hook_offsets)/sizeof(*hook_offsets)) hook_offsets[hooks_done++]=offset;
+        hook_offsets[hooks_done++]=offset;
         if (!c->callback) {
             memcpy(image+offset,c->patch,c->moved);
             installed[i]=1;
             printf("Callbacks: %s at %#" PRIx64 " (patch)\n",c->name,offset);
             continue;
         }
-        if (!thunks && !(thunks=near_image_memory(8192))) { printf("Callbacks: no thunk memory\n"); return; }
-        if (used+320>8192) break;
+        if (!thunks && !(thunks=near_image_memory(thunk_bytes))) {
+            printf("Callbacks: no thunk memory near the image: %s and the ones after it not installed\n",c->name);
+            return;
+        }
+        if (used+320>thunk_bytes) { printf("Callbacks: thunk memory full at %s, the rest not installed\n",c->name); break; }
         unsigned char *t=thunks+used, *f=image+offset;
         size_t k=0;
         /* pushfq; push rax rcx rdx r8-r11 rbx r12 r13 r15 (the RuntimeGuestRegs block); mov rbx, rsp;
