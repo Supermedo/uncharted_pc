@@ -111,6 +111,46 @@ static void test_mouse_aim(void) {
     aim_pending[0]=aim_pending[1]=0;
 }
 
+static void test_direct_u1(void) {
+    const size_t size=0x150000;
+#ifdef _WIN32
+    unsigned char *image=VirtualAlloc(NULL,size,MEM_COMMIT|MEM_RESERVE,PAGE_EXECUTE_READWRITE);
+#else
+    unsigned char *image=mmap(NULL,size,PROT_READ|PROT_WRITE|PROT_EXEC,MAP_PRIVATE|MAP_ANONYMOUS,-1,0);
+    assert(image!=MAP_FAILED);
+#endif
+    assert(image);
+    /* A guarded SysV callee records the selection and counts calls. */
+    const unsigned char code[]={0x55,0x48,0x89,0xe5,0x53,0x48,0x83,0xec,0x28,
+        0xff,0x07,0x89,0x77,0x04,0x48,0x83,0xc4,0x28,0x5b,0x5d,0xc3};
+    memcpy(image+0x14e260,code,sizeof(code));
+    uint32_t menu[2]={0,0xffffffff};
+    RuntimeGuestRegs regs={0};
+    regs.rdx=1;
+    set_env("BB_DIRECT_U1_ACTIVE","0");
+    u1_frontend_update((uintptr_t)menu,0,(uintptr_t)image,0,&regs);
+    assert(menu[0]==0);
+    set_env("BB_DIRECT_U1_ACTIVE","1");
+    regs.rdx=0;
+    u1_frontend_update((uintptr_t)menu,0,(uintptr_t)image,0,&regs);
+    assert(menu[0]==0);
+    regs.rdx=1;
+    u1_frontend_update((uintptr_t)menu,0,(uintptr_t)image,0,&regs);
+    assert(menu[0]==1 && menu[1]==0);
+    u1_frontend_update((uintptr_t)menu,0,(uintptr_t)image,0,&regs);
+    assert(menu[0]==1);
+    u1_direct_done=0;
+    image[0x14e260]=0x90;
+    u1_frontend_update((uintptr_t)menu,0,(uintptr_t)image,0,&regs);
+    assert(menu[0]==1);
+    set_env("BB_DIRECT_U1_ACTIVE","0");
+#ifdef _WIN32
+    assert(VirtualFree(image,0,MEM_RELEASE));
+#else
+    assert(munmap(image,size)==0);
+#endif
+}
+
 static void test_u3_intro_skip(void) {
     assert(u3_intro_logo("/app0/shareddata/movies/ps4/sce-ndi-logos.bsf"));
     assert(u3_intro_logo("bp-logos.bsf"));
@@ -159,10 +199,10 @@ static void test_u3_intro_skip(void) {
 #endif
 }
 
-
 int main(void) {
-    test_u3_intro_skip();
     test_mouse_aim();
+    test_direct_u1();
+    test_u3_intro_skip();
     char path[]="bbport-pad-test-XXXXXX";
     int fd=mkstemp(path);
     assert(fd>=0);

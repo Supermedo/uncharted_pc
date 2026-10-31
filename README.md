@@ -6,7 +6,7 @@ Same idea as my [Bloodborne port](https://github.com/Supermedo/bloodborne_pc): t
 code runs directly on your PC and the graphics are translated to Vulkan. Unpack the zip, start
 `Uncharted.exe`, pick your game folder, choose a game and press **PLAY**.
 
-**[Download the latest version](https://github.com/Supermedo/uncharted_pc/releases/latest)** Â· **[Join the Discord](https://discord.gg/s3RgH6cRfJ)**
+**[Download the latest version](https://github.com/Supermedo/uncharted_pc/releases/latest)** · **[Join the Discord](https://discord.gg/s3RgH6cRfJ)**
 
 > **No game files are included.** You need your own decrypted dump of the collection
 > (CUSA02343, CUSA02320, ...: the folder with eboot.bin, big2-ps4_Shipping.elf,

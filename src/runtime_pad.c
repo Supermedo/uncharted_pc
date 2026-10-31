@@ -742,6 +742,29 @@ static void __attribute__((ms_abi)) u3_movie_update(uint64_t player, uint64_t un
     ((SkipMovie)(uintptr_t)target)(player,1);
     printf("Intro skip: U3 native logo skip requested for %s\n",path);
 }
+/* CUSA02344 1.02 collection frontend, operation 1: select Drake's Fortune once.
+ * run.py enables this only on the initial launch of a hash-verified U1 image.
+ * Complete the native selection task; starting that task does not leave the selector. */
+static int u1_direct_done;
+static void __attribute__((ms_abi)) u1_frontend_update(uint64_t menu, uint64_t unused, uint64_t image,
+                                                       uint64_t r14, const RuntimeGuestRegs *regs) {
+    (void)unused; (void)r14;
+    if (u1_direct_done || regs->rdx!=1) return;
+    const char *enabled=getenv("BB_DIRECT_U1_ACTIVE");
+    if (!enabled || strcmp(enabled,"1")) return;
+    u1_direct_done=1;
+    unsigned char *target=(unsigned char *)(uintptr_t)(image+0x14e260);
+    static const unsigned char guard[]={0x55,0x48,0x89,0xe5,0x53,0x48,0x83,0xec,0x28};
+    if (memcmp(target,guard,sizeof(guard))) {
+        puts("Direct U1: selection function guard failed; collection menu retained");
+        return;
+    }
+    /* The compiler supplies the host -> guest SysV ABI bridge, including the
+     * Win64 nonvolatile RDI/RSI and XMM6..15 registers. No generated host code. */
+    typedef void (ABI *SelectGame)(uint64_t menu, int game);
+    ((SelectGame)(uintptr_t)target)(menu,0);
+    puts("Direct U1: selected Drake's Fortune");
+}
 /* Render command contexts (ndgi), from Mevlock's dev fork: Begin and End keep a per-thread flag,
  * set while a job worker has a context open (runtime_ndgi_open, cleared too when a fiber leaves
  * the thread, runtime_fiber.c), used by the job wait patch in probe.c. A context records its
@@ -765,6 +788,10 @@ static const RuntimeGuestCallback guest_callbacks[]={
     {"U3 logo playback",
       "55 48 89 e5 41 57 41 56 41 55 41 54 53 48 81 e4 e0 ff ff ff 48 81 ec 40 03 00 00 49 89 fc 4c 8d",
       0, 6, u3_movie_update, NULL},
+    {"U1 direct collection selection",
+      "55 48 89 e5 41 57 41 56 41 55 41 54 53 48 81 ec 08 03 00 00 "
+      "41 89 d7 49 89 fd 48 8b 1d ef f1 7f",
+      0, 6, u1_frontend_update, NULL},
     /* Active aiming3 cameras, CUSA02344 1.02. Install in address order: a later
      * context must not contain an instruction already replaced by an earlier hook. */
     {"U1 aiming camera pitch (mouse)",

@@ -157,9 +157,10 @@ def game_res(env, extra_memory_mib=0, arena64=False):
 
 def startup_arguments(env, exe, out_root, inherited=None):
     """Add the native logo-skip argument, preserving LoadExec's argv convention."""
-    if env.get('BB_SKIP_INTRO', '1') != '1':
-        return inherited
-    if exe not in (EXECUTABLES['u1'], EXECUTABLES['u2']):
+    supported = exe in (EXECUTABLES['u1'], EXECUTABLES['u2'])
+    skip = env.get('BB_SKIP_INTRO', '1') == '1'
+    direct = not inherited and exe == EXECUTABLES['u1'] and env.get('BB_DIRECT_U1_ACTIVE') == '1'
+    if not (skip and supported) and not direct:
         return inherited
     # probe.c removes line zero (the LoadExec target) when more arguments follow.
     # Line one is argv[0]; an option must not occupy that slot.
@@ -167,8 +168,10 @@ def startup_arguments(env, exe, out_root, inherited=None):
              else [f'/app0/{exe}', 'eboot.bin'])
     if len(lines) < 2:
         lines.append('eboot.bin')
-    if 'bp_skipintromovie' not in lines[2:]:
+    if skip and supported and 'bp_skipintromovie' not in lines[2:]:
         lines.append('bp_skipintromovie')
+    if direct and 'ispartofuccollection' not in lines[2:]:
+        lines.append('ispartofuccollection')
     path = out_root / 'startup-argv.txt'
     path.write_text('\n'.join(lines) + '\n', encoding='utf-8')
     return path
@@ -264,6 +267,9 @@ def main():
         out = out_root / Path(exe).stem.split('-')[0]
         prepare(game, file, out)
         memory = json.loads((out / 'arena64.json').read_text(encoding='utf-8'))
+        env['BB_DIRECT_U1_ACTIVE'] = ('1' if guest_argv is None and exe == EXECUTABLES['u1']
+                                      and memory.get('supported')
+                                      and memory.get('executable') == EXECUTABLES['u1'] else '0')
         extra_memory = memory.get('movie_cpu_backing_extra_mib', 0)
         game_res(env, extra_memory, memory.get('supported', False))
         if extra_memory:

@@ -45,6 +45,17 @@ class StartupTests(unittest.TestCase):
         self.assertIsNone(self.arguments({'BB_SKIP_INTRO': '0'}, 'eboot.bin'))
         self.assertIsNone(self.arguments({}, 'big3-ps4_Shipping.elf'))
 
+    def test_direct_selection_is_independent_of_intro_skip(self):
+        env = {'BB_SKIP_INTRO': '0', 'BB_DIRECT_U1_ACTIVE': '1'}
+        self.assertEqual(self.arguments(env, 'eboot.bin'),
+                         ['/app0/eboot.bin', 'eboot.bin', 'ispartofuccollection'])
+        self.assertIsNone(self.arguments(env, 'big2-ps4_Shipping.elf'))
+
+    def test_direct_selection_does_not_change_loadexec_route(self):
+        original = ['/app0/eboot.bin', 'eboot.bin', 'level=test']
+        env = {'BB_SKIP_INTRO': '0', 'BB_DIRECT_U1_ACTIVE': '1'}
+        self.assertEqual(self.arguments(env, 'eboot.bin', original), original)
+
 
 if __name__ == '__main__':
     unittest.main()
