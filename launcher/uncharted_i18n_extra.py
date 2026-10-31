@@ -3,6 +3,10 @@
 
 EXTRA_TRANSLATIONS = {
     'de': {
+        'Aim interpolation (ms)':
+        'Zielinterpolation (ms)',
+        'Moves smoothly toward the requested angle. 0 applies mouse motion immediately; higher values add delay.':
+        'Bewegt sich gleichmäßig zum gewünschten Winkel. 0 setzt Mausbewegungen sofort um; höhere Werte erhöhen die Verzögerung.',
         'AMD RCAS after FSR 1 (only while the image is enlarged).':
         'AMD RCAS nach FSR 1 (nur wenn das Bild vergrößert wird).',
         'Anti-aliasing': 'Kantenglättung',
@@ -101,6 +105,10 @@ EXTRA_TRANSLATIONS = {
         'version {}': 'Version {}',
     },
     'it': {
+        'Aim interpolation (ms)':
+        'Interpolazione della mira (ms)',
+        'Moves smoothly toward the requested angle. 0 applies mouse motion immediately; higher values add delay.':
+        'Si sposta gradualmente verso l’angolo richiesto. 0 applica immediatamente il movimento del mouse; valori più alti aggiungono ritardo.',
         'AMD RCAS after FSR 1 (only while the image is enlarged).':
         "AMD RCAS dopo FSR 1 (solo quando l'immagine viene ingrandita).",
         'Anti-aliasing': 'Antialiasing',
@@ -199,6 +207,10 @@ EXTRA_TRANSLATIONS = {
         'version {}': 'versione {}',
     },
     'ja': {
+        'Aim interpolation (ms)':
+        '照準の補間（ミリ秒）',
+        'Moves smoothly toward the requested angle. 0 applies mouse motion immediately; higher values add delay.':
+        '指定された角度へ滑らかに移動します。0ではマウスの動きを即座に反映し、値を上げると遅延が増えます。',
         'AMD RCAS after FSR 1 (only while the image is enlarged).':
         'FSR 1 適用後の AMD RCAS（画像を拡大する場合のみ）。',
         'Anti-aliasing': 'アンチエイリアス',

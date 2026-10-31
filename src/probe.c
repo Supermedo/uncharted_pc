@@ -750,12 +750,14 @@ static size_t find_pattern(Segment *segments, uint64_t ns, const char *pattern, 
 static void install_game_callbacks(Segment *segments, uint64_t ns, uint64_t image_size) {
     size_t count=0;
     const RuntimeGuestCallback *callbacks=runtime_guest_callbacks(&count);
+    if (!count) return;
     unsigned char *thunks=NULL;
     size_t used=0;
-    uint8_t installed[32]={0};
-    uint64_t hook_offsets[32]; size_t hooks_done=0;
+    uint8_t installed[count];
+    memset(installed,0,sizeof(installed));
+    uint64_t hook_offsets[count]; size_t hooks_done=0;
+    const size_t thunk_size=count*320;
     guest_image_size=image_size;
-    if (count>sizeof(installed)) count=sizeof(installed);
     /* A/B tests: BB_CALLBACKS=0 installs none, BB_CALLBACKS_SKIP=<text> none whose name contains the text */
     const char *off=getenv("BB_CALLBACKS"), *skip=getenv("BB_CALLBACKS_SKIP");
     if (off && off[0]=='0') { printf("Callbacks: disabled (BB_CALLBACKS=0)\n"); return; }
@@ -777,8 +779,8 @@ static void install_game_callbacks(Segment *segments, uint64_t ns, uint64_t imag
             printf("Callbacks: %s at %#" PRIx64 " (patch)\n",c->name,offset);
             continue;
         }
-        if (!thunks && !(thunks=near_image_memory(8192))) { printf("Callbacks: no thunk memory\n"); return; }
-        if (used+320>8192) break;
+        if (!thunks && !(thunks=near_image_memory(thunk_size))) { printf("Callbacks: no thunk memory\n"); return; }
+        if (used+320>thunk_size) break;
         unsigned char *t=thunks+used, *f=image+offset;
         size_t k=0;
         /* pushfq; push rax rcx rdx r8-r11 rbx r12 r13 r15 (the RuntimeGuestRegs block); mov rbx, rsp;

@@ -22,6 +22,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <pthread.h>
+#include <math.h>
+#include "mouse_aim_filter.h"
 #include <time.h>
 #include <SDL3/SDL.h>
 #include <sys/stat.h>
@@ -488,6 +490,91 @@ static void __attribute__((ms_abi)) u1_pad_update(uint64_t state, uint64_t unuse
                (unsigned long long)image,(unsigned long long)(state-image));
     joypad_state=state;
 }
+/* The 1.02 aiming3 cameras consume per-frame angles after the stick's speed curve.
+ * Give only mouse displacement to those sites; leave the physical stick intact.
+ * Both hooks must have run recently, otherwise unknown cameras retain mouse_sticks. */
+static uint64_t aim_hook_us[2], aim_motion_us;
+static float aim_pending[2];
+static int aim_game, aim_direct=-1;
+static float aim_multiplier=1.0f, aim_smoothing_ms=20.0f;
+static MouseAimFilter aim_filter[2];
+static int direct_aim_enabled(void) {
+    if (aim_direct<0) {
+        const char *on=getenv("BB_PC_MOUSE_AIM"), *scale=getenv("BB_MOUSE_AIM_SENSITIVITY");
+        aim_direct=!on || strcmp(on,"0");
+        const char *smooth=getenv("BB_MOUSE_AIM_SMOOTH_MS");
+        if (smooth) {
+            const float value=(float)atof(smooth);
+            if (isfinite(value) && value>=0.0f && value<=40.0f) aim_smoothing_ms=value;
+        }
+        if (scale) {
+            const float value=(float)atof(scale);
+            if (isfinite(value) && value>=0.01f && value<=10.0f) aim_multiplier=value;
+        }
+    }
+    return aim_direct && input.mouse_look;
+}
+static int direct_aim_capture(uint64_t now, float dx, float dy) {
+    if (!direct_aim_enabled()) return 0;
+    pthread_mutex_lock(&camera_lock);
+    const int active=aim_held && aim_hook_us[0] && aim_hook_us[1] &&
+                     now-aim_hook_us[0]<100000 && now-aim_hook_us[1]<100000;
+    if (active) {
+        if (now-aim_motion_us>100000) aim_pending[0]=aim_pending[1]=0.0f;
+        const float scale=input.mouse_sensitivity*aim_multiplier;
+        if (isfinite(dx) && isfinite(dy) && isfinite(scale)) {
+            aim_pending[0]+=dx*scale;
+            aim_pending[1]+=(input.mouse_invert_y ? -dy : dy)*scale;
+            aim_motion_us=now;
+        }
+    } else {
+        aim_pending[0]=aim_pending[1]=0.0f;
+        mouse_aim_filter_reset(&aim_filter[0]);
+        mouse_aim_filter_reset(&aim_filter[1]);
+    }
+    pthread_mutex_unlock(&camera_lock);
+    return active;
+}
+static void mouse_aim_rotation(int game, int axis, const RuntimeGuestRegs *regs) {
+    if (!direct_aim_enabled()) return;
+    const uint64_t now=now_us();
+    pthread_mutex_lock(&camera_lock);
+    if (aim_game!=game) {
+        aim_pending[0]=aim_pending[1]=0.0f;
+        aim_hook_us[0]=aim_hook_us[1]=0;
+        aim_game=game;
+        mouse_aim_filter_reset(&aim_filter[0]);
+        mouse_aim_filter_reset(&aim_filter[1]);
+    }
+    aim_hook_us[axis]=now;
+    const int active=aim_held && (now-aim_motion_us<100000 || aim_filter[axis].remaining!=0);
+    if (!active) mouse_aim_filter_reset(&aim_filter[axis]);
+    const float pixels=active ? mouse_aim_filter_step(&aim_filter[axis], aim_pending[axis], now, aim_smoothing_ms) : 0.0f;
+    aim_pending[axis]=0.0f;
+    pthread_mutex_unlock(&camera_lock);
+    if (!pixels) return;
+    /* probe.c saves XMM0..7 at align_down(saved GPR stack,16)-0x80.
+     * Writing the saved scalar changes the value restored before the moved instruction. */
+    float *value=(float *)(((uintptr_t)regs & ~(uintptr_t)15)-0x80+axis*16);
+    const float degrees=pixels*MOUSE_DEGREES_PER_PIXEL;
+    if (axis) *value+=degrees;
+    else {
+        /* Rightward motion decreases yaw: U1 half-angle radians, U2 degrees, U3 radians. */
+        const float unit=game==1 ? 0.00872664626f : game==2 ? 1.0f : 0.01745329252f;
+        *value-=degrees*unit;
+    }
+}
+#define AIM_CALLBACK(name,game,axis) \
+static void __attribute__((ms_abi)) name(uint64_t rdi, uint64_t rsi, uint64_t image, uint64_t r14, const RuntimeGuestRegs *regs) { \
+    (void)rdi; (void)rsi; (void)image; (void)r14; mouse_aim_rotation(game,axis,regs); \
+}
+AIM_CALLBACK(u1_aim_yaw,1,0)
+AIM_CALLBACK(u1_aim_pitch,1,1)
+AIM_CALLBACK(u2_aim_yaw,2,0)
+AIM_CALLBACK(u2_aim_pitch,2,1)
+AIM_CALLBACK(u3_aim_yaw,3,0)
+AIM_CALLBACK(u3_aim_pitch,3,1)
+#undef AIM_CALLBACK
 /* The mouse as a right stick value in a float joypad state (lx ly rx ry at +0 and again at +0x10),
  * called once a frame by the hook of the game's pad update for pad 0. */
 static void mouse_sticks(float *pad, const AimCurve *aim) {
@@ -507,6 +594,7 @@ static void mouse_sticks(float *pad, const AimCurve *aim) {
     static int cal=-1;                /* BB_MOUSE_CAL=<pixels/s per stick unit>: the mouse is a raw stick value (measuring) */
     static float cal_scale;
     if (cal<0) { const char *t=getenv("BB_MOUSE_CAL"); cal_scale=t ? (float)atof(t) : 0.0f; cal=cal_scale>0.0f; }
+    if (!cal && aim_test<=0.0f && direct_aim_capture(now,dx,dy)) dx=dy=0.0f;
     if (cal) { x=dx/dt/cal_scale; y=dy/dt/cal_scale; }
     else if (aim_test>0.0f) x=aim_test;
     else {
@@ -677,6 +765,27 @@ static const RuntimeGuestCallback guest_callbacks[]={
     {"U3 logo playback",
       "55 48 89 e5 41 57 41 56 41 55 41 54 53 48 81 e4 e0 ff ff ff 48 81 ec 40 03 00 00 49 89 fc 4c 8d",
       0, 6, u3_movie_update, NULL},
+    /* Active aiming3 cameras, CUSA02344 1.02. Install in address order: a later
+     * context must not contain an instruction already replaced by an earlier hook. */
+    {"U1 aiming camera pitch (mouse)",
+      "c5 fa 11 8d 00 fd ff ff c5 fa 59 05 13 b6 54 00 c5 fa 11 85 fc fc ff ff c5 f8 28 0d f7 b6 54 00",
+      0, 8, u1_aim_pitch, NULL},
+    {"U1 aiming camera yaw (mouse)",
+      "c5 fa 11 85 fc fc ff ff c5 f8 28 0d f7 b6 54 00 c5 f0 54 4d 80 c5 f8 29 8d 10 fd ff ff 31 ff 31",
+      0, 8, u1_aim_yaw, NULL},
+    {"U2 aiming camera yaw (mouse)",
+      "c5 fa 10 55 c0 c5 ea 59 c9 c5 fa 11 4d c0 c5 fa 59 0d b3 8a 74 00 c5 fa 11 4d 90 c5 f8 28 85 70",
+      0, 5, u2_aim_yaw, NULL},
+    {"U2 aiming camera pitch (mouse)",
+      "c5 fa 11 4d c0 c5 fa 59 0d b3 8a 74 00 c5 fa 11 4d 90 c5 f8 28 85 70 ff ff ff c5 f8 54 05 be 22",
+      0, 5, u2_aim_pitch, NULL},
+    {"U3 aiming camera pitch (mouse)",
+      "c5 fa 11 4d c0 c4 c1 7a 5c 47 0c c5 fa 59 05 93 be b1 00 c5 f8 28 4d b0 c5 f0 54 0d 62 5b ae 00",
+      0, 5, u3_aim_pitch, NULL},
+    {"U3 aiming camera yaw (mouse)",
+      "c5 f8 28 4d b0 c5 f0 54 0d 62 5b ae 00 c5 f8 29 4d a0 c5 fa 59 05 25 be b1 00 c5 fa 11 85 70 ff",
+      0, 5, u3_aim_yaw, NULL},
+
     /* U1 follow camera, build 100 */
     {"U1 follow camera (mouse)",
       "55 48 89 e5 41 57 41 56 41 55 41 54 53 48 81 ec 28 01 00 00 "

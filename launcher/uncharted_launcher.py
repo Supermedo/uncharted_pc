@@ -202,6 +202,7 @@ APP_DEFAULTS = {'game_dir': '', 'game_dir_u1': '', 'game_dir_u2': '', 'game_dir_
                 'window_size': '1920x1080', 'render_height': '1080', 'aspect': '16:9', 'speakers': 'auto', 'scaler': 'fsr1', 'sharpening': '500',
                 'downsample_filter': 'lanczos2', 'anti_aliasing': 'off', 'aa_sharpness': '0.2', 'frame_generation': 'off',
                 'frame_gen_multiplier': '2', 'extra_env': '', 'close_on_play': False, 'skip_intro': True,
+                'pc_mouse_aim': True, 'mouse_aim_sensitivity': '1.0', 'mouse_aim_smoothing_ms': '20',
                 'mouse_look': True, 'mouse_sensitivity': '1.0', 'mouse_invert_y': False,
                 'pad_invert_y': False, 'art_banner': '', 'art_u1': '', 'art_u2': '', 'art_u3': '', 'steam_art': '', 'art_crops': {}, 'shortcut_name': 'Uncharted: The Nathan Drake Collection', 'shortcut_icon': '', 'trophy_game': 'u1', 'pad_vibration': True, 'pad_vibration_strength': '100', 'button_prompts': 'auto', 'key_bindings': {}, 'pad_bindings': {}, 'check_updates': True,
                 **{key: 'auto' for key in FIXES},
@@ -504,6 +505,9 @@ def game_environment(s, start=None):
         if str(s.get(f'game_dir_{key}') or '').strip():
             env[f'BB_GAME_DIR_{key.upper()}'] = game_folder(s, key)
     env['BB_EXE'] = start
+    env['BB_PC_MOUSE_AIM'] = '1' if s.get('pc_mouse_aim', True) and s.get('mouse_look', True) else '0'
+    env['BB_MOUSE_AIM_SMOOTH_MS'] = str(s.get('mouse_aim_smoothing_ms', '20'))
+    env['BB_MOUSE_AIM_SENSITIVITY'] = str(s.get('mouse_aim_sensitivity') or '1.0')
     env['BB_SKIP_INTRO'] = '1' if s.get('skip_intro', True) else '0'
     if s['user_dir']:
         env['BB_USER_DIR'] = s['user_dir']
@@ -1439,6 +1443,18 @@ class Launcher:
                  _('How far the camera turns for a mouse movement; 1.00 is the default. Drag the slider or '
                    'type a number (0.1 to 10) for a faster turn.'))
         self.check(f, 'mouse_invert_y', _('Invert the mouse vertically'))
+        self.check(f, 'pc_mouse_aim', _('Responsive mouse aiming'),
+                   _('Uses mouse movement directly for weapon aiming, bypassing controller turn-speed '
+                     'limits and input smoothing. Controller behavior is preserved.'))
+        self.row(f, _('Aiming sensitivity multiplier'),
+                 Slider(self.tk, self.target(f), self.var('mouse_aim_sensitivity'), 0.1, 10.0, 0.05,
+                        COLORS, self.px, self.font_ui_md, width=300, log=True, entry=True),
+                 _('Multiplies your mouse sensitivity while aiming; 1.00 uses the same degrees per pixel.'))
+
+        self.row(f, _('Aim interpolation (ms)'),
+                 Slider(self.tk, self.target(f), self.var('mouse_aim_smoothing_ms'), 0, 40, 1,
+                        COLORS, self.px, self.font_ui_md, fmt='{:.0f}', width=300),
+                 _('Moves smoothly toward the requested angle. 0 applies mouse motion immediately; higher values add delay.'))
 
         self.section(f, _('Button pictures'))
         self.row(f, _('Show in the game'), self.choice(f, 'button_prompts', BUTTON_PROMPTS, 40),

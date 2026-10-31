@@ -27,6 +27,10 @@ def language_code(value=''):
 
 TRANSLATIONS = {
     'es': {
+        'Aim interpolation (ms)':
+        'Interpolación de la mira (ms)',
+        'Moves smoothly toward the requested angle. 0 applies mouse motion immediately; higher values add delay.':
+        'Avanza suavemente hacia el ángulo solicitado. 0 aplica el movimiento del ratón inmediatamente; los valores más altos añaden retraso.',
         'Automatic (Windows)': 'Automático (Windows)', 'Play': 'Jugar', 'Stop': 'Detener',
         'Game': 'Juego', 'Display': 'Pantalla', 'Controls': 'Controles', 'Advanced': 'Avanzado',
         'Log': 'Registro', 'Library': 'Biblioteca', 'Double-click a cover to launch':
@@ -142,6 +146,10 @@ TRANSLATIONS = {
         'by {}': 'por {}', 'see the Log page': 'consulta la página Registro',
     },
     'pt': {
+        'Aim interpolation (ms)':
+        'Interpolação da mira (ms)',
+        'Moves smoothly toward the requested angle. 0 applies mouse motion immediately; higher values add delay.':
+        'Move suavemente em direção ao ângulo solicitado. 0 aplica o movimento do mouse imediatamente; valores maiores adicionam atraso.',
         'Automatic (Windows)': 'Automático (Windows)', 'Play': 'Jogar', 'Stop': 'Parar',
         'Game': 'Jogo', 'Display': 'Tela', 'Controls': 'Controles', 'Advanced': 'Avançado',
         'Log': 'Registro', 'Library': 'Biblioteca', 'Double-click a cover to launch':
@@ -256,6 +264,10 @@ TRANSLATIONS = {
         'by {}': 'por {}', 'see the Log page': 'consulte a página Registro',
     },
     'fr': {
+        'Aim interpolation (ms)':
+        'Interpolation de la visée (ms)',
+        'Moves smoothly toward the requested angle. 0 applies mouse motion immediately; higher values add delay.':
+        'Se déplace progressivement vers l’angle demandé. 0 applique immédiatement le mouvement de la souris ; des valeurs plus élevées ajoutent un délai.',
         'Automatic (Windows)': 'Automatique (Windows)', 'Play': 'Jouer', 'Stop': 'Arrêter',
         'Game': 'Jeu', 'Display': 'Affichage', 'Controls': 'Commandes', 'Advanced': 'Avancé',
         'Log': 'Journal', 'Library': 'Bibliothèque', 'Double-click a cover to launch':

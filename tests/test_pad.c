@@ -50,6 +50,67 @@ static void inject(const char *path, const char *tokens) {
     usleep(25000);
 }
 
+/* Exercise the actual saved-XMM scalar path, including mouse/physical-stick isolation. */
+static void test_mouse_aim(void) {
+    _Alignas(16) unsigned char saved[256]={0};
+    const RuntimeGuestRegs *regs=(const RuntimeGuestRegs *)(saved+128);
+    float *yaw=(float *)saved, *pitch=(float *)(saved+16);
+    const int frames[]={30,60,120,240};
+    input.mouse_look=1; input.mouse_sensitivity=1.0f;
+    aim_direct=1; aim_multiplier=1.0f; aim_smoothing_ms=0.0f; aim_held=1;
+    for (int game=1;game<=3;++game) for (size_t n=0;n<sizeof(frames)/sizeof(*frames);++n) {
+        *yaw=*pitch=0.0f;
+        mouse_aim_rotation(game,0,regs);
+        mouse_aim_rotation(game,1,regs);
+        for (int frame=0;frame<frames[n];++frame) {
+            const uint64_t now=now_us();
+            aim_hook_us[0]=aim_hook_us[1]=now;
+            camera_dx[1]=600.0f/frames[n]; camera_dy[1]=200.0f/frames[n];
+            float pad[8]={0,0,0.25f,-0.5f,0,0,0.25f,-0.5f};
+            mouse_sticks(pad,&u23_102_aim);
+            assert(pad[2]==0.25f && pad[6]==0.25f && pad[3]==-0.5f && pad[7]==-0.5f);
+            mouse_aim_rotation(game,0,regs);
+            mouse_aim_rotation(game,1,regs);
+        }
+        /* 600 pixels = 90 degrees to the right; internal yaw uses the opposite sign. */
+        const float wanted=game==1 ? -0.7853981634f : game==2 ? -90.0f : -1.5707963268f;
+        assert(SDL_fabsf(*yaw-wanted)<0.0003f && SDL_fabsf(*pitch-30.0f)<0.0003f);
+    }
+    /* Motion is consumed once; a second hook call must not repeat the turn. */
+    const float before=*yaw;
+    mouse_aim_rotation(3,0,regs);
+    assert(*yaw==before);
+    input.mouse_invert_y=1;
+    assert(direct_aim_capture(now_us(),-10,10));
+    *yaw=*pitch=0;
+    mouse_aim_rotation(3,0,regs); mouse_aim_rotation(3,1,regs);
+    assert(*yaw>0 && *pitch<0);
+    input.mouse_invert_y=0;
+    /* Missing/stale cameras retain the old stick path, and queued motion expires. */
+    aim_hook_us[1]=now_us()-200000;
+    assert(!direct_aim_capture(now_us(),10,10));
+    aim_pending[0]=100; aim_motion_us=now_us()-200000;
+    *yaw=0; mouse_aim_rotation(3,0,regs); assert(*yaw==0);
+    aim_held=0;
+    assert(!direct_aim_capture(now_us(),10,10));
+    aim_direct=0; aim_held=1;
+    assert(!direct_aim_capture(now_us(),10,10));
+    /* Interpolation finishes its tail after raw input stops, but never after release. */
+    aim_direct=1;
+    aim_smoothing_ms=40.0f;
+    aim_motion_us=now_us()-200000;
+    aim_filter[0]=(MouseAimFilter){.remaining=1, .last_us=now_us()-8333};
+    *yaw=0;
+    mouse_aim_rotation(3,0,regs);
+    assert(*yaw<0 && aim_filter[0].remaining>0);
+    aim_held=0; aim_direct=-1;
+    mouse_aim_rotation(3,0,regs);
+    assert(aim_filter[0].remaining==0 && aim_filter[0].velocity==0);
+    aim_smoothing_ms=20.0f;
+    aim_hook_us[0]=aim_hook_us[1]=aim_motion_us=0;
+    aim_pending[0]=aim_pending[1]=0;
+}
+
 static void test_u3_intro_skip(void) {
     assert(u3_intro_logo("/app0/shareddata/movies/ps4/sce-ndi-logos.bsf"));
     assert(u3_intro_logo("bp-logos.bsf"));
@@ -101,6 +162,7 @@ static void test_u3_intro_skip(void) {
 
 int main(void) {
     test_u3_intro_skip();
+    test_mouse_aim();
     char path[]="bbport-pad-test-XXXXXX";
     int fd=mkstemp(path);
     assert(fd>=0);
