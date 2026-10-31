@@ -85,3 +85,13 @@ The 1.02 movie player also needs a larger fixed CPU budget for 4K frames: its
 reservation grows from 75 to 128 MiB, and its parent allocation and CPU backing
 both grow by 54 MiB (2 MiB alignment). Memory-map validation includes this growth
 alongside the GPU heap growth. The movie bounds assertion remains enabled.
+
+## Supersampling filters
+
+The final presentation pass uses `BB_DOWNSAMPLE_FILTER=lanczos2` by default.
+`area` averages source pixel coverage; `bilinear` keeps the original filter.
+The launcher exposes these under Graphics > Downsampling. Lanczos2 scales its
+kernel to the output pixel footprint and bounds ringing to the nearby source
+range. Both new filters average linear-light colors before output gamma, and
+only run when reducing an image. Native-size rendering and enlargement keep
+the existing sampling path. No AI model or external Vulkan layer is required.
