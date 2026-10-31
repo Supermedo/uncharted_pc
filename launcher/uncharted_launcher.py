@@ -84,7 +84,7 @@ ASPECT_RATIOS = {'16:9': 16 / 9, '21:9': 64 / 27, '32:9': 32 / 9}
 # Widths the screens of these shapes really have at each height (21:9 is 64:27 at 1080p and 43:18 at 1440p).
 SCREEN_WIDTHS = {('21:9', 1080): 2560, ('21:9', 1440): 3440, ('21:9', 1600): 3840, ('21:9', 1620): 3840,
                  ('21:9', 2160): 5120, ('32:9', 1080): 3840, ('32:9', 1440): 5120, ('32:9', 2160): 7680}
-MAX_RENDER_PIXELS = 5_800_000   # what the games' GPU memory holds: 3200x1800 starts, 4K does not (docs/resolution.md)
+MAX_RENDER_PIXELS = 3840 * 2160  # guarded arena patches support this budget (docs/resolution.md)
 SPEAKERS = [('auto', 'Automatic (the Windows speaker setup)'), ('2', 'Stereo'), ('6', '5.1 surround'), ('8', '7.1 surround')]
 SCALERS = [('fsr1', 'FSR 1 (AMD FidelityFX, sharp)'), ('bilinear', 'Smooth (bilinear)')]
 SHARPENING = [('off', 'Off'), ('1000', 'Low'), ('500', 'Medium'), ('250', 'High'), ('0', 'Maximum')]

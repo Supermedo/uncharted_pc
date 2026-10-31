@@ -57,6 +57,10 @@ picks the width from a height and a shape (16:9, 21:9, 32:9) or follows the wind
 
 ## Limits
 
+For the patched CUSA02344 1.02 builds, the launcher accepts up to 8,294,400 render
+pixels (3840x2160). Other builds retain the original GPU pool limit. The following
+measurements describe the original allocator, before the patches below.
+
 - Checked on Uncharted 2 1.02: 2560x1440, 2880x1620, 3200x1800 and 3440x1440 render correctly,
   3840x2160 does not start. At 4K the render target heaps need more than the 4 GiB arena
   leaves (the texture heap would have to shrink by over 500 MiB, and the movie player's
@@ -68,3 +72,16 @@ picks the width from a height and a shape (16:9, 21:9, 32:9) or follows the wind
   README's known problems, not confirmed as resolution related).
 - Fixed-size effects of the games (bloom radii, shadow maps) do not grow with the picture.
 - Movies were played at 2560x1440, 3440x1440 and (Uncharted 1, opening movie and cutscenes) 3200x1800.
+
+## Loaded-image allocator patches
+
+The linker applies hash- and instruction-guarded arena patches to the three
+CUSA02344 1.02 executables. Capacity, reset and high-water calculations retain
+64-bit values; legacy 32-bit queries and the graphics usage counter saturate
+instead of wrapping. The original game files remain unchanged. Other executable
+hashes keep their original allocator. The patch report is `out/<game>/arena64.json`.
+
+The 1.02 movie player also needs a larger fixed CPU budget for 4K frames: its
+reservation grows from 75 to 128 MiB, and its parent allocation and CPU backing
+both grow by 54 MiB (2 MiB alignment). Memory-map validation includes this growth
+alongside the GPU heap growth. The movie bounds assertion remains enabled.
