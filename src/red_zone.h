@@ -7,6 +7,12 @@
 /* A loaded segment: offset in the image, size, ELF flags (1 execute, 2 write, 4 read). */
 typedef struct { uint64_t address, size, flags; } RedZoneSegment;
 
+/* Right after the image is mapped, before the GPU starts: reserves thunk memory within rel32
+ * reach of the image while the address space around it is still empty. Started after the GPU,
+ * the search found no free 1 MiB block in some boots (the driver's allocations had taken the
+ * range) and thousands of accesses stayed as they were: their data was lost on faults (crashes
+ * and hangs after checkpoints). Reserved only; committed as red_zone_patch uses it. */
+void red_zone_reserve(unsigned char *image, uint64_t image_size);
 /* Before guest code runs (the image still writable, after every other code patch): the memory
  * accesses of functions that keep data below rsp run from thunks with rsp 128 bytes lower.
  * BB_RED_ZONE=0 turns it off, BB_RED_ZONE=list prints each function and access. */
