@@ -828,10 +828,15 @@ static void install_game_callbacks(Segment *segments, uint64_t ns, uint64_t imag
     const RuntimeGuestCallback *callbacks=runtime_guest_callbacks(&count);
     unsigned char *thunks=NULL;
     size_t used=0;
-    uint8_t installed[32]={0};
-    uint64_t hook_offsets[32]; size_t hooks_done=0;
+    /* UNDS: 64, was 32. 0.3.11 has 27 of its own and UNDS adds 4 per game (31): the next entry
+     * would have been cut off without a word. */
+    uint8_t installed[64]={0};
+    uint64_t hook_offsets[64]; size_t hooks_done=0;
     guest_image_size=image_size;
-    if (count>sizeof(installed)) count=sizeof(installed);
+    if (count>sizeof(installed)) {
+        printf("Callbacks: %zu known, only the first %zu are tried\n",count,sizeof(installed));
+        count=sizeof(installed);
+    }
     /* A/B tests: BB_CALLBACKS=0 installs none, BB_CALLBACKS_SKIP=<text> none whose name contains the text */
     const char *off=getenv("BB_CALLBACKS"), *skip=getenv("BB_CALLBACKS_SKIP");
     if (off && off[0]=='0') { printf("Callbacks: disabled (BB_CALLBACKS=0)\n"); return; }
