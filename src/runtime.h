@@ -97,6 +97,9 @@ int runtime_savedata_pick(int32_t user, const char *title, const char (*names)[3
 void runtime_thread_attach_host(const char *name);
 uintptr_t runtime_fiber_resolve(const char *name);
 void runtime_fiber_report(void);
+/* For fault reports (no allocation, any thread): the guest thread and fiber running here, or NULL. */
+const char *runtime_thread_name_here(void);
+const char *runtime_fiber_name_here(void);
 /* Host functions the loader runs at the start of matching guest functions (probe.c). The guest
  * code is found by `pattern`, not by a fixed address, so every build of a game is covered that
  * contains it: hex bytes separated by spaces, "??" for a byte that differs between builds

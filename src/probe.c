@@ -222,6 +222,66 @@ static void describe_address(char *out, size_t size, uintptr_t address) {
     }
     snprintf(out,size,"%p",(void *)address);
 }
+/* An address in committed executable memory (a return address candidate). */
+static int executable_address(uintptr_t address) {
+    MEMORY_BASIC_INFORMATION m;
+    if (address<0x10000 || !VirtualQuery((const void *)address,&m,sizeof(m)) || m.State!=MEM_COMMIT) return 0;
+    return (m.Protect&(PAGE_EXECUTE|PAGE_EXECUTE_READ|PAGE_EXECUTE_READWRITE|PAGE_EXECUTE_WRITECOPY))!=0;
+}
+/* After the report: the stack as a list of addresses in executable memory (return address
+ * candidates, not a verified call chain: rbp is not a frame pointer in drivers and optimised
+ * host code, and a call to a bad pointer leaves only [rsp]). Bounded by the TEB stack (fibers
+ * set it to their own) and by what can be read. */
+static void scan_stack(uintptr_t sp) {
+    uintptr_t top, limit; /* NT_TIB StackBase, StackLimit (gs:[8], gs:[16]; NtCurrentTeb trips -Warray-bounds) */
+    __asm__ volatile("mov %%gs:8,%0\n mov %%gs:16,%1" : "=r"(top), "=r"(limit));
+    if (sp<limit || sp>=top || top-sp>32768) top=sp+32768;
+    char where[MAX_PATH+64];
+    uintptr_t last=0;
+    int shown=0;
+    for (uintptr_t at=sp&~(uintptr_t)7; at<top && shown<24; at+=8) {
+        uint64_t value;
+        SIZE_T got=0;
+        if (!ReadProcessMemory(GetCurrentProcess(),(const void *)at,&value,sizeof(value),&got) || got!=sizeof(value)) break;
+        if (value==last || !executable_address((uintptr_t)value)) continue;
+        describe_address(where,sizeof(where),(uintptr_t)value);
+        fprintf(stderr,"  stack+0x%04" PRIxPTR " %s\n",at-sp,where);
+        last=value; ++shown;
+    }
+}
+/* user/crash.dmp (threads, modules, stacks and the memory they point at): a later crash can be
+ * read with a debugger. dbghelp is loaded at start (not in a crashed process); the dump is
+ * written by a helper thread that gets 15 s: a lock held by the faulting code (heap, loader)
+ * then costs the dump, never a hung process. BB_NO_CRASH_DUMP=1: none. */
+typedef BOOL (WINAPI *MiniDumpWriteDumpFn)(HANDLE,DWORD,HANDLE,int,const void *,const void *,const void *);
+static MiniDumpWriteDumpFn crash_dump_write;
+static char crash_dump_path[MAX_PATH];
+static struct { DWORD thread; EXCEPTION_POINTERS *pointers; BOOL client; } crash_exception;
+static void crash_dump_configure(const char *user) {
+    if (getenv("BB_NO_CRASH_DUMP")) return;
+    snprintf(crash_dump_path,sizeof(crash_dump_path),"%s\\crash.dmp",user);
+    HMODULE dbghelp=LoadLibraryA("dbghelp.dll");
+    if (dbghelp) crash_dump_write=(MiniDumpWriteDumpFn)(void *)GetProcAddress(dbghelp,"MiniDumpWriteDump");
+}
+static DWORD WINAPI crash_dump_thread(void *unused) {
+    (void)unused;
+    HANDLE file=CreateFileA(crash_dump_path,GENERIC_WRITE,0,NULL,CREATE_ALWAYS,FILE_ATTRIBUTE_NORMAL,NULL);
+    if (file==INVALID_HANDLE_VALUE) return 1;
+    /* MiniDumpWithIndirectlyReferencedMemory | WithUnloadedModules | WithProcessThreadData |
+     * WithThreadInfo: no full memory (the guest maps gigabytes). */
+    const BOOL ok=crash_dump_write(GetCurrentProcess(),GetCurrentProcessId(),file,0x40|0x20|0x100|0x1000,&crash_exception,NULL,NULL);
+    CloseHandle(file);
+    return ok ? 0 : 2;
+}
+static void write_crash_dump(EXCEPTION_POINTERS *info) {
+    if (!crash_dump_write) return;
+    crash_exception.thread=GetCurrentThreadId(); crash_exception.pointers=info; crash_exception.client=FALSE;
+    HANDLE helper=CreateThread(NULL,0,crash_dump_thread,NULL,0,NULL);
+    DWORD code=3;
+    if (helper && WaitForSingleObject(helper,15000)==WAIT_OBJECT_0) GetExitCodeThread(helper,&code);
+    if (code==0) fprintf(stderr,"Crash dump: %s\n",crash_dump_path);
+    else fprintf(stderr,"Crash dump: not written (%s)\n",code==1 ? "cannot create the file" : code==2 ? "dbghelp failed" : "timed out");
+}
 static int fatal_reported;
 static LONG fatal_exception(EXCEPTION_POINTERS *info) {
     if (__atomic_exchange_n(&fatal_reported,1,__ATOMIC_ACQ_REL)) { Sleep(INFINITE); }
@@ -229,12 +289,17 @@ static LONG fatal_exception(EXCEPTION_POINTERS *info) {
     const CONTEXT *c=info->ContextRecord;
     char where[MAX_PATH+64];
     describe_address(where,sizeof(where),(uintptr_t)c->Rip);
+    char thread[96];
+    const char *guest=runtime_thread_name_here(), *fiber=runtime_fiber_name_here();
+    if (fiber) snprintf(thread,sizeof(thread),"thread %lu '%s', fiber '%s'",GetCurrentThreadId(),guest ? guest : "?",fiber);
+    else if (guest) snprintf(thread,sizeof(thread),"thread %lu '%s'",GetCurrentThreadId(),guest);
+    else snprintf(thread,sizeof(thread),"thread %lu, host",GetCurrentThreadId());
     if (record->ExceptionCode==EXCEPTION_ACCESS_VIOLATION && record->NumberParameters>=2)
-        fprintf(stderr,"Fault: %s access to %p at %s (thread %lu)\n",
+        fprintf(stderr,"Fault: %s access to %p at %s (%s)\n",
                 record->ExceptionInformation[0]==1 ? "write" : record->ExceptionInformation[0]==8 ? "execute" : "read",
-                (void *)record->ExceptionInformation[1],where,GetCurrentThreadId());
+                (void *)record->ExceptionInformation[1],where,thread);
     else
-        fprintf(stderr,"Fault: exception 0x%08lx at %s (thread %lu)\n",record->ExceptionCode,where,GetCurrentThreadId());
+        fprintf(stderr,"Fault: exception 0x%08lx at %s (%s)\n",record->ExceptionCode,where,thread);
     fprintf(stderr,"  rax=%016llx rbx=%016llx rcx=%016llx rdx=%016llx\n  rsi=%016llx rdi=%016llx rbp=%016llx rsp=%016llx\n",
             c->Rax,c->Rbx,c->Rcx,c->Rdx,c->Rsi,c->Rdi,c->Rbp,c->Rsp);
     if (gpu_enabled) bbgpu_dump_guest_writes(info);
@@ -248,6 +313,17 @@ static LONG fatal_exception(EXCEPTION_POINTERS *info) {
         fprintf(stderr,"  #%d %s\n",depth,where);
         rbp=frame[0];
     }
+    {
+        uint64_t slot;
+        SIZE_T got=0;
+        if (ReadProcessMemory(GetCurrentProcess(),(const void *)(uintptr_t)c->Rsp,&slot,sizeof(slot),&got) && got==sizeof(slot)) {
+            describe_address(where,sizeof(where),(uintptr_t)slot);
+            fprintf(stderr,"  [rsp] %s%s\n",where,executable_address((uintptr_t)slot) ? "" : " (not code)");
+        }
+    }
+    scan_stack((uintptr_t)c->Rsp);
+    fflush(NULL);
+    write_crash_dump(info);
     fflush(NULL);
     TerminateProcess(GetCurrentProcess(),3);
     return EXCEPTION_CONTINUE_SEARCH;
@@ -1192,6 +1268,9 @@ int main(int argc, char **argv) {
     }
     if (app0) {
         runtime_file_configure(app0, user_dir ? user_dir : "user");
+#ifdef _WIN32
+        crash_dump_configure(user_dir ? user_dir : "user");
+#endif
         char sfo[4096], id[16]="";
         snprintf(sfo,sizeof(sfo),"%s/sce_sys/param.sfo",app0);
         if (sfo_value(sfo,"INSTALL_DIR_SAVEDATA",id,sizeof(id),NULL) || sfo_value(sfo,"TITLE_ID",id,sizeof(id),NULL))

@@ -101,6 +101,11 @@ __asm__(".text\n"
         ".globl fiber_start\nfiber_start:\n"
         " mov %rbx,%rdi\n and $-16,%rsp\n call fiber_main\n ud2\n");
 
+const char *runtime_fiber_name_here(void) {
+    const GuestFiber *f=this_thread()->current;
+    return f ? f->name : NULL;
+}
+
 static void fatal(const char *what,const GuestFiber *fiber) {
     fprintf(stderr,"STOP: fiber '%s': %s\n",fiber ? fiber->name : "?",what);
     runtime_report();
