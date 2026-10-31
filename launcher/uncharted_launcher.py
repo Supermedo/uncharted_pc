@@ -201,7 +201,7 @@ APP_DEFAULTS = {'game_dir': '', 'game_dir_u1': '', 'game_dir_u2': '', 'game_dir_
                 'fullscreen': False, 'present_mode': 'Mailbox', 'frame_rate': '60', 'show_fps': False,
                 'window_size': '1920x1080', 'render_height': '1080', 'aspect': '16:9', 'speakers': 'auto', 'scaler': 'fsr1', 'sharpening': '500',
                 'downsample_filter': 'lanczos2', 'anti_aliasing': 'off', 'aa_sharpness': '0.2', 'frame_generation': 'off',
-                'frame_gen_multiplier': '2', 'extra_env': '', 'close_on_play': False,
+                'frame_gen_multiplier': '2', 'extra_env': '', 'close_on_play': False, 'skip_intro': True,
                 'mouse_look': True, 'mouse_sensitivity': '1.0', 'mouse_invert_y': False,
                 'pad_invert_y': False, 'art_banner': '', 'art_u1': '', 'art_u2': '', 'art_u3': '', 'steam_art': '', 'art_crops': {}, 'shortcut_name': 'Uncharted: The Nathan Drake Collection', 'shortcut_icon': '', 'trophy_game': 'u1', 'pad_vibration': True, 'pad_vibration_strength': '100', 'button_prompts': 'auto', 'key_bindings': {}, 'pad_bindings': {}, 'check_updates': True,
                 **{key: 'auto' for key in FIXES},
@@ -504,6 +504,7 @@ def game_environment(s, start=None):
         if str(s.get(f'game_dir_{key}') or '').strip():
             env[f'BB_GAME_DIR_{key.upper()}'] = game_folder(s, key)
     env['BB_EXE'] = start
+    env['BB_SKIP_INTRO'] = '1' if s.get('skip_intro', True) else '0'
     if s['user_dir']:
         env['BB_USER_DIR'] = s['user_dir']
     env['BB_LANGUAGE'] = s['language']
@@ -1349,6 +1350,10 @@ class Launcher:
                     on_change=self.refresh)
         self.folder(f, 'user_dir', _('Saves folder'), _('Where saves and the shader cache are kept'),
                     _('Empty: the user folder next to the launcher.'))
+        self.section(f, _('Startup'))
+        self.check(f, 'skip_intro', _('Skip intro logos'))
+        self.note(f, _('Skips the opening Sony/Naughty Dog and Bluepoint logo videos. Story cutscenes '
+                       'are preserved.'), top=2)
         self.section(f, _('Separate game folders'))
         self.note(f, _('Only when the games are not in one collection folder (each dumped on its own). A game with '
                        'a folder here is taken from it; the others from the collection folder above.'), top=2)

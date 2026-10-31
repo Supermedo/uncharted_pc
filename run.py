@@ -155,6 +155,25 @@ def game_res(env, extra_memory_mib=0, arena64=False):
           + ('; 64-bit arena capacity enabled' if arena64 else ''), flush=True)
 
 
+def startup_arguments(env, exe, out_root, inherited=None):
+    """Add the native logo-skip argument, preserving LoadExec's argv convention."""
+    if env.get('BB_SKIP_INTRO', '1') != '1':
+        return inherited
+    if exe not in (EXECUTABLES['u1'], EXECUTABLES['u2']):
+        return inherited
+    # probe.c removes line zero (the LoadExec target) when more arguments follow.
+    # Line one is argv[0]; an option must not occupy that slot.
+    lines = (inherited.read_text(encoding='utf-8').splitlines() if inherited
+             else [f'/app0/{exe}', 'eboot.bin'])
+    if len(lines) < 2:
+        lines.append('eboot.bin')
+    if 'bp_skipintromovie' not in lines[2:]:
+        lines.append('bp_skipintromovie')
+    path = out_root / 'startup-argv.txt'
+    path.write_text('\n'.join(lines) + '\n', encoding='utf-8')
+    return path
+
+
 def main():
     args = sys.argv[1:]
     if len(args) >= 2 and args[0] == '--after':
@@ -267,8 +286,9 @@ def main():
                    '--app0', str(game), '--user', str(user_dir), '--timeout', env.get('BB_TIMEOUT', '0')]
         if patches:
             command += ['--patches', str(patches)]
-        if guest_argv:
-            command += ['--guest-argv', str(guest_argv)]
+        launch_argv = startup_arguments(env, exe, out_root, guest_argv)
+        if launch_argv:
+            command += ['--guest-argv', str(launch_argv)]
         if key and (trophy_dir / 'trophies.txt').is_file():
             command += ['--trophies', str(trophy_dir)]
         loadexec.unlink(missing_ok=True)

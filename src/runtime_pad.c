@@ -628,6 +628,32 @@ static const unsigned char u3_focus_reset_102[]={
     0x83,0xf8,0x0f,0x0f,0x84,0xa5,0xfe,0xff,0xff,0xcd,0x41,CC8,CC8,CC8,
 };
 _Static_assert(sizeof(u3_focus_reset_100)==51 && sizeof(u3_focus_reset_102)==53,"patch sizes");
+/* U3 1.02 has no bp_skipintromovie argument. Once the player reaches its
+ * playing state, use the same Stop(true) method as the game's skip control.
+ * Exact logo filenames keep story movies and their completion events intact. */
+static int u3_intro_logo(const char *path) {
+    if (!memchr(path,0,256)) return 0;
+    const char *name=strrchr(path,'/');
+    name=name ? name+1 : path;
+    return !strcmp(name,"sce-ndi-logos.bsf") || !strcmp(name,"bp-logos.bsf");
+}
+static void __attribute__((ms_abi)) u3_movie_update(uint64_t player, uint64_t unused, uint64_t image,
+                                                   uint64_t r14, const RuntimeGuestRegs *regs) {
+    (void)unused; (void)r14; (void)regs;
+    const char *enabled=getenv("BB_SKIP_INTRO");
+    if (enabled && strcmp(enabled,"1")) return;
+    const unsigned char *object=(const unsigned char *)(uintptr_t)player;
+    if (*(const int *)(object+0x2256c)!=5 || object[0x2257a]) return;
+    const char *path=(const char *)(object+0x22228);
+    if (!u3_intro_logo(path)) return;
+    const uintptr_t *vtable=*(const uintptr_t *const *)object;
+    const unsigned char *target=(const unsigned char *)vtable[3];
+    static const unsigned char guard[]={0x55,0x48,0x89,0xe5,0x41,0x57,0x41,0x56,0x53,0x50,0x48,0x89,0xfb};
+    if (vtable[3]!=image+0xdf37a0 || memcmp(target,guard,sizeof(guard))) return;
+    typedef void (ABI *SkipMovie)(uint64_t player, int wait);
+    ((SkipMovie)(uintptr_t)target)(player,1);
+    printf("Intro skip: U3 native logo skip requested for %s\n",path);
+}
 /* Render command contexts (ndgi), from Mevlock's dev fork: Begin and End keep a per-thread flag,
  * set while a job worker has a context open (runtime_ndgi_open, cleared too when a fiber leaves
  * the thread, runtime_fiber.c), used by the job wait patch in probe.c. A context records its
@@ -648,6 +674,9 @@ static void __attribute__((ms_abi)) ndgi_end(uint64_t rdi, uint64_t rsi, uint64_
  * game that has them works (version 1.00 and 1.02 are known; "build" below). RIP-relative
  * displacements and call targets are wildcards. Entries with one name are variants for the builds. */
 static const RuntimeGuestCallback guest_callbacks[]={
+    {"U3 logo playback",
+      "55 48 89 e5 41 57 41 56 41 55 41 54 53 48 81 e4 e0 ff ff ff 48 81 ec 40 03 00 00 49 89 fc 4c 8d",
+      0, 6, u3_movie_update, NULL},
     /* U1 follow camera, build 100 */
     {"U1 follow camera (mouse)",
       "55 48 89 e5 41 57 41 56 41 55 41 54 53 48 81 ec 28 01 00 00 "

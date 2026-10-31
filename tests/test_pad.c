@@ -2,8 +2,15 @@
 #include <assert.h>
 #include <unistd.h>
 #include "../src/runtime_pad.c"
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#else
+#include <sys/mman.h>
+#endif
 
 static int capture;
+_Thread_local int runtime_ndgi_open;
 static int rumble_calls;
 static uint16_t rumble_low, rumble_high;
 int bbgpu_overlay_captures_input(void) { return capture; }
@@ -43,7 +50,57 @@ static void inject(const char *path, const char *tokens) {
     usleep(25000);
 }
 
+static void test_u3_intro_skip(void) {
+    assert(u3_intro_logo("/app0/shareddata/movies/ps4/sce-ndi-logos.bsf"));
+    assert(u3_intro_logo("bp-logos.bsf"));
+    assert(!u3_intro_logo("story-intro.bsf"));
+    assert(!u3_intro_logo("sce-ndi-logos.bsf-extra"));
+    char unterminated[256]; memset(unterminated,'x',sizeof(unterminated));
+    assert(!u3_intro_logo(unterminated));
+    const size_t size=0xe00000;
+#ifdef _WIN32
+    unsigned char *image=VirtualAlloc(NULL,size,MEM_COMMIT|MEM_RESERVE,PAGE_EXECUTE_READWRITE);
+#else
+    unsigned char *image=mmap(NULL,size,PROT_READ|PROT_WRITE|PROT_EXEC,MAP_PRIVATE|MAP_ANONYMOUS,-1,0);
+    assert(image!=MAP_FAILED);
+#endif
+    assert(image);
+    const unsigned char code[]={0x55,0x48,0x89,0xe5,0x41,0x57,0x41,0x56,0x53,0x50,0x48,0x89,0xfb,
+        0xc6,0x83,0x7a,0x25,0x02,0,1,0x89,0x73,0x10,0x58,0x5b,0x41,0x5e,0x41,0x5f,0x5d,0xc3};
+    memcpy(image+0xdf37a0,code,sizeof(code));
+    unsigned char *player=calloc(1,0x22580); assert(player);
+    uintptr_t vtable[4]={0,0,0,(uintptr_t)(image+0xdf37a0)};
+    *(const uintptr_t **)player=vtable;
+    *(int *)(player+0x2256c)=5;
+    strcpy((char *)player+0x22228,"story-intro.bsf");
+    set_env("BB_SKIP_INTRO","1");
+    u3_movie_update((uintptr_t)player,0,(uintptr_t)image,0,NULL);
+    assert(!player[0x2257a]);
+    strcpy((char *)player+0x22228,"sce-ndi-logos.bsf");
+    set_env("BB_SKIP_INTRO","0");
+    u3_movie_update((uintptr_t)player,0,(uintptr_t)image,0,NULL);
+    assert(!player[0x2257a]);
+    set_env("BB_SKIP_INTRO","1");
+    *(int *)(player+0x2256c)=4;
+    u3_movie_update((uintptr_t)player,0,(uintptr_t)image,0,NULL);
+    assert(!player[0x2257a]);
+    *(int *)(player+0x2256c)=5;
+    u3_movie_update((uintptr_t)player,0,(uintptr_t)image,0,NULL);
+    assert(player[0x2257a] && *(int *)(player+0x10)==1);
+    player[0x2257a]=0; image[0xdf37a0]=0x90;
+    u3_movie_update((uintptr_t)player,0,(uintptr_t)image,0,NULL);
+    assert(!player[0x2257a]);
+    free(player);
+#ifdef _WIN32
+    assert(VirtualFree(image,0,MEM_RELEASE));
+#else
+    assert(munmap(image,size)==0);
+#endif
+}
+
+
 int main(void) {
+    test_u3_intro_skip();
     char path[]="bbport-pad-test-XXXXXX";
     int fd=mkstemp(path);
     assert(fd>=0);
