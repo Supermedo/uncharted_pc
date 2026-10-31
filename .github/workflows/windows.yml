@@ -29,6 +29,7 @@ jobs:
         with:
           python-version: '3.12'
       - uses: msys2/setup-msys2@v2
+        id: msys2
         with:
           msystem: CLANG64
           update: true
@@ -43,6 +44,10 @@ jobs:
             mingw-w64-clang-x86_64-zydis mingw-w64-clang-x86_64-spirv-tools mingw-w64-clang-x86_64-spirv-headers
             mingw-w64-clang-x86_64-spirv-cross mingw-w64-clang-x86_64-protobuf mingw-w64-clang-x86_64-openssl
             mingw-w64-clang-x86_64-zlib mingw-w64-clang-x86_64-miniupnpc mingw-w64-clang-x86_64-nlohmann-json
+      # The runner image has its own MSYS2 in C:\msys64, which msys2-env.sh would put first on PATH:
+      # point it at the one set up above, where the packages are.
+      - name: Use this MSYS2 in msys2-env.sh
+        run: echo "MSYS2_ROOT=$(cygpath -u '${{ steps.msys2.outputs.msys2-location }}')" >> "$GITHUB_ENV"
       - name: Build bb-probe.exe
         run: bash build.sh
       - name: Optional assets (FSR 4 model, Intel XeSS)
