@@ -29,6 +29,12 @@ void Wait(u64 seq);
 /// passed here, without blocking the caller (inline when nothing is waiting).
 void Run(u64 seq, std::function<void()> fn);
 
+/// Like Run, but `fn` never runs on the calling thread: it always goes to the landing thread,
+/// in order with the functions passed to Run. For signals whose handlers record Vulkan commands
+/// (the flip interrupt: an EOP flip prepares the frame and waits for the Vulkan recording thread)
+/// when the caller is the recording thread or a copy thread, which must not wait for themselves.
+void Post(u64 seq, std::function<void()> fn);
+
 /// True once the buffer cache is going down: the landing thread no longer lands anything, the
 /// labels run at once and the waits for a landing return. Loops that wait for a label to run on
 /// the landing thread leave when it is set.

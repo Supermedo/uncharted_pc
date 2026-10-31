@@ -379,8 +379,12 @@ void SignalFlip(Vulkan::Rasterizer& rasterizer, const u8*) {
         rasterizer.OnGuestFlip();
         rasterizer.GetBufferCache().CheckStableBindings();
         rasterizer.CheckConstants();
+        // On the landing thread, never inline on the recording or a copy thread: an EOP flip's
+        // interrupt handler prepares the frame and waits for the recording thread
+        // (Scheduler::SyncRecording), which would wait for itself (Uncharted 1, cutscenes).
         rasterizer.SignalAfterHostCopies(
-            [] { Platform::IrqC::Instance()->Signal(Platform::InterruptId::GfxFlip); }, landing_seq);
+            [] { Platform::IrqC::Instance()->Signal(Platform::InterruptId::GfxFlip); }, landing_seq,
+            true);
         return;
     }
     rasterizer.WaitDeferredSignals();
