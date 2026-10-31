@@ -1,6 +1,6 @@
 """Compile the enabled cheats of one executable into cheats.bin for bb-probe --patches.
 
-Cheats are "health" and "ammo". A patch is written only when the executable's SHA-256 is listed and the bytes at its
+Cheats are "health", "ammo" and "chapters" (debug chapter access). A patch is written only when the executable's SHA-256 is listed and the bytes at its
 address are the expected ones; anything else is reported and skipped, never an error.
 Addresses are image offsets (virtual addresses of the SELF's load segments).
 """
@@ -25,23 +25,30 @@ PATCHES = {
     V100['eboot.bin']: {'health': (0x261edb, '7535', 'eb35'),
                         'ammo': (0x71b003, 'e8c8acc2ff', NOP * 5)},
     V102['eboot.bin']: {'health': (0x26244b, '7535', 'eb35'),
-                        'ammo': (0x730f73, 'e8c854c1ff', NOP * 5)},
+                        'ammo': (0x730f73, 'e8c854c1ff', NOP * 5),
+                        'chapters': [(0x1383ba, '74d4', '9090'),
+                                     (0x138fe3, '8a4002', 'b00190'),
+                                     (0x139073, '8a4002', 'b00190')]},
     V100['big2-ps4_Shipping.elf']: {'health': (0x35de73, '0f84bc010000', 'e9cf02000090'),
                                     'ammo': (0xa4fd8d, 'e87e8aa6ff', NOP * 5)},
     V100['big3-ps4_Shipping.elf']: {'health': (0x33f87b, '0f84ca020000', 'e96a0b000090'),
                                     'ammo': (0x46a1f9, '4c8d3dc0660501', '41b401eb729090')},
     V102['big2-ps4_Shipping.elf']: {'health': (0x7f0143, '0f843c050000', 'e95f06000090'),
-                                    'ammo': (0x961ac8, 'e853851800', NOP * 5)},
+                                    'ammo': (0x961ac8, 'e853851800', NOP * 5),
+                                    'chapters': (0x111417a, '00', '01')},
     V102['big3-ps4_Shipping.elf']: {'health': (0x9f9295, '4180bfa7000000007436', 'e9320300009090909090'),
-                                    'ammo': (0xd517ac, '4c8d257d92aa0066418b442462', '40b701e9110100009090909090')},
+                                    'ammo': (0xd517ac, '4c8d257d92aa0066418b442462', '40b701e9110100009090909090'),
+                                    'chapters': (0x17b2a96, '00', '01')},
 }
 
 
 def image_bytes(elf, program_headers, address, size):
     for p in program_headers:
-        if p['type'] in (1, 0x61000010) and p['vaddr'] <= address and address + size <= p['vaddr'] + p['filesz']:
+        if p['type'] in (1, 0x61000010) and p['vaddr'] <= address and address + size <= p['vaddr'] + p['memsz']:
             start = p['offset'] + address - p['vaddr']
-            return bytes(elf[start:start + size])
+            # The loaded image zero-fills the tail of each segment (BSS).
+            backed = max(0, min(size, p['filesz'] - (address - p['vaddr'])))
+            return (bytes(elf[start:start + backed]) if backed else b'') + bytes(size - backed)
     return None
 
 
@@ -57,13 +64,17 @@ def compile_cheats(path, cheats):
     for name in cheats:
         if name not in table:
             continue
-        address, original, replacement = table[name]
-        original, replacement = bytes.fromhex(original), bytes.fromhex(replacement)
-        if image_bytes(elf, program_headers, address, len(original)) != original:
-            print(f'Cheats: {name} skipped, unexpected code at {address:#x}')
-            continue
-        writes.append((address, replacement))
-        print(f'Cheats: {name} on')
+        entries = table[name] if isinstance(table[name], list) else [table[name]]
+        pending = []
+        for address, original, replacement in entries:
+            original, replacement = bytes.fromhex(original), bytes.fromhex(replacement)
+            if image_bytes(elf, program_headers, address, len(original)) != original:
+                print(f'Cheats: {name} skipped, unexpected code at {address:#x}')
+                break
+            pending.append((address, replacement))
+        else:
+            writes.extend(pending)
+            print(f'Cheats: {name} on')
     return writes
 
 

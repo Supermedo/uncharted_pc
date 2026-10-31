@@ -84,9 +84,11 @@ ASPECT_RATIOS = {'16:9': 16 / 9, '21:9': 64 / 27, '32:9': 32 / 9}
 # Widths the screens of these shapes really have at each height (21:9 is 64:27 at 1080p and 43:18 at 1440p).
 SCREEN_WIDTHS = {('21:9', 1080): 2560, ('21:9', 1440): 3440, ('21:9', 1600): 3840, ('21:9', 1620): 3840,
                  ('21:9', 2160): 5120, ('32:9', 1080): 3840, ('32:9', 1440): 5120, ('32:9', 2160): 7680}
-MAX_RENDER_PIXELS = 5_800_000   # what the games' GPU memory holds: 3200x1800 starts, 4K does not (docs/resolution.md)
+MAX_RENDER_PIXELS = 3840 * 2160  # guarded arena patches support this budget (docs/resolution.md)
 SPEAKERS = [('auto', 'Automatic (the Windows speaker setup)'), ('2', 'Stereo'), ('6', '5.1 surround'), ('8', '7.1 surround')]
 SCALERS = [('fsr1', 'FSR 1 (AMD FidelityFX, sharp)'), ('bilinear', 'Smooth (bilinear)')]
+DOWNSAMPLE_FILTERS = [('lanczos2', 'Lanczos2 (anti-ringing)'), ('area', 'Area (pixel averaging)'),
+                     ('bilinear', 'Bilinear (original)')]
 SHARPENING = [('off', 'Off'), ('1000', 'Low'), ('500', 'Medium'), ('250', 'High'), ('0', 'Maximum')]
 # Temporal anti-aliasing at the games' 1920x1080 (BB_UPSCALER): it takes the scene before the
 # games' post-processing with their own motion vectors, so it replaces their edge smoothing.
@@ -198,8 +200,10 @@ RESERVED_KEYS = {'Insert': 'Insert opens the in-game settings menu.',
 APP_DEFAULTS = {'game_dir': '', 'game_dir_u1': '', 'game_dir_u2': '', 'game_dir_u3': '', 'user_dir': '', 'start': 'u1', 'language': '1', 'ui_language': '', 'player_name': '',
                 'fullscreen': False, 'present_mode': 'Mailbox', 'frame_rate': '60', 'show_fps': False,
                 'window_size': '1920x1080', 'render_height': '1080', 'aspect': '16:9', 'speakers': 'auto', 'scaler': 'fsr1', 'sharpening': '500',
-                'anti_aliasing': 'off', 'aa_sharpness': '0.2', 'frame_generation': 'off',
-                'frame_gen_multiplier': '2', 'extra_env': '', 'close_on_play': False,
+                'downsample_filter': 'lanczos2', 'anti_aliasing': 'off', 'aa_sharpness': '0.2', 'frame_generation': 'off',
+                'frame_gen_multiplier': '2', 'extra_env': '', 'close_on_play': False, 'skip_intro': True,
+                'unlock_chapters': False,
+                'pc_mouse_aim': True, 'mouse_aim_sensitivity': '1.0', 'mouse_aim_smoothing_ms': '20',
                 'mouse_look': True, 'mouse_sensitivity': '1.0', 'mouse_invert_y': False,
                 'pad_invert_y': False, 'art_banner': '', 'art_u1': '', 'art_u2': '', 'art_u3': '', 'steam_art': '', 'art_crops': {}, 'shortcut_name': 'Uncharted: The Nathan Drake Collection', 'shortcut_icon': '', 'trophy_game': 'u1', 'pad_vibration': True, 'pad_vibration_strength': '100', 'button_prompts': 'auto', 'key_bindings': {}, 'pad_bindings': {}, 'check_updates': True,
                 **{key: 'auto' for key in FIXES},
@@ -502,6 +506,10 @@ def game_environment(s, start=None):
         if str(s.get(f'game_dir_{key}') or '').strip():
             env[f'BB_GAME_DIR_{key.upper()}'] = game_folder(s, key)
     env['BB_EXE'] = start
+    env['BB_PC_MOUSE_AIM'] = '1' if s.get('pc_mouse_aim', True) and s.get('mouse_look', True) else '0'
+    env['BB_MOUSE_AIM_SMOOTH_MS'] = str(s.get('mouse_aim_smoothing_ms', '20'))
+    env['BB_MOUSE_AIM_SENSITIVITY'] = str(s.get('mouse_aim_sensitivity') or '1.0')
+    env['BB_SKIP_INTRO'] = '1' if s.get('skip_intro', True) else '0'
     if s['user_dir']:
         env['BB_USER_DIR'] = s['user_dir']
     env['BB_LANGUAGE'] = s['language']
@@ -522,6 +530,7 @@ def game_environment(s, start=None):
         # A window of another shape than the picture would show bars: keep its height, take the picture's width.
         env['BB_WINDOW_SIZE'] = f'{round(window[1] * shape[0] / shape[1] / 2) * 2}x{window[1]}'
     env['BB_FSR1'] = '1' if s.get('scaler', 'fsr1') == 'fsr1' else '0'
+    env['BB_DOWNSAMPLE_FILTER'] = str(s.get('downsample_filter') or 'lanczos2')
     sharpening = str(s.get('sharpening') or 'off')
     env['BB_RCAS'] = '0' if sharpening == 'off' else '1'
     if sharpening != 'off':
@@ -533,8 +542,10 @@ def game_environment(s, start=None):
     for key, (_title, _hint, choices) in FIXES.items():
         env.update(choices.get(str(s.get(key) or 'auto'), {}))
     env['BB_BUTTON_PROMPTS'] = str(s.get('button_prompts') or 'auto')
-    env['BB_CHEATS'] = ','.join(f'{game}:{cheat}' for game, _t, _s, _e in GAMES for cheat in ('health', 'ammo')
-                                if s.get(f'{game}_infinite_{cheat}'))
+    enabled_cheats = [f'{game}:{cheat}' for game, _t, _s, _e in GAMES for cheat in ('health', 'ammo')
+                      if s.get(f'{game}_infinite_{cheat}')]
+    enabled_cheats += [f'{game}:chapters' for game, _t, _s, _e in GAMES if s.get('unlock_chapters')]
+    env['BB_CHEATS'] = ','.join(enabled_cheats)
     for item in str(s['extra_env']).split():
         if '=' in item:
             key, value = item.split('=', 1)
@@ -1346,6 +1357,12 @@ class Launcher:
                     on_change=self.refresh)
         self.folder(f, 'user_dir', _('Saves folder'), _('Where saves and the shader cache are kept'),
                     _('Empty: the user folder next to the launcher.'))
+        self.section(f, _('Startup'))
+        self.check(f, 'skip_intro', _('Skip intro logos'))
+        self.note(f, _('Skips the opening Sony/Naughty Dog and Bluepoint logo videos. Story cutscenes '
+                       'are preserved.'), top=2)
+        self.check(f, 'unlock_chapters', _('Unlock all chapters'),
+                   _('Debug access for playtesting; recorded chapter progress is unchanged.'))
         self.section(f, _('Separate game folders'))
         self.note(f, _('Only when the games are not in one collection folder (each dumped on its own). A game with '
                        'a folder here is taken from it; the others from the collection folder above.'), top=2)
@@ -1383,6 +1400,10 @@ class Launcher:
                    'scaled to fit (FSR 1 below when it is enlarged).'))
         self.row(f, _('Upscaling'), self.choice(f, 'scaler', SCALERS, 34),
                  _('FSR 1 keeps edges sharp when the image is enlarged; bilinear is softer.'))
+        self.row(f, _('Downsampling'), self.choice(f, 'downsample_filter', DOWNSAMPLE_FILTERS, 34),
+                 _('For supersampling, such as 4K on a 1440p screen. Lanczos2 preserves detail with '
+                   'anti-ringing; Area averages source pixel coverage. Both filter in linear light '
+                   'and apply only when the image is reduced.'))
         self.row(f, _('Sharpening'), self.choice(f, 'sharpening', SHARPENING, 34),
                  _('AMD RCAS after FSR 1 (only while the image is enlarged).'))
         self.section(f, _('Anti-aliasing'))
@@ -1427,6 +1448,18 @@ class Launcher:
                  _('How far the camera turns for a mouse movement; 1.00 is the default. Drag the slider or '
                    'type a number (0.1 to 10) for a faster turn.'))
         self.check(f, 'mouse_invert_y', _('Invert the mouse vertically'))
+        self.check(f, 'pc_mouse_aim', _('Responsive mouse aiming'),
+                   _('Uses mouse movement directly for weapon aiming, bypassing controller turn-speed '
+                     'limits and input smoothing. Controller behavior is preserved.'))
+        self.row(f, _('Aiming sensitivity multiplier'),
+                 Slider(self.tk, self.target(f), self.var('mouse_aim_sensitivity'), 0.1, 10.0, 0.05,
+                        COLORS, self.px, self.font_ui_md, width=300, log=True, entry=True),
+                 _('Multiplies your mouse sensitivity while aiming; 1.00 uses the same degrees per pixel.'))
+
+        self.row(f, _('Aim interpolation (ms)'),
+                 Slider(self.tk, self.target(f), self.var('mouse_aim_smoothing_ms'), 0, 40, 1,
+                        COLORS, self.px, self.font_ui_md, fmt='{:.0f}', width=300),
+                 _('Moves smoothly toward the requested angle. 0 applies mouse motion immediately; higher values add delay.'))
 
         self.section(f, _('Button pictures'))
         self.row(f, _('Show in the game'), self.choice(f, 'button_prompts', BUTTON_PROMPTS, 40),

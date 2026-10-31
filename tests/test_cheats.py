@@ -52,6 +52,20 @@ class CheatTests(unittest.TestCase):
         self.assertEqual(self.runner.game_cheats(cheats, 'big3-ps4_Shipping.elf'), 'health,ammo')
         self.assertEqual(self.runner.game_cheats('', 'eboot.bin'), '')
 
+    def test_debug_chapters_share_one_default_off_setting(self):
+        env = self.launcher.game_environment(self.settings(unlock_chapters=True))
+        self.assertEqual(env['BB_CHEATS'], 'u1:chapters,u2:chapters,u3:chapters')
+        for exe in self.runner.EXECUTABLES.values():
+            self.assertEqual(self.runner.game_cheats(env['BB_CHEATS'], exe), 'chapters')
+        self.assertFalse(self.launcher.APP_DEFAULTS['unlock_chapters'])
+
+    def test_zero_filled_segment_patch_guards(self):
+        import cheats
+        headers = [dict(type=1, vaddr=0x1000, filesz=2, memsz=8, offset=0)]
+        self.assertEqual(cheats.image_bytes(b'ab', headers, 0x1001, 3), b'b\0\0')
+        self.assertEqual(cheats.image_bytes(b'ab', headers, 0x1004, 1), b'\0')
+        self.assertIsNone(cheats.image_bytes(b'ab', headers, 0x1007, 2))
+
 
 def tiny_self(code):
     data = bytearray(0x1000 + 0x40)
@@ -99,6 +113,11 @@ class PatchFileTests(unittest.TestCase):
     def test_unexpected_bytes_write_nothing(self):
         self.assertIsNone(self.run_cheats(self.code(self.ADDRESS, b't5')))
 
+    def test_multi_site_cheat_is_not_partially_applied(self):
+        entries = [(self.ADDRESS, self.ORIGINAL, self.PATCHED), (0x120, '1122', '9090')]
+        self.assertIsNone(self.run_cheats(self.code(self.ADDRESS, bytes.fromhex(self.ORIGINAL)),
+                                         extra={'health': entries}))
+
     def test_mismatched_cheat_does_not_drop_the_other(self):
         blob = self.run_cheats(self.code(self.ADDRESS, bytes.fromhex(self.ORIGINAL)), 'health,ammo',
                                {'ammo': (0x120, 'e800000000', '9090909090')})
@@ -131,11 +150,13 @@ class PatchFileTests(unittest.TestCase):
     def test_real_table_is_consistent(self):
         for sha, table in self.cheats.PATCHES.items():
             spans = []
-            for name, (address, original, replacement) in table.items():
-                self.assertIn(name, ('health', 'ammo'))
-                self.assertEqual(len(bytes.fromhex(original)), len(bytes.fromhex(replacement)))
-                self.assertNotEqual(original, replacement)
-                spans.append((address, address + len(bytes.fromhex(original))))
+            for name, patch in table.items():
+                entries = patch if isinstance(patch, list) else [patch]
+                for address, original, replacement in entries:
+                    self.assertIn(name, ('health', 'ammo', 'chapters'))
+                    self.assertEqual(len(bytes.fromhex(original)), len(bytes.fromhex(replacement)))
+                    self.assertNotEqual(original, replacement)
+                    spans.append((address, address + len(bytes.fromhex(original))))
             spans.sort()
             self.assertTrue(all(a[1] <= b[0] for a, b in zip(spans, spans[1:])), sha)
         self.assertEqual(len(self.cheats.PATCHES), 6)

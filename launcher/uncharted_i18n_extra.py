@@ -3,6 +3,10 @@
 
 EXTRA_TRANSLATIONS = {
     'de': {
+        'Aim interpolation (ms)':
+        'Zielinterpolation (ms)',
+        'Moves smoothly toward the requested angle. 0 applies mouse motion immediately; higher values add delay.':
+        'Bewegt sich gleichmäßig zum gewünschten Winkel. 0 setzt Mausbewegungen sofort um; höhere Werte erhöhen die Verzögerung.',
         'AMD RCAS after FSR 1 (only while the image is enlarged).':
         'AMD RCAS nach FSR 1 (nur wenn das Bild vergrößert wird).',
         'Anti-aliasing': 'Kantenglättung',
@@ -99,8 +103,40 @@ EXTRA_TRANSLATIONS = {
         'see the Log page': 'siehe Seite Protokoll',
         'version': 'Version',
         'version {}': 'Version {}',
+        'Aiming sensitivity multiplier':
+        'Empfindlichkeitsfaktor beim Zielen',
+        'Downsampling':
+        'Herunterskalierung',
+        'For supersampling, such as 4K on a 1440p screen. Lanczos2 preserves detail with anti-ringing; Area averages source pixel coverage. Both filter in linear light and apply only when the image is reduced.':
+        'Für Supersampling, etwa 4K auf einem 1440p-Bildschirm. Lanczos2 erhält Details und begrenzt Halos; Fläche mittelt die Abdeckung der Quellpixel. Beide filtern im linearen Farbraum und nur beim Verkleinern des Bildes.',
+        'Multiplies your mouse sensitivity while aiming; 1.00 uses the same degrees per pixel.':
+        'Multipliziert die Mausempfindlichkeit beim Zielen; 1,00 verwendet dieselben Grad pro Pixel.',
+        'Responsive mouse aiming':
+        'Direktes Zielen mit der Maus',
+        'Skip intro logos':
+        'Startlogos überspringen',
+        'Skips the opening Sony/Naughty Dog and Bluepoint logo videos. Story cutscenes are preserved.':
+        'Überspringt die Startvideos von Sony/Naughty Dog und Bluepoint. Zwischensequenzen der Handlung bleiben erhalten.',
+        'Startup':
+        'Start',
+        'Uses mouse movement directly for weapon aiming, bypassing controller turn-speed limits and input smoothing. Controller behavior is preserved.':
+        'Verwendet Mausbewegungen direkt zum Zielen, ohne die Drehgeschwindigkeitsgrenze und Eingabeglättung des Controllers. Das Controllerverhalten bleibt erhalten.',
+        'Lanczos2 (anti-ringing)':
+        'Lanczos2 (Halo-Begrenzung)',
+        'Area (pixel averaging)':
+        'Fläche (Pixelmittelung)',
+        'Bilinear (original)':
+        'Bilinear (Original)',
+        'Unlock all chapters':
+        'Alle Kapitel freischalten',
+        'Debug access for playtesting; recorded chapter progress is unchanged.':
+        'Debug-Zugriff zum Testen; der gespeicherte Kapitelfortschritt bleibt unverändert.',
     },
     'it': {
+        'Aim interpolation (ms)':
+        'Interpolazione della mira (ms)',
+        'Moves smoothly toward the requested angle. 0 applies mouse motion immediately; higher values add delay.':
+        'Si sposta gradualmente verso l’angolo richiesto. 0 applica immediatamente il movimento del mouse; valori più alti aggiungono ritardo.',
         'AMD RCAS after FSR 1 (only while the image is enlarged).':
         "AMD RCAS dopo FSR 1 (solo quando l'immagine viene ingrandita).",
         'Anti-aliasing': 'Antialiasing',
@@ -197,8 +233,40 @@ EXTRA_TRANSLATIONS = {
         'see the Log page': 'consulta la pagina Registro',
         'version': 'versione',
         'version {}': 'versione {}',
+        'Aiming sensitivity multiplier':
+        'Moltiplicatore della sensibilità in mira',
+        'Downsampling':
+        'Riduzione della risoluzione',
+        'For supersampling, such as 4K on a 1440p screen. Lanczos2 preserves detail with anti-ringing; Area averages source pixel coverage. Both filter in linear light and apply only when the image is reduced.':
+        'Per il supersampling, ad esempio 4K su uno schermo 1440p. Lanczos2 preserva i dettagli e limita gli aloni; Area calcola la media della copertura dei pixel sorgente. Entrambi filtrano in luce lineare e si applicano solo riducendo l’immagine.',
+        'Multiplies your mouse sensitivity while aiming; 1.00 uses the same degrees per pixel.':
+        'Moltiplica la sensibilità del mouse durante la mira; 1,00 usa gli stessi gradi per pixel.',
+        'Responsive mouse aiming':
+        'Mira diretta con il mouse',
+        'Skip intro logos':
+        'Salta i loghi iniziali',
+        'Skips the opening Sony/Naughty Dog and Bluepoint logo videos. Story cutscenes are preserved.':
+        'Salta i video iniziali di Sony/Naughty Dog e Bluepoint. Mantiene i filmati della storia.',
+        'Startup':
+        'Avvio',
+        'Uses mouse movement directly for weapon aiming, bypassing controller turn-speed limits and input smoothing. Controller behavior is preserved.':
+        'Usa direttamente il movimento del mouse per mirare, senza i limiti di rotazione e la smussatura del controller. Il comportamento del controller rimane invariato.',
+        'Lanczos2 (anti-ringing)':
+        'Lanczos2 (anti-aloni)',
+        'Area (pixel averaging)':
+        'Area (media dei pixel)',
+        'Bilinear (original)':
+        'Bilineare (originale)',
+        'Unlock all chapters':
+        'Sblocca tutti i capitoli',
+        'Debug access for playtesting; recorded chapter progress is unchanged.':
+        'Accesso di debug per i test; i progressi registrati dei capitoli rimangono invariati.',
     },
     'ja': {
+        'Aim interpolation (ms)':
+        '照準の補間（ミリ秒）',
+        'Moves smoothly toward the requested angle. 0 applies mouse motion immediately; higher values add delay.':
+        '指定された角度へ滑らかに移動します。0ではマウスの動きを即座に反映し、値を上げると遅延が増えます。',
         'AMD RCAS after FSR 1 (only while the image is enlarged).':
         'FSR 1 適用後の AMD RCAS（画像を拡大する場合のみ）。',
         'Anti-aliasing': 'アンチエイリアス',
@@ -295,5 +363,33 @@ EXTRA_TRANSLATIONS = {
         'see the Log page': 'ログページを確認してください',
         'version': 'バージョン',
         'version {}': 'バージョン {}',
+        'Aiming sensitivity multiplier':
+        '照準時の感度倍率',
+        'Downsampling':
+        'ダウンサンプリング',
+        'For supersampling, such as 4K on a 1440p screen. Lanczos2 preserves detail with anti-ringing; Area averages source pixel coverage. Both filter in linear light and apply only when the image is reduced.':
+        '1440p画面に4Kを表示する場合などのスーパーサンプリング用です。Lanczos2は細部を保ち、リンギングを抑えます。面積平均は元のピクセルの被覆率で平均します。どちらもリニア光で処理し、画像を縮小する場合のみ適用されます。',
+        'Multiplies your mouse sensitivity while aiming; 1.00 uses the same degrees per pixel.':
+        '照準時のマウス感度に掛ける倍率です。1.00では1ピクセルあたりの回転角度が同じになります。',
+        'Responsive mouse aiming':
+        'マウスによる直接照準',
+        'Skip intro logos':
+        '起動ロゴをスキップ',
+        'Skips the opening Sony/Naughty Dog and Bluepoint logo videos. Story cutscenes are preserved.':
+        '起動時のSony/Naughty DogとBluepointのロゴ動画をスキップします。物語のカットシーンは保持されます。',
+        'Startup':
+        '起動',
+        'Uses mouse movement directly for weapon aiming, bypassing controller turn-speed limits and input smoothing. Controller behavior is preserved.':
+        'マウスの移動を照準に直接反映し、コントローラーの旋回速度制限と入力の平滑化を回避します。コントローラーの動作は変わりません。',
+        'Lanczos2 (anti-ringing)':
+        'Lanczos2（リンギング抑制）',
+        'Area (pixel averaging)':
+        '面積平均（ピクセル平均）',
+        'Bilinear (original)':
+        'バイリニア（従来）',
+        'Unlock all chapters':
+        '全チャプターを解放',
+        'Debug access for playtesting; recorded chapter progress is unchanged.':
+        '動作テスト用のデバッグ機能です。記録済みのチャプター進行状況は変わりません。',
     },
 }

@@ -13,6 +13,7 @@ The in-game "Apply and restart" runs this script again through BB_RESTART_COMMAN
 `--after PID` waits for the previous game process to end first (its GPU device and memory).
 """
 import ctypes
+import json
 import os
 from pathlib import Path
 import subprocess
@@ -92,7 +93,8 @@ def prepare(game, exe, out):
     linked = out / 'boot-linked.bin'
     # Which executable the files in out/ were made from: another folder (a per-game one) needs a new run.
     stamp, source = out / 'source.txt', str(game / exe)
-    sources = [game / exe, *(PORT / 'scripts').glob('*.py'), *(game / 'sce_module').glob('*.prx')]
+    sources = [game / exe, *(PORT / 'scripts').glob('*.py'),
+               PORT / 'scripts/arena64-manifest.json', *(game / 'sce_module').glob('*.prx')]
     if linked.is_file() and all(linked.stat().st_mtime >= s.stat().st_mtime for s in sources):
         if not stamp.is_file():
             stamp.write_text(source, encoding='utf-8')
@@ -105,17 +107,17 @@ def prepare(game, exe, out):
 
 
 # Render target memory the games need per extra 1080p worth of pixels (measured; docs/resolution.md), and
-# how much the GPU pool (2988 MiB, 3052 in Uncharted 3) can grow before its 32-bit size overflows 4 GiB.
+# how much an unpatched GPU pool can grow before its 32-bit size overflows 4 GiB.
 RT_MIB_PER_1080P = 300
 RT2_MIB_PER_1080P = 150
 POOL_HEADROOM_MIB = 1000
 
 
-def game_res(env):
+def game_res(env, extra_memory_mib=0, arena64=False):
     """BB_GAME_RES=WxH: the game renders and displays at that size (runtime_display.c patches its
     display configuration). Its render target heaps grow with the pixel count: BB_GAME_RT_MB and
     BB_GAME_RT2_MB are the extra MiB of the two heaps, BB_GAME_FREE_MB the unreserved GPU memory
-    given up to keep the pool below the 4 GiB the game's arena can address, BB_DMEM_MB the system
+    given up from the pool, BB_DMEM_MB the system
     direct memory (retail PS4: 5056 MiB) that holds the bigger pool. All can be set by hand."""
     value = env.get('BB_GAME_RES', '').lower().replace('×', 'x')
     try:
@@ -126,6 +128,8 @@ def game_res(env):
     if not (640 <= width <= 7680 and 360 <= height <= 4320) or (width, height) == (1920, 1080):
         env.pop('BB_GAME_RES', None)
         return
+    if width * height > 3840 * 2160:
+        fail('The supported render budget is at most 3840x2160 pixels.')
     env['BB_GAME_RES'] = f'{width}x{height}'
     scale = max(0.0, width * height / (1920 * 1080) - 1)
 
@@ -142,11 +146,35 @@ def game_res(env):
         frame_bytes = (-(-width // 16) * 16) * (-(-height // 64) * 64) * 3 // 2 + 65536
         env['BB_GAME_MOVIE_MB'] = str(max(4, -(-frame_bytes // (2 << 20)) * 2))
     pool = rt + rt2 - int(env['BB_GAME_FREE_MB'])
+    if pool > POOL_HEADROOM_MIB and not arena64:
+        fail('This render budget needs the arena patches for CUSA02344 1.02; lower the render resolution.')
     if not env.get('BB_DMEM_MB') and pool > 0:
-        env['BB_DMEM_MB'] = str(min(16384, 5056 + pool))
+        env['BB_DMEM_MB'] = str(min(16384, 5056 + extra_memory_mib + pool))
     print(f"Game resolution {width}x{height}: render target heaps +{rt} +{rt2} MiB, unreserved GPU memory -"
           f"{env['BB_GAME_FREE_MB']} MiB, direct memory {env.get('BB_DMEM_MB', 5056)} MiB"
-          + ('; above what the game can address (4 GiB GPU pool)' if pool > POOL_HEADROOM_MIB else ''), flush=True)
+          + ('; 64-bit arena capacity enabled' if arena64 else ''), flush=True)
+
+
+def startup_arguments(env, exe, out_root, inherited=None):
+    """Add the native logo-skip argument, preserving LoadExec's argv convention."""
+    supported = exe in (EXECUTABLES['u1'], EXECUTABLES['u2'])
+    skip = env.get('BB_SKIP_INTRO', '1') == '1'
+    direct = not inherited and exe == EXECUTABLES['u1'] and env.get('BB_DIRECT_U1_ACTIVE') == '1'
+    if not (skip and supported) and not direct:
+        return inherited
+    # probe.c removes line zero (the LoadExec target) when more arguments follow.
+    # Line one is argv[0]; an option must not occupy that slot.
+    lines = (inherited.read_text(encoding='utf-8').splitlines() if inherited
+             else [f'/app0/{exe}', 'eboot.bin'])
+    if len(lines) < 2:
+        lines.append('eboot.bin')
+    if skip and supported and 'bp_skipintromovie' not in lines[2:]:
+        lines.append('bp_skipintromovie')
+    if direct and 'ispartofuccollection' not in lines[2:]:
+        lines.append('ispartofuccollection')
+    path = out_root / 'startup-argv.txt'
+    path.write_text('\n'.join(lines) + '\n', encoding='utf-8')
+    return path
 
 
 def main():
@@ -191,7 +219,6 @@ def main():
         if clang64.is_dir():
             env['PATH'] = f'{clang64}{os.pathsep}{env.get("PATH", "")}'
 
-    game_res(env)
     exe = executable_name(env.get('BB_EXE', ''))
     user_dir = Path(env.get('BB_USER_DIR', data / 'user')).resolve()
     user_dir.mkdir(parents=True, exist_ok=True)
@@ -239,6 +266,14 @@ def main():
             fail(f'No {file} in {game}.')
         out = out_root / Path(exe).stem.split('-')[0]
         prepare(game, file, out)
+        memory = json.loads((out / 'arena64.json').read_text(encoding='utf-8'))
+        env['BB_DIRECT_U1_ACTIVE'] = ('1' if guest_argv is None and exe == EXECUTABLES['u1']
+                                      and memory.get('supported')
+                                      and memory.get('executable') == EXECUTABLES['u1'] else '0')
+        extra_memory = memory.get('movie_cpu_backing_extra_mib', 0)
+        game_res(env, extra_memory, memory.get('supported', False))
+        if extra_memory:
+            env.setdefault('BB_DMEM_MB', str(5056 + extra_memory))
         run_script('content_profile.py', game, '--out', out, '--sku', env.get('BB_CONTENT_SKU', 'full'))
         # The trophy set of this game (its texts in the console language, the icons) for the runtime.
         trophy_dir = out / 'trophy'
@@ -257,8 +292,9 @@ def main():
                    '--app0', str(game), '--user', str(user_dir), '--timeout', env.get('BB_TIMEOUT', '0')]
         if patches:
             command += ['--patches', str(patches)]
-        if guest_argv:
-            command += ['--guest-argv', str(guest_argv)]
+        launch_argv = startup_arguments(env, exe, out_root, guest_argv)
+        if launch_argv:
+            command += ['--guest-argv', str(launch_argv)]
         if key and (trophy_dir / 'trophies.txt').is_file():
             command += ['--trophies', str(trophy_dir)]
         loadexec.unlink(missing_ok=True)

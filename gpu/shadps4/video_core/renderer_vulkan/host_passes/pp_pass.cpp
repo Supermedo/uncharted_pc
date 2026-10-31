@@ -12,10 +12,15 @@
 #include "video_core/renderer_vulkan/vk_shader_util.h"
 
 #include <boost/container/static_vector.hpp>
+#include <cstdlib>
+#include <cstring>
 
 namespace Vulkan::HostPasses {
 
 void PostProcessingPass::Create(vk::Device device, const vk::Format surface_format) {
+    const char* filter = std::getenv("BB_DOWNSAMPLE_FILTER");
+    downsample_filter = !filter || !std::strcmp(filter, "lanczos2") ? 1u
+                        : !std::strcmp(filter, "area") ? 2u : 0u;
     boost::container::static_vector<vk::DescriptorSetLayoutBinding, 2> bindings{
         {
             .binding = 0,
@@ -250,6 +255,7 @@ void PostProcessingPass::Render(vk::CommandBuffer cmdbuf, vk::ImageView input,
                              },
                          });
 
+    settings.downsample_filter = downsample_filter;
     cmdbuf.pushDescriptorSetKHR(vk::PipelineBindPoint::eGraphics, *pipeline_layout, 0, set_writes);
     cmdbuf.pushConstants(*pipeline_layout, vk::ShaderStageFlagBits::eFragment, 0, sizeof(Settings),
                          &settings);

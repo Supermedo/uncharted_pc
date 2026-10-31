@@ -132,3 +132,16 @@ The two tools are for development and off by default.
 | `src/runtime_pad.c` | last device, layout-aware bindings |
 | `texture_cache/button_prompts_xbox.inc`, `tools/make_xbox_prompts.py` | the Xbox pictures and the script that packs them |
 | `tools/dds_view.py` | collected pictures to PNG |
+
+## Mouse aiming
+
+The launcher's Controls page enables responsive mouse aiming by default, with
+an independent sensitivity multiplier. `BB_PC_MOUSE_AIM=0` restores the original
+mouse-to-stick path; `BB_MOUSE_AIM_SENSITIVITY` multiplies the normal mouse
+sensitivity during aiming (default 1, range 0.01 to 10).
+
+For the matching 1.02 aiming3 cameras, the runner applies mouse displacement
+as per-frame angles after the controller speed curve. A rightward mouse move
+turns right in all three games. Physical controller values remain unchanged.
+Both angular callbacks must be active; other builds and unknown camera modes
+retain the original mouse-to-stick behavior. Changes apply after restarting.

@@ -1,0 +1,461 @@
+{
+  "version": 2,
+  "builds": {
+    "dc017b45da8978bb11a0a11d940e96d98fa07f3c066a3debba043714432212f8": {
+      "file": "eboot.bin",
+      "patches": [
+        {
+          "role": "capacity_init_reset",
+          "address": 4522441,
+          "expected": "89c0",
+          "context_address": 4522437,
+          "context": "488b45c089c0498b4f68488d1485000000004883e103",
+          "replacement": "9090"
+        },
+        {
+          "role": "capacity_init_reset",
+          "address": 4523097,
+          "expected": "89c0",
+          "context_address": 4523093,
+          "context": "488b45c089c0498b4d68488d1485000000004883e103",
+          "replacement": "9090"
+        },
+        {
+          "role": "capacity_init_reset",
+          "address": 4523403,
+          "expected": "89c0",
+          "context_address": 4523399,
+          "context": "488b45c089c0498b4d68488d1485000000004883e103",
+          "replacement": "9090"
+        },
+        {
+          "role": "capacity_init_reset",
+          "address": 4523723,
+          "expected": "89c0",
+          "context_address": 4523719,
+          "context": "488b45c089c0498b4f68488d1485000000004883e103",
+          "replacement": "9090"
+        },
+        {
+          "role": "capacity_init_reset",
+          "address": 4524058,
+          "expected": "89c0",
+          "context_address": 4524054,
+          "context": "488b45c089c0498b4c2468488d1485000000004883e1",
+          "replacement": "9090"
+        },
+        {
+          "role": "capacity_reset",
+          "address": 4524991,
+          "expected": "4921c7",
+          "context_address": 4524986,
+          "context": "b8ffffffff4921c7498b4424684a8d0cbd000000004883e0034809c84989",
+          "replacement": "909090"
+        },
+        {
+          "role": "capacity_reset",
+          "address": 4525215,
+          "expected": "4921c5",
+          "context_address": 4525210,
+          "context": "b8ffffffff4921c5498b4424684a8d0cad000000004883e0034809c84989",
+          "replacement": "909090"
+        },
+        {
+          "role": "allocation_high_water",
+          "address": 4536308,
+          "expected": "418b551029d1498b751848c1ee0201d64429c901f1",
+          "context_address": 4536304,
+          "context": "49894d00418b551029d1498b751848c1ee0201d64429c901f1493b4d20760449894d20",
+          "replacement": "498b751848c1ee024c29c94801f190909090909090"
+        },
+        {
+          "role": "stack_high_water",
+          "address": 4537000,
+          "expected": "8b7310488b7b1848c1ef0201f729d129f101f9",
+          "context_address": 4536996,
+          "context": "488953088b7310488b7b1848c1ef0201f729d129f101f9483b4b20760448894b20",
+          "replacement": "488b7b1848c1ef024829d14801f99090909090"
+        },
+        {
+          "role": "capacity_query",
+          "address": 4525408,
+          "expected": "8b87c8000000c3",
+          "context_address": 4525408,
+          "context": "8b87c8000000c3"
+        },
+        {
+          "role": "free_query",
+          "address": 4525424,
+          "expected": "488b476848c1e8028b4f508b576029d101c22b575829c829d0c3",
+          "context_address": 4525424,
+          "context": "488b476848c1e8028b4f508b576029d101c22b575829c829d0c3"
+        },
+        {
+          "role": "gpu_usage",
+          "address": 4609788,
+          "expected": "8b0dee42c5008b15f842c50029d1488b35f742c50048c1ee0201d62b0ddb42c50001f139c80f47c8890dc600c600",
+          "context_address": 4609788,
+          "context": "8b0dee42c5008b15f842c50029d1488b35f742c50048c1ee0201d62b0ddb42c50001f139c80f47c8890dc600c600",
+          "globals": {
+            "current": 17537520,
+            "stack": 17537528,
+            "packed": 17537544,
+            "usage": 17586160
+          }
+        },
+        {
+          "role": "movie_cpu_reserve_end",
+          "address": 4855248,
+          "expected": "0000b004",
+          "context_address": 4855245,
+          "context": "488d830000b004488905753c4b0048050000b00448c1e8224883f83f",
+          "replacement": "00000008"
+        },
+        {
+          "role": "movie_cpu_reserve_guard",
+          "address": 4855261,
+          "expected": "0000b004",
+          "context_address": 4855245,
+          "context": "488d830000b004488905753c4b0048050000b00448c1e8224883f83f",
+          "replacement": "00000008"
+        },
+        {
+          "role": "movie_cpu_reserve_size",
+          "address": 4855342,
+          "expected": "0000b004",
+          "context_address": 4855335,
+          "context": "48c7055637c0000000b004",
+          "replacement": "00000008"
+        },
+        {
+          "role": "movie_cpu_backing",
+          "address": 9655960,
+          "expected": "0000000100000000",
+          "replacement": "0000600400000000",
+          "context_address": 9655952,
+          "context": "1600000005000000000000010000000000001000000000000000000000000000"
+        },
+        {
+          "role": "cpu_parent_budget",
+          "address": 9652888,
+          "expected": "0000006400000000",
+          "replacement": "0000606700000000",
+          "context_address": 9652880,
+          "context": "0200000002000000000000640000000000001000000000000000000000000000"
+        },
+        {
+          "role": "movie_cpu_total_validation",
+          "address": 213,
+          "expected": "31c94889df",
+          "context_address": 203,
+          "context": "48ba000000200100000031c94889df",
+          "extra_cpu_bytes": 56623104
+        }
+      ]
+    },
+    "5047b693b1c6fd06ccb1eacecacee60b6183bedc18d023cac276e1ec6009dfe2": {
+      "file": "big2-ps4_Shipping.elf",
+      "patches": [
+        {
+          "role": "capacity_init_reset",
+          "address": 11728873,
+          "expected": "89c0",
+          "context_address": 11728869,
+          "context": "488b45c089c0498b4f68488d1485000000004883e103",
+          "replacement": "9090"
+        },
+        {
+          "role": "capacity_init_reset",
+          "address": 11729513,
+          "expected": "89c0",
+          "context_address": 11729509,
+          "context": "488b45c089c0498b4d68488d1485000000004883e103",
+          "replacement": "9090"
+        },
+        {
+          "role": "capacity_init_reset",
+          "address": 11729819,
+          "expected": "89c0",
+          "context_address": 11729815,
+          "context": "488b45c089c0498b4d68488d1485000000004883e103",
+          "replacement": "9090"
+        },
+        {
+          "role": "capacity_init_reset",
+          "address": 11730139,
+          "expected": "89c0",
+          "context_address": 11730135,
+          "context": "488b45c089c0498b4f68488d1485000000004883e103",
+          "replacement": "9090"
+        },
+        {
+          "role": "capacity_init_reset",
+          "address": 11730474,
+          "expected": "89c0",
+          "context_address": 11730470,
+          "context": "488b45c089c0498b4c2468488d1485000000004883e1",
+          "replacement": "9090"
+        },
+        {
+          "role": "capacity_reset",
+          "address": 11731407,
+          "expected": "4921c7",
+          "context_address": 11731402,
+          "context": "b8ffffffff4921c7498b4424684a8d0cbd000000004883e0034809c84989",
+          "replacement": "909090"
+        },
+        {
+          "role": "capacity_reset",
+          "address": 11731631,
+          "expected": "4921c5",
+          "context_address": 11731626,
+          "context": "b8ffffffff4921c5498b4424684a8d0cad000000004883e0034809c84989",
+          "replacement": "909090"
+        },
+        {
+          "role": "allocation_high_water",
+          "address": 11739780,
+          "expected": "418b551029d1498b751848c1ee0201d64429c901f1",
+          "context_address": 11739776,
+          "context": "49894d00418b551029d1498b751848c1ee0201d64429c901f1493b4d20760449894d20",
+          "replacement": "498b751848c1ee024c29c94801f190909090909090"
+        },
+        {
+          "role": "stack_high_water",
+          "address": 11740472,
+          "expected": "8b7310488b7b1848c1ef0201f729d129f101f9",
+          "context_address": 11740468,
+          "context": "488953088b7310488b7b1848c1ef0201f729d129f101f9483b4b20760448894b20",
+          "replacement": "488b7b1848c1ef024829d14801f99090909090"
+        },
+        {
+          "role": "capacity_query",
+          "address": 11731824,
+          "expected": "8b87c8000000c3",
+          "context_address": 11731824,
+          "context": "8b87c8000000c3"
+        },
+        {
+          "role": "free_query",
+          "address": 11731840,
+          "expected": "488b476848c1e8028b4f508b576029d101c22b575829c829d0c3",
+          "context_address": 11731840,
+          "context": "488b476848c1e8028b4f508b576029d101c22b575829c829d0c3"
+        },
+        {
+          "role": "gpu_usage",
+          "address": 11819468,
+          "expected": "8b0daec2a2008b15b8c2a20029d1488b35b7c2a20048c1ee0201d62b0d9bc2a20001f139c80f47c8890d7680a300",
+          "context_address": 11819468,
+          "context": "8b0daec2a2008b15b8c2a20029d1488b35b7c2a20048c1ee0201d62b0d9bc2a20001f139c80f47c8890d7680a300",
+          "globals": {
+            "current": 22486144,
+            "stack": 22486152,
+            "packed": 22486168,
+            "usage": 22534768
+          }
+        },
+        {
+          "role": "movie_cpu_reserve_end",
+          "address": 12078944,
+          "expected": "0000b004",
+          "context_address": 12078941,
+          "context": "488d830000b004488905d5b64c0048050000b00448c1e8224883f83f",
+          "replacement": "00000008"
+        },
+        {
+          "role": "movie_cpu_reserve_guard",
+          "address": 12078957,
+          "expected": "0000b004",
+          "context_address": 12078941,
+          "context": "488d830000b004488905d5b64c0048050000b00448c1e8224883f83f",
+          "replacement": "00000008"
+        },
+        {
+          "role": "movie_cpu_reserve_size",
+          "address": 12079038,
+          "expected": "0000b004",
+          "context_address": 12079031,
+          "context": "48c70546809d000000b004",
+          "replacement": "00000008"
+        },
+        {
+          "role": "movie_cpu_backing",
+          "address": 17135336,
+          "expected": "0000000100000000",
+          "replacement": "0000600400000000",
+          "context_address": 17135328,
+          "context": "1600000005000000000000010000000000001000000000000000000000000000"
+        },
+        {
+          "role": "cpu_parent_budget",
+          "address": 17132264,
+          "expected": "0000006400000000",
+          "replacement": "0000606700000000",
+          "context_address": 17132256,
+          "context": "0200000002000000000000640000000000001000000000000000000000000000"
+        },
+        {
+          "role": "movie_cpu_total_validation",
+          "address": 2066253,
+          "expected": "31c94889df",
+          "context_address": 2066243,
+          "context": "48ba000000200100000031c94889df",
+          "extra_cpu_bytes": 56623104
+        }
+      ]
+    },
+    "02c111aa7e73e445d71a1ad861702811f31d471abc61caf01732d55a77eb1c38": {
+      "file": "big3-ps4_Shipping.elf",
+      "patches": [
+        {
+          "role": "capacity_init_reset",
+          "address": 14266345,
+          "expected": "89c0",
+          "context_address": 14266341,
+          "context": "488b45c089c0498b4f68488d1485000000004883e103",
+          "replacement": "9090"
+        },
+        {
+          "role": "capacity_init_reset",
+          "address": 14266985,
+          "expected": "89c0",
+          "context_address": 14266981,
+          "context": "488b45c089c0498b4d68488d1485000000004883e103",
+          "replacement": "9090"
+        },
+        {
+          "role": "capacity_init_reset",
+          "address": 14267291,
+          "expected": "89c0",
+          "context_address": 14267287,
+          "context": "488b45c089c0498b4d68488d1485000000004883e103",
+          "replacement": "9090"
+        },
+        {
+          "role": "capacity_init_reset",
+          "address": 14267611,
+          "expected": "89c0",
+          "context_address": 14267607,
+          "context": "488b45c089c0498b4f68488d1485000000004883e103",
+          "replacement": "9090"
+        },
+        {
+          "role": "capacity_init_reset",
+          "address": 14267946,
+          "expected": "89c0",
+          "context_address": 14267942,
+          "context": "488b45c089c0498b4c2468488d1485000000004883e1",
+          "replacement": "9090"
+        },
+        {
+          "role": "capacity_reset",
+          "address": 14268879,
+          "expected": "4921c7",
+          "context_address": 14268874,
+          "context": "b8ffffffff4921c7498b4424684a8d0cbd000000004883e0034809c84989",
+          "replacement": "909090"
+        },
+        {
+          "role": "capacity_reset",
+          "address": 14269103,
+          "expected": "4921c5",
+          "context_address": 14269098,
+          "context": "b8ffffffff4921c5498b4424684a8d0cad000000004883e0034809c84989",
+          "replacement": "909090"
+        },
+        {
+          "role": "allocation_high_water",
+          "address": 14277252,
+          "expected": "418b551029d1498b751848c1ee0201d64429c901f1",
+          "context_address": 14277248,
+          "context": "49894d00418b551029d1498b751848c1ee0201d64429c901f1493b4d20760449894d20",
+          "replacement": "498b751848c1ee024c29c94801f190909090909090"
+        },
+        {
+          "role": "stack_high_water",
+          "address": 14277944,
+          "expected": "8b7310488b7b1848c1ef0201f729d129f101f9",
+          "context_address": 14277940,
+          "context": "488953088b7310488b7b1848c1ef0201f729d129f101f9483b4b20760448894b20",
+          "replacement": "488b7b1848c1ef024829d14801f99090909090"
+        },
+        {
+          "role": "capacity_query",
+          "address": 14269296,
+          "expected": "8b87c8000000c3",
+          "context_address": 14269296,
+          "context": "8b87c8000000c3"
+        },
+        {
+          "role": "free_query",
+          "address": 14269312,
+          "expected": "488b476848c1e8028b4f508b576029d101c22b575829c829d0c3",
+          "context_address": 14269312,
+          "context": "488b476848c1e8028b4f508b576029d101c22b575829c829d0c3"
+        },
+        {
+          "role": "gpu_usage",
+          "address": 14350828,
+          "expected": "8b0dce6ee4008b15d86ee40029d1488b35d76ee40048c1ee0201d62b0dbb6ee40001f139c80f47c8890dd62ce500",
+          "context_address": 14350828,
+          "context": "8b0dce6ee4008b15d86ee40029d1488b35d76ee40048c1ee0201d62b0dbb6ee40001f139c80f47c8890dd62ce500",
+          "globals": {
+            "current": 29321408,
+            "stack": 29321416,
+            "packed": 29321432,
+            "usage": 29370096
+          }
+        },
+        {
+          "role": "movie_cpu_reserve_end",
+          "address": 14615744,
+          "expected": "0000b004",
+          "context_address": 14615741,
+          "context": "488d830000b00448890555748f0048050000b00448c1e8224883f83f",
+          "replacement": "00000008"
+        },
+        {
+          "role": "movie_cpu_reserve_guard",
+          "address": 14615757,
+          "expected": "0000b004",
+          "context_address": 14615741,
+          "context": "488d830000b00448890555748f0048050000b00448c1e8224883f83f",
+          "replacement": "00000008"
+        },
+        {
+          "role": "movie_cpu_reserve_size",
+          "address": 14615838,
+          "expected": "0000b004",
+          "context_address": 14615831,
+          "context": "48c7052613df000000b004",
+          "replacement": "00000008"
+        },
+        {
+          "role": "movie_cpu_backing",
+          "address": 24091128,
+          "expected": "0000000100000000",
+          "replacement": "0000600400000000",
+          "context_address": 24091120,
+          "context": "1600000005000000000000010000000000001000000000000000000000000000"
+        },
+        {
+          "role": "cpu_parent_budget",
+          "address": 24087992,
+          "expected": "0000006000000000",
+          "replacement": "0000606300000000",
+          "context_address": 24087984,
+          "context": "0200000002000000000000600000000000001000000000000000000000000000"
+        },
+        {
+          "role": "movie_cpu_total_validation",
+          "address": 3239581,
+          "expected": "31c94889df",
+          "context_address": 3239571,
+          "context": "48ba000000200100000031c94889df",
+          "extra_cpu_bytes": 56623104
+        }
+      ]
+    }
+  }
+}
