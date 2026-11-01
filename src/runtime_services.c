@@ -86,7 +86,7 @@ static ABI int32_t system_param(int32_t id,int32_t *value) {
     case 5: *value=0; break;                    /* summer time */
     case 7: *value=0; break;                    /* parental level off */
     case 1000: *value=1; break;                 /* enter button = cross */
-    default: fprintf(stderr,"STOP: unsupported system parameter %d\n",id); exit(21);
+    default: fprintf(stderr,"STOP: unsupported system parameter %d\n",id); runtime_quit(21);
     }
     return 0;
 }
@@ -108,14 +108,17 @@ static ABI int32_t load_exec(const char *path, char *const *argv) {
     putchar('\n');
     const char *file=getenv("BB_LOADEXEC_FILE");
     FILE *f=file && *file ? fopen(file,"wb") : NULL;
-    if (!f) { fputs("STOP: sceSystemServiceLoadExec needs BB_LOADEXEC_FILE (run.py sets it)\n",stderr); exit(21); }
+    if (!f) { fputs("STOP: sceSystemServiceLoadExec needs BB_LOADEXEC_FILE (run.py sets it)\n",stderr); runtime_quit(21); }
     fprintf(f,"%s\n",path);
     for (int i=0;argv && argv[i] && i<32;++i) fprintf(f,"%s\n",argv[i]);
     fclose(f);
     fflush(NULL);
-    _exit(RUNTIME_LOADEXEC_EXIT);
-   __builtin_unreachable();
-
+#ifdef _WIN32
+    /* The next game's window may take the focus from this one (else Windows opens it behind and
+     * it gets no input until clicked). */
+    AllowSetForegroundWindow(ASFW_ANY);
+#endif
+    runtime_quit(RUNTIME_LOADEXEC_EXIT);
 }
 static ABI int32_t launch_browser(void) { note("SystemService: web browser request ignored (offline)"); return 0; }
 

@@ -118,7 +118,7 @@ static DWORD win_prot(int prot) {
 }
 static void win_fail(const char *what, uintptr_t address, uint64_t size) {
     fprintf(stderr,"STOP: %s failed at %p (+0x%" PRIx64 "), error %lu\n",what,(void *)address,size,GetLastError());
-    exit(21);
+    runtime_quit(21);
 }
 static size_t region_index(uintptr_t a) { /* first region with end > a */
     size_t lo=0, hi=region_count;
@@ -343,7 +343,7 @@ static void queue_hook(int kind, uintptr_t address, uint64_t size) {
     if (pending_count==pending_capacity) {
         size_t capacity=pending_capacity ? pending_capacity*2 : 256;
         PendingHook *grown=realloc(pending,capacity*sizeof(*pending));
-        if (!grown) { fputs("STOP: out of memory for GPU memory notifications\n",stderr); exit(21); }
+        if (!grown) { fputs("STOP: out of memory for GPU memory notifications\n",stderr); runtime_quit(21); }
         pending=grown; pending_capacity=capacity;
     }
     pending[pending_count++]=(PendingHook){kind,address,size};

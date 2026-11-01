@@ -138,7 +138,17 @@ static ABI __attribute__((noreturn)) void unresolved(uint32_t id, uintptr_t argu
     puts(entered_game ? "Original guest entry instructions executed; game initialization is incomplete." :
                         "Native libc initialization is incomplete; game entry has not run.");
     fflush(NULL);
-    _exit(20); /* no destructors: GPU, audio and guest threads are still running */
+    runtime_quit(20); /* no destructors: GPU, audio and guest threads are still running */
+}
+void runtime_quit(int code) {
+    static volatile long quitting;
+    fflush(NULL);
+    if (!__atomic_exchange_n(&quitting,1,__ATOMIC_ACQ_REL) && gpu_enabled) bbgpu_prepare_exit();
+    fflush(NULL);
+#ifdef _WIN32
+    TerminateProcess(GetCurrentProcess(),(UINT)code);
+#endif
+    _exit(code);
 }
 #ifndef _WIN32
 /* enter_on_stack(entry, arg0, arg1, stack_top): call entry(arg0,arg1) on a new stack. */

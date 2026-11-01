@@ -34,13 +34,13 @@ static ABI void guest_set_heap_api(void **api) {
 }
 void **runtime_application_heap_api(void) { return application_heap_api; }
 void runtime_set_module_tls(uint64_t module, const void *data, uint64_t filesz, uint64_t memsz) {
-    if (module<2 || module>=TLS_MODULES) { fputs("STOP: unsupported TLS module id\n",stderr); exit(21); }
+    if (module<2 || module>=TLS_MODULES) { fputs("STOP: unsupported TLS module id\n",stderr); runtime_quit(21); }
     tls_modules[module].data=data; tls_modules[module].filesz=filesz; tls_modules[module].memsz=memsz;
 }
 void runtime_set_libc_tls(const void *data, uint64_t filesz, uint64_t memsz) { runtime_set_module_tls(2,data,filesz,memsz); }
 static ABI void *guest_tls_get_addr(const uint64_t *index) {
     if (!index || index[0]<2 || index[0]>=TLS_MODULES || !tls_modules[index[0]].data || index[1]>=tls_modules[index[0]].memsz) {
-        fputs("STOP: unsupported TLS module/offset\n",stderr); exit(21);
+        fputs("STOP: unsupported TLS module/offset\n",stderr); runtime_quit(21);
     }
     unsigned char **block=&tls_blocks[index[0]];
     if (!*block) {
@@ -143,7 +143,7 @@ static ABI int guard_acquire(uint64_t *guard) {
         if (expected & 1) return 0;
         if ((uint32_t)(expected >> 32) == guard_owner) {
             fputs("STOP: recursive/concurrent static initialization is not supported yet\n", stderr);
-            exit(21);
+            runtime_quit(21);
         }
         sched_yield(); /* another thread is running the initializer */
     }
@@ -178,7 +178,7 @@ static ABI __attribute__((noreturn)) void guest_libc_exit(int status) {
     printf("Runtime: guest requested exit(%d)\n", status);
     runtime_finalize(NULL);
     runtime_report();
-    exit(status);
+    runtime_quit(status);
 }
 uintptr_t runtime_resolve(const char *name, int is_data) {
     if (!(capabilities & 1)) return 0;
