@@ -522,6 +522,9 @@ void DrawPreparation::WorkerLoop(std::stop_token stop, u32 index) {
                 } else if (compute_prep && index < target->num_dispatches &&
                            (cs->dispatch_initiator & 1) &&
                            !target->dispatch_taken[index].exchange(true)) {
+                    // The same permutation the GPU thread selects (WorkgroupSplit).
+                    sel.indirect_dispatch =
+                        header->type3.opcode != AmdGpu::PM4ItOpcode::DispatchDirect;
                     pipeline_cache.PrepareComputePipeline(sel);
                 }
                 return;

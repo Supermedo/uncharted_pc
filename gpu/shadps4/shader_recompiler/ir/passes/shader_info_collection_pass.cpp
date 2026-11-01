@@ -176,6 +176,21 @@ void CollectShaderInfoPass(IR::Program& program, const Profile& profile) {
         }
     }
 
+    // bbport: workgroups that share nothing between their threads may run as smaller ones.
+    if (info.sw_stage == SwStage::Compute && profile.split_large_workgroups) {
+        bool shares = info.shared_types != IR::Type::Void || info.shared_memory_scratch_size != 0 ||
+                      info.loads.GetAny(IR::Attribute::WorkgroupIndex);
+        for (const auto& buffer : info.buffers) {
+            shares |= buffer.buffer_type == BufferType::SharedMemory;
+        }
+        for (IR::Block* const block : program.post_order_blocks) {
+            for (IR::Inst& inst : block->Instructions()) {
+                shares |= inst.GetOpcode() == IR::Opcode::Barrier;
+            }
+        }
+        info.cs_split_eligible = !shares;
+    }
+
     if (!EmulatorSettings.IsDirectMemoryAccessEnabled()) {
         info.uses_dma = false;
         info.readconst_types = Info::ReadConstType::None;
