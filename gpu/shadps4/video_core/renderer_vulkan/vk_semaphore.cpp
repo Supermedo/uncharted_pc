@@ -11,6 +11,11 @@
 #include "video_core/renderer_vulkan/vk_semaphore.h"
 
 #include "common/assert.h"
+#ifdef _WIN32
+// windows.h would clash with WAIT_TIMEOUT below.
+extern "C" __declspec(dllimport) int __stdcall TerminateProcess(void* process, unsigned int code);
+extern "C" __declspec(dllimport) void* __stdcall GetCurrentProcess();
+#endif
 
 namespace Vulkan {
 
@@ -85,6 +90,10 @@ namespace Vulkan {
         g_gpu_stall_report();
     }
     std::fflush(stdout);
+#ifdef _WIN32
+    // bbport: no DLL detach code (ExitProcess could hang in libsrt's; see runtime_quit).
+    TerminateProcess(GetCurrentProcess(), 5);
+#endif
     std::_Exit(5);
 }
 
@@ -111,6 +120,12 @@ void Semaphore::Refresh() {
     do {
         this_tick = gpu_tick.load(std::memory_order_acquire);
         auto [counter_result, cntr] = instance.GetDevice().getSemaphoreCounterValue(*semaphore);
+        // bbport: a lost device ends through DeviceLost (the driver's fault report, the stall
+        // report); the assertion below printed only "ErrorDeviceLost" (batch A start-up loss,
+        // 2026-11-01).
+        if (counter_result == vk::Result::eErrorDeviceLost) {
+            DeviceLost(instance.GetDevice());
+        }
         ASSERT_MSG(counter_result == vk::Result::eSuccess,
                    "Failed to get master semaphore value: {}", vk::to_string(counter_result));
         counter = cntr;
