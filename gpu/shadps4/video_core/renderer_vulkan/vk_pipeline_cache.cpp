@@ -35,6 +35,7 @@
 #include "video_core/renderer_vulkan/vk_pipeline_serialization.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
 #include "video_core/renderer_vulkan/vk_shader_util.h"
+#include "bbport_focus_fix.h"
 
 namespace Vulkan {
 
@@ -252,6 +253,7 @@ const Shader::RuntimeInfo& PipelineCache::BuildRuntimeInfo(PipelineSelection& se
         info.hw.cs.tgid_enable = {cs_pgm.IsTgidEnabled(0), cs_pgm.IsTgidEnabled(1),
                                   cs_pgm.IsTgidEnabled(2)};
         info.hw.cs.shared_memory_size = cs_pgm.SharedMemSize();
+        info.hw.cs.indirect = sel.indirect_dispatch;
         break;
     }
     default:
@@ -347,6 +349,7 @@ PipelineCache::PipelineCache(const Instance& instance_, Scheduler& scheduler_,
             return !instance.IsFragmentShaderBarycentricSupported() &&
                    instance.GetDriverID() == vk::DriverId::eNvidiaProprietary;
         }(),
+        .split_large_workgroups = instance.GetDriverID() == vk::DriverId::eNvidiaProprietary,
         .needs_lds_barriers = instance.GetDriverID() == vk::DriverId::eNvidiaProprietary ||
                               instance.GetDriverID() == vk::DriverId::eMesaKosmickrisp,
         .needs_buffer_offsets = instance.StorageMinAlignment() > 4,
@@ -730,8 +733,9 @@ const GraphicsPipeline* PipelineCache::GetGraphicsPipeline(const DrawIndirectPar
     return result;
 }
 
-const ComputePipeline* PipelineCache::GetComputePipeline() {
+const ComputePipeline* PipelineCache::GetComputePipeline(bool indirect) {
     EnsureWarm();
+    sel.indirect_dispatch = indirect;
     if (!RefreshComputeKey()) {
         return nullptr;
     }
@@ -1202,7 +1206,9 @@ vk::ShaderModule PipelineCache::CompileModule(Shader::Info& info, Shader::Runtim
         module = CompileSPV(spv, instance.GetDevice());
     }
 
-    if (!Shader::Backend::SPIRV::IsForcedShader(info.pgm_hash)) {
+    // bbport: the autofocus fix is translated each run (BB_FOCUS_FIX=0 turns it off).
+    if (!Shader::Backend::SPIRV::IsForcedShader(info.pgm_hash) &&
+        !BbFocusFix::FocusCentreShader(info.pgm_hash)) {
         RegisterShaderBinary(std::move(spv), info.pgm_hash, perm_idx);
     }
 

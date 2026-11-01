@@ -223,6 +223,16 @@ Id EmitGetAttributeU1(EmitContext& ctx, IR::Attribute attr, u32 comp) {
     }
 }
 
+// bbport: split workgroups (WorkgroupSplit): the guest invocation is the host one plus the
+// host workgroup's position within its guest workgroup.
+static Id SplitLocalInvocation(EmitContext& ctx, Id host_x) {
+    const u32 host_size = ctx.runtime_info.hw.cs.workgroup_size[0] / ctx.workgroup_split;
+    const Id group =
+        ctx.OpCompositeExtract(ctx.U32[1], ctx.OpLoad(ctx.U32[3], ctx.workgroup_id), 0);
+    const Id part = ctx.OpUMod(ctx.U32[1], group, ctx.ConstU32(ctx.workgroup_split));
+    return ctx.OpIAdd(ctx.U32[1], ctx.OpIMul(ctx.U32[1], part, ctx.ConstU32(host_size)), host_x);
+}
+
 Id EmitGetAttributeU32(EmitContext& ctx, IR::Attribute attr, u32 comp) {
     switch (attr) {
     case IR::Attribute::VertexId:
@@ -235,13 +245,28 @@ Id EmitGetAttributeU32(EmitContext& ctx, IR::Attribute attr, u32 comp) {
         return ctx.OpLoad(ctx.U32[1], ctx.base_instance);
     case IR::Attribute::WorkgroupIndex:
         return ctx.workgroup_index_id;
-    case IR::Attribute::WorkgroupId:
-        return ctx.OpCompositeExtract(ctx.U32[1], ctx.OpLoad(ctx.U32[3], ctx.workgroup_id), comp);
-    case IR::Attribute::LocalInvocationId:
-        return ctx.OpCompositeExtract(ctx.U32[1], ctx.OpLoad(ctx.U32[3], ctx.local_invocation_id),
-                                      comp);
-    case IR::Attribute::LocalInvocationIndex:
-        return ctx.OpLoad(ctx.U32[1], ctx.local_invocation_index);
+    case IR::Attribute::WorkgroupId: {
+        const Id id =
+            ctx.OpCompositeExtract(ctx.U32[1], ctx.OpLoad(ctx.U32[3], ctx.workgroup_id), comp);
+        // bbport: split workgroups (WorkgroupSplit): guest workgroup = host workgroup / split.
+        if (ctx.workgroup_split > 1 && comp == 0) {
+            return ctx.OpUDiv(ctx.U32[1], id, ctx.ConstU32(ctx.workgroup_split));
+        }
+        return id;
+    }
+    case IR::Attribute::LocalInvocationId: {
+        const Id id = ctx.OpCompositeExtract(
+            ctx.U32[1], ctx.OpLoad(ctx.U32[3], ctx.local_invocation_id), comp);
+        if (ctx.workgroup_split > 1 && comp == 0) {
+            return SplitLocalInvocation(ctx, id);
+        }
+        return id;
+    }
+    case IR::Attribute::LocalInvocationIndex: {
+        const Id index = ctx.OpLoad(ctx.U32[1], ctx.local_invocation_index);
+        // One-dimensional when split: the index is the X invocation.
+        return ctx.workgroup_split > 1 ? SplitLocalInvocation(ctx, index) : index;
+    }
     case IR::Attribute::SampleIndex:
         return ctx.OpLoad(ctx.U32[1], ctx.sample_index);
     case IR::Attribute::SampleMask:

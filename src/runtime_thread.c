@@ -365,11 +365,13 @@ static ABI int32_t thread_get_prio(GuestThread *t,int *prio) {
  * game thread uses. The Nd job workers are created at 767 and the file I/O threads at 260-272.
  * Windows has fewer levels, so the guest range is cut into bands around NORMAL. Without this the
  * spinning idle workers ran at the same priority as the threads doing real work (and starved
- * the GPU command thread on CPUs with few cores). BB_THREAD_PRIO=0 keeps every thread at normal. */
+ * the GPU command thread on CPUs with few cores). Off by default since 0.3.11: the 4-core
+ * cmdBuf.m_bInUse crash they were for is fixed by the job wait patch (probe.c), and with them on it
+ * was only rarer (Mevlock). BB_THREAD_PRIO=1 turns them on. */
 static int host_priority(int prio) {
 #ifdef _WIN32
     static int enabled=-1;
-    if (enabled<0) { const char *env=getenv("BB_THREAD_PRIO"); enabled=!(env && env[0]=='0'); }
+    if (enabled<0) { const char *env=getenv("BB_THREAD_PRIO"); enabled=env && env[0]=='1'; }
     if (!enabled) return THREAD_PRIORITY_NORMAL;
     if (prio<=300) return THREAD_PRIORITY_ABOVE_NORMAL;
     if (prio<720) return THREAD_PRIORITY_NORMAL;

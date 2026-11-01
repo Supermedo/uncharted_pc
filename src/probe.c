@@ -910,6 +910,138 @@ static int64_t find_unique_pattern(uint64_t image_size, const char *pattern) {
     }
     return found;
 }
+/* The job system's counter wait (corelib job scheduling: until [counter+0x20] == or <= a target),
+ * from Mevlock's dev fork: a job worker that finds the counter not there yet suspends its job
+ * (SuspendJob) and retries when the job runs again, which may be on another worker; other threads
+ * sleep 1 ms and retry in place. On the PS4 each worker owns a core and the counter is there in
+ * time. With 4 cores the jobs it waits for lag: U2's water Draw waits with a render command
+ * context open, resumed on another worker and failed "m_workerThreadIndex ==
+ * GetCurrentWorkerThreadIndex()" (End) and "cmdBuf.m_bInUse == false" (Begin, on the worker it
+ * left). A worker with a render context open (the Begin/End hooks in runtime_pad.c) now first
+ * retries in place (SwitchToThread, then 1 ms sleeps, up to BB_JOB_LOCK_WAIT_MS, default 250;
+ * 0: off) and suspends its job only after that, as before; other workers suspend at once. The
+ * counter is read again on every try. */
+extern _Thread_local int runtime_ndgi_open; /* runtime_fiber.c */
+static uint64_t job_lock_try;
+static unsigned job_lock_wait_ms=250;
+static volatile long job_lock_fallbacks;
+static ABI int job_lock_wait(uint64_t counter, uint64_t a, uint32_t b) {
+    typedef int (ABI *Try)(uint64_t, uint64_t, uint32_t);
+    const Try try_value=(Try)(uintptr_t)job_lock_try;
+    const volatile uint64_t *value=(const volatile uint64_t *)(uintptr_t)(counter+0x20);
+#define try_lock(x,y) try_value(*value,(x),(y))
+    /* Without a render context open the job may move: suspend at once, as the game does (waiting
+     * in place for every counter starved the job system: 3.6 fps loading with 4 cores). */
+    if (!runtime_ndgi_open) return 0;
+#ifdef _WIN32
+    for (unsigned i=0;i<16;++i) {
+        if (try_lock(a,b)&0xff) return 1;
+        SwitchToThread();
+    }
+    for (unsigned ms=0;ms<job_lock_wait_ms;++ms) {
+        if (try_lock(a,b)&0xff) return 1;
+        Sleep(1);
+    }
+#else
+    for (unsigned i=0;i<job_lock_wait_ms*10;++i) {
+        if (try_lock(a,b)&0xff) return 1;
+        usleep(100);
+    }
+#endif
+    if (try_lock(a,b)&0xff) return 1;
+    const long n=__atomic_add_fetch(&job_lock_fallbacks,1,__ATOMIC_RELAXED);
+    if (n<=20) printf("Job wait: a worker with a render context open waited %u ms in vain, its job suspends (%ld)\n",
+                      job_lock_wait_ms,n);
+    return 0;
+#undef try_lock
+}
+/* jmp [rip+0]; dq target */
+static size_t jump_abs(unsigned char *t, uint64_t target) {
+    t[0]=0xff; t[1]=0x25; memset(t+2,0,4); memcpy(t+6,&target,8);
+    return 14;
+}
+/* US 1.02 (CUSA02320, as CUSA02344), all three games: the try is inlined (counter r15, target r14,
+ * mode ebx) and the worker check is in al:
+ *   mov rcx,[r15+0x20]; cmp ebx,1; jne; cmp rcx,r14; setle cl; jmp; test ebx,ebx; jne; cmp rcx,r14;
+ *   sete cl; test cl,cl; jne done; test al,al; je not_a_worker; nop10; (suspend loop:) mov rdi,r15;
+ *   mov rsi,r14; mov edx,ebx; call SuspendJob
+ * The game keeps an uncalled copy of the try function, which job_lock_wait calls. */
+static void patch_job_lock_wait_us(uint64_t image_size) {
+    const int64_t at=find_unique_pattern(image_size, "498b4f20 83fb01 75?? 4c39f1 0f9ec1 eb?? 85db 75?? 4c39f1 0f94c1 84c9 75?? 84c0 74?? "
+                                                     "662e0f1f840000000000 4c89ff 4c89f6 89da e8????????");
+    const int64_t try_at=find_unique_pattern(image_size, "83fa01 7507 4839f7 0f9ec0 c3 85d2 7507 4839f7 0f94c0 c3");
+    if (at<0 || try_at<0) { printf("Job wait: pattern not found, not patched\n"); return; }
+    unsigned char *p=image+at;
+    job_lock_try=(uint64_t)(uintptr_t)(image+try_at);
+    const uint64_t done=(uint64_t)(uintptr_t)(p+31+(int8_t)p[30]);
+    const uint64_t not_worker=(uint64_t)(uintptr_t)(p+35+(int8_t)p[34]);
+    const uint64_t suspend_loop=(uint64_t)(uintptr_t)(p+45);
+    unsigned char *t=near_image_memory(4096);
+    if (!t) { printf("Job wait: no thunk memory, not patched\n"); return; }
+    size_t k=0;
+    const uintptr_t host=(uintptr_t)job_lock_wait;
+    t[k++]=0x84; t[k++]=0xc0; t[k++]=0x75; t[k++]=0x0e;                 /* test al,al; jnz worker */
+    k+=jump_abs(t+k,not_worker);                                         /* not a worker */
+    static const unsigned char args[]={0x4c,0x89,0xff,0x4c,0x89,0xf6,0x89,0xda}; /* rdi=r15 (the counter), rsi=r14, edx=ebx */
+    memcpy(t+k,args,sizeof(args)); k+=sizeof(args);
+    t[k++]=0x48; t[k++]=0xb8; memcpy(t+k,&host,8); k+=8;                /* movabs rax, job_lock_wait */
+    t[k++]=0xff; t[k++]=0xd0;                                           /* call rax (rsp aligned as at the original call) */
+    t[k++]=0x84; t[k++]=0xc0;                                           /* test al,al */
+    t[k++]=0x74; t[k++]=0x0e;                                           /* jz suspend */
+    k+=jump_abs(t+k,done);                                               /* there */
+    k+=jump_abs(t+k,suspend_loop);                                       /* suspend as before */
+    const int32_t to=(int32_t)((int64_t)(uintptr_t)t-(int64_t)(uintptr_t)(p+31+5));
+    p[31]=0xe9; memcpy(p+32,&to,4);                                     /* replaces test al,al; je */
+    memset(p+36,0x90,9);
+    printf("Job wait: workers with a render context open wait for a job counter in place for up to %u ms before suspending their job (0x%" PRIx64 ", US)\n",
+           job_lock_wait_ms,(uint64_t)at);
+}
+static void patch_job_lock_wait(uint64_t image_size) {
+    const char *env=getenv("BB_JOB_LOCK_WAIT_MS");
+    if (env) job_lock_wait_ms=(unsigned)strtoul(env,NULL,10);
+    if (!job_lock_wait_ms) { printf("Job wait: BB_JOB_LOCK_WAIT_MS=0, workers suspend at once\n"); return; }
+#ifdef _WIN32
+    /* By default only on CPUs with up to 12 hardware threads, where the crash happens (4 and 6
+     * cores). With more, a free worker takes the suspended job at once, and waiting in place cost
+     * U3's Cartagena square 92 -> 50 FPS on a big CPU. BB_JOB_LOCK_WAIT_MS turns it on anywhere. */
+    const DWORD threads=GetActiveProcessorCount(ALL_PROCESSOR_GROUPS);
+    if (!env && threads>12) {
+        printf("Job wait: workers suspend at once (%lu hardware threads; BB_JOB_LOCK_WAIT_MS=250 to wait)\n",
+               (unsigned long)threads);
+        return;
+    }
+#endif
+    /* mov rdi,[rbx+0x20]; mov rsi,r15; mov edx,r14d; call try; test al,al; jne done;
+     * test r12b,r12b; je not_a_worker; nop5; (suspend loop:) mov rdi,rbx; mov rsi,r15; mov edx,r14d; call SuspendJob */
+    const int64_t at=find_unique_pattern(image_size, "488b7b20 4c89fe 4489f2 e8???????? 84c0 75?? 4584e4 74?? 0f1f440000 "
+                                                     "4889df 4c89fe 4489f2 e8????????");
+    if (at<0) { patch_job_lock_wait_us(image_size); return; }
+    unsigned char *p=image+at;
+    int32_t rel; memcpy(&rel,p+11,4);
+    job_lock_try=(uint64_t)(uintptr_t)(p+15+rel);
+    const uint64_t done=(uint64_t)(uintptr_t)(p+19+(int8_t)p[18]);
+    const uint64_t not_worker=(uint64_t)(uintptr_t)(p+24+(int8_t)p[23]);
+    const uint64_t suspend_loop=(uint64_t)(uintptr_t)(p+29);
+    unsigned char *t=near_image_memory(4096);
+    if (!t) { printf("Job wait: no thunk memory, not patched\n"); return; }
+    size_t k=0;
+    const uintptr_t host=(uintptr_t)job_lock_wait;
+    static const unsigned char test_r12b[]={0x45,0x84,0xe4,0x75,0x0e};   /* test r12b,r12b; jnz worker */
+    memcpy(t+k,test_r12b,sizeof(test_r12b)); k+=sizeof(test_r12b);
+    k+=jump_abs(t+k,not_worker);                                         /* not a worker */
+    static const unsigned char args[]={0x48,0x89,0xdf,0x90,0x4c,0x89,0xfe,0x44,0x89,0xf2}; /* rdi=rbx (the counter), rsi=r15, edx=r14d */
+    memcpy(t+k,args,sizeof(args)); k+=sizeof(args);
+    t[k++]=0x48; t[k++]=0xb8; memcpy(t+k,&host,8); k+=8;                /* movabs rax, job_lock_wait */
+    t[k++]=0xff; t[k++]=0xd0;                                           /* call rax (rsp aligned as at the original calls) */
+    t[k++]=0x84; t[k++]=0xc0;                                           /* test al,al */
+    t[k++]=0x74; t[k++]=0x0e;                                           /* jz suspend */
+    k+=jump_abs(t+k,done);                                               /* acquired */
+    k+=jump_abs(t+k,suspend_loop);                                       /* suspend as before */
+    const int32_t to=(int32_t)((int64_t)(uintptr_t)t-(int64_t)(uintptr_t)(p+19+5));
+    p[19]=0xe9; memcpy(p+20,&to,4);                                     /* replaces test r12b,r12b; je */
+    printf("Job wait: workers with a render context open wait for a job counter in place for up to %u ms before suspending their job (0x%" PRIx64 ")\n",
+           job_lock_wait_ms,(uint64_t)at);
+}
 /* Naughty Dog's job manager (all three games): the six NdJobWorkerThreads spin on their queues
  * with `pause` unless the manager's sleep flag (byte +0x59, set by its own SetSleepMode) is on.
  * With it on, an idle worker waits on the manager's condition variable after 1000 spins (10 ms
@@ -927,10 +1059,11 @@ static void patch_job_sleep(uint64_t image_size) {
     if (env && env[0]=='0') { printf("Job workers: spin while idle (BB_JOB_SLEEP=0)\n"); return; }
 #ifdef _WIN32
     /* Sleeping workers free the cores of small CPUs, but cost ~8% in busy scenes on a 16-thread
-     * one (U3 Cartagena square: 87 vs 94 FPS). By default only up to 8 hardware threads;
+     * one (U3 Cartagena square: 87 vs 94 FPS). By default up to 12 hardware threads (6-core CPUs
+     * such as the i5-10400 doubled their CPU load without it, fork issue #3);
      * BB_JOB_SLEEP=1 forces it. */
     const DWORD threads=GetActiveProcessorCount(ALL_PROCESSOR_GROUPS);
-    if (!env && threads>8) { printf("Job workers: spin while idle (%lu hardware threads)\n",(unsigned long)threads); return; }
+    if (!env && threads>12) { printf("Job workers: spin while idle (%lu hardware threads)\n",(unsigned long)threads); return; }
 #endif
     struct Patch {
         const char *name, *pattern;
@@ -1264,6 +1397,7 @@ int main(int argc, char **argv) {
         install_game_callbacks(segments, ns, image_end);
         patch_eop_tick_wait(image_end);
         patch_job_sleep(image_end);
+        patch_job_lock_wait(image_end);
         runtime_display_patch(image, image_end);
     }
 #ifdef _WIN32

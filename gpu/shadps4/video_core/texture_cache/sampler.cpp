@@ -24,6 +24,13 @@ Sampler::Sampler(const Vulkan::Instance& instance, const AmdGpu::Sampler& sample
         border_color = vk::BorderColor::eFloatOpaqueBlack;
     }
 
+    // A sampler can ask for a custom border color while the game's border color table address is
+    // 0 (Uncharted 2 on a Radeon 780M read at 0 + index * 16 and stopped): no table, transparent black.
+    if (border_color == vk::BorderColor::eFloatCustomEXT &&
+        border_color_base.Address<std::array<float, 4>*>() == nullptr) {
+        border_color = vk::BorderColor::eFloatTransparentBlack;
+    }
+
     const auto custom_color = [&]() -> std::optional<vk::SamplerCustomBorderColorCreateInfoEXT> {
         if (border_color == vk::BorderColor::eFloatCustomEXT) {
             const auto border_color_index = sampler.border_color_ptr.Value();

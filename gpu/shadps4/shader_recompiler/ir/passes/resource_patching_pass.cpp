@@ -590,10 +590,15 @@ IR::U32 CalculateBufferAddress(IR::IREmitter& ir, const IR::Inst& inst, const In
         index = ir.IAdd(index, vgpr_index);
     }
     if (buffer.add_tid_enable) {
-        ASSERT_MSG(info.sw_stage == SwStage::Compute,
-                   "Thread ID buffer addressing is not supported outside of compute.");
-        const IR::U32 thread_id{ir.LaneId()};
-        index = ir.IAdd(index, thread_id);
+        // Outside compute this is a half-written resource table (the game was still filling it):
+        // it stopped the game here. The thread id is left out and the draw goes on.
+        if (info.sw_stage == SwStage::Compute) {
+            const IR::U32 thread_id{ir.LaneId()};
+            index = ir.IAdd(index, thread_id);
+        } else {
+            LOG_WARNING(Render_Recompiler,
+                        "Thread ID buffer addressing outside of compute (bad resource table): ignored");
+        }
     }
     // offset = (inst_offen ? vgpr_offset : 0) + inst_offset
     IR::U32 offset = ir.Imm32(inst_offset);

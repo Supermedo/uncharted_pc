@@ -605,7 +605,20 @@ ImageId TextureCache::FindImage(ImageDesc& desc, bool exact_fmt) {
     int view_mip{-1};
     int view_slice{-1};
     if (!image_id) {
+        // bbport (after zorde23's port, UC_OVERLAP_KEEP_VIEW, 28e1280c): a later image in the
+        // region that only overlaps by chance (it gives back the image already found, or none)
+        // no longer drops the mip/slice found for that image. A target at the address of a mip
+        // (U3 bloom mips 1 and 2) resolved to mip 0 of its image whenever an unrelated image (a
+        // 512x512 table) shared the region after it: the mip was drawn into the corner of mip 0
+        // and the real mip kept an old frame (bloom blotches, depending on the render size).
+        // BB_OVERLAP_KEEP_VIEW=0: off.
+        static const bool keep_view = [] {
+            const char* env = std::getenv("BB_OVERLAP_KEEP_VIEW");
+            return !(env && env[0] == '0');
+        }();
         for (const auto& cache_id : image_ids) {
+            const ImageId found_id = image_id;
+            const int found_mip = view_mip, found_slice = view_slice;
             view_mip = -1;
             view_slice = -1;
 
@@ -616,6 +629,10 @@ ImageId TextureCache::FindImage(ImageDesc& desc, bool exact_fmt) {
                 image_id = overlap_image_id;
                 view_mip = overlap_view_mip;
                 view_slice = overlap_view_slice;
+            }
+            if (keep_view && found_id && image_id == found_id && view_mip < 0 && view_slice < 0) {
+                view_mip = found_mip;
+                view_slice = found_slice;
             }
         }
     }
