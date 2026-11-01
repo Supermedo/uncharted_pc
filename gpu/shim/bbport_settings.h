@@ -72,6 +72,21 @@ struct Values {
     /// Gyro aiming (runtime_pad.c through bbgpu_gyro_aim): popping out keeps the aim, the mouse (Steam's
     /// gyro as a mouse) turns the aiming and cover cameras directly. Off: the mouse as before.
     std::atomic<bool> gyro_aim{false};
+    /// Built-in gyro (runtime_pad.c, runtime_gyro.c): the controller's own gyro when Steam is not
+    /// translating it. Steam's names: Choose Gyro Button(s) (SDL button, -2/-3 the triggers, -1 none),
+    /// Gyro Enable/Suppress/Toggle (0/1/2), Gyro ° Sensitivity (1 = 1 degree per degree), Invert X/Y.
+    std::atomic<bool> gyro_builtin{true};
+    std::atomic<int> gyro_button{-2};
+    std::atomic<int> gyro_button_mode{0};
+    std::atomic<float> gyro_sensitivity{1.0f};
+    std::atomic<bool> gyro_invert_x{false}, gyro_invert_y{false};
+    /// Gyro Speed Deadzone and Gyro Precision Speed, deg/s (defaults: the values in Steam's own menu).
+    std::atomic<float> gyro_speed_deadzone{0.36f}, gyro_precision_speed{0.75f};
+    std::atomic<float> gyro_bias[3]{}; ///< learned offset at rest, rad/s
+    /// Set by runtime_pad.c: 0 no controller, 1 Steam or no gyro, 2 built in; the controller's name.
+    std::atomic<int> gyro_source{0};
+    std::atomic<const char*> gyro_controller{nullptr};
+    std::atomic<bool> gyro_calibrate{false}; ///< the menu's Calibrate, taken by runtime_pad.c
     // FSR 4 checks (menu): the provider's auto exposure, the jitter sign it is given.
     std::atomic<bool> fsr4_auto_exposure{true};
     std::atomic<bool> fsr4_invert_jitter{false};

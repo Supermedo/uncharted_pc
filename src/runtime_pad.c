@@ -18,6 +18,7 @@
 #define _GNU_SOURCE
 #include "runtime.h"
 #include "gpu/bbgpu.h"
+#include "runtime_gyro.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -82,17 +83,55 @@ static void touch_click(PadData *d, int right) {
     d->touches[0]=(PadTouch){.x=right ? 1440 : 480,.y=471,.id=0};
 }
 
+/* Built-in gyro: the controller's own gyro when Steam
+ * is not translating it (Steam's stand-in controller reports no gyro). sample_host turns its samples into
+ * mouse pixels for the same cameras the mouse turns (gyro_frame). */
+static struct {
+    GyroCalibration cal;
+    volatile int has_gyro;  /* the open controller's gyro is on */
+    volatile int active;    /* built-in gyro is the source (gyro_on) */
+    GyroFilter filter;
+    GyroPlayback play;      /* the turn shown at the pace of the clock, not of the reports' arrival */
+    uint64_t play_us;
+    int toggled, button_was;
+    uint64_t last_ns, saved_us;
+} gyro;
+static float gyro_rates[3*256];
+static uint64_t gyro_ns[256];
+static void gyro_drop_queued(void) { while (bbgpu_gyro_take(gyro_rates,gyro_ns,256)>0) {} }
+static void gyro_open(SDL_Gamepad *g) {
+    const unsigned vendor=SDL_GetGamepadVendor(g), product=SDL_GetGamepadProduct(g);
+    const int has=SDL_GamepadHasSensor(g,SDL_SENSOR_GYRO);
+    gyro.has_gyro=has && SDL_SetGamepadSensorEnabled(g,SDL_SENSOR_GYRO,true);
+    printf("Gyro: %s, vendor %04x product %04x: %s\n",SDL_GetGamepadName(g),vendor,product,
+           gyro.has_gyro ? "built in" : has ? "gyro could not be turned on" : "no gyro (Steam's or none)");
+    if (has && !gyro.has_gyro) printf("Gyro: %s\n",SDL_GetError());
+    gyro_calibration_reset(&gyro.cal);
+    bbgpu_gyro_saved_bias(gyro.cal.bias);
+    gyro.cal.calibrated=gyro.cal.bias[0]!=0.0f || gyro.cal.bias[1]!=0.0f || gyro.cal.bias[2]!=0.0f;
+    gyro.last_ns=0; gyro.toggled=gyro.button_was=0;
+    gyro_filter_reset(&gyro.filter);
+    gyro_playback_reset(&gyro.play);
+    gyro.play_us=0;
+    gyro_drop_queued();
+    bbgpu_gyro_status(gyro.has_gyro ? 2 : 1,SDL_GetGamepadName(g));
+}
 /* Opens the first gamepad SDL knows about; called under lock. */
 static SDL_Gamepad *current_gamepad(void) {
     if (!sdl_ready) sdl_ready = SDL_WasInit(SDL_INIT_GAMEPAD) ? 1 : SDL_InitSubSystem(SDL_INIT_GAMEPAD) ? 1 : -1;
     if (sdl_ready<0) return NULL;
-    if (gamepad && !SDL_GamepadConnected(gamepad)) { SDL_CloseGamepad(gamepad); gamepad=NULL; }
+    if (gamepad && !SDL_GamepadConnected(gamepad)) {
+        SDL_CloseGamepad(gamepad); gamepad=NULL;
+        gyro.has_gyro=gyro.active=0;
+        bbgpu_gyro_status(0,NULL);
+    }
     if (!gamepad) {
         int count=0;
         SDL_JoystickID *ids=SDL_GetGamepads(&count);
         if (ids && count>0) {
             gamepad=SDL_OpenGamepad(ids[0]);
             if (gamepad) { ++connected_count; printf("Runtime: gamepad connected: %s\n",SDL_GetGamepadName(gamepad)); }
+            if (gamepad) gyro_open(gamepad);
         }
         SDL_free(ids);
     }
@@ -265,7 +304,7 @@ static float camera_dx[2], camera_dy[2];
 /* Gyro aiming (the menu's setting; Steam's gyro arrives as a mouse): raw aim and the cover camera
  * below. Mouse pixels not yet given to the aim direction, and the last time the aim controller ran
  * (the mouse then turns its direction, not the stick). */
-static int gyro_on(void) { return bbgpu_gyro_aim(); }
+static int gyro_on(void) { return bbgpu_gyro_aim() || gyro.active; }
 static float aim_dx, aim_dy;
 static volatile uint64_t aim_direct_us;
 /* When aim was pressed. The game starts the aiming camera's controller after the shoulder move (up
@@ -1083,6 +1122,61 @@ static int prompts_pad_device(SDL_Gamepad *g) {
     return SDL_GetGamepadButtonLabel(g,SDL_GAMEPAD_BUTTON_SOUTH)==SDL_GAMEPAD_BUTTON_LABEL_CROSS ? 1 : 2;
 }
 
+/* The built-in gyro's turn since the last pad read, as mouse pixels (the mouse's Invert Y undone, as it
+ * is applied to these further on); 1 while the gyro turns the camera. Every sample counts for
+ * calibration; only those while the gyro is on (its button, the settings menu closed) turn. */
+static int gyro_frame(SDL_Gamepad *g, uint64_t now, int menu_open, float *dx, float *dy) {
+    GyroSettings s;
+    int builtin, button, mode;
+    bbgpu_gyro_settings(&s.sensitivity,&s.invert_x,&s.invert_y,&s.speed_deadzone,&s.precision_speed,
+                        &builtin,&button,&mode);
+    gyro.active=gyro.has_gyro && builtin;
+    if (bbgpu_gyro_calibrate_requested()) {
+        gyro_calibration_reset(&gyro.cal);
+        gyro.cal.manual=1;
+        printf("Gyro: calibrate (the controller lies still)\n");
+    }
+    int down=0;
+    if (g && button>=0) down=SDL_GetGamepadButton(g,(SDL_GamepadButton)button);
+    else if (g && (button==PAD_TRIGGER_LEFT || button==PAD_TRIGGER_RIGHT))
+        down=trigger(SDL_GetGamepadAxis(g,button==PAD_TRIGGER_LEFT ? SDL_GAMEPAD_AXIS_LEFT_TRIGGER
+                                                                   : SDL_GAMEPAD_AXIS_RIGHT_TRIGGER))>30;
+    if (down && !gyro.button_was) gyro.toggled=!gyro.toggled;
+    gyro.button_was=down;
+    const int on=button==-1 ? bbgpu_window_focused() : mode==1 ? !down : mode==2 ? gyro.toggled : down;
+    const int live=gyro.active && on && !menu_open;
+    if (!live) gyro_filter_reset(&gyro.filter); /* nothing held back is owed once the gyro is off */
+    const int manual=gyro.cal.manual;
+    int learned=0, n;
+    while ((n=bbgpu_gyro_take(gyro_rates,gyro_ns,256))>0) {
+        for (int i=0;i<n;++i) {
+            const uint64_t step=gyro.last_ns && gyro_ns[i]>gyro.last_ns ? gyro_ns[i]-gyro.last_ns : 0;
+            gyro.last_ns=gyro_ns[i];
+            float r=0.0f, u=0.0f;
+            if (step && step<100000000u) { /* not the first sample, nor after a gap */
+                const float dt=(float)step*1e-9f;
+                learned|=gyro_calibration_add(&gyro.cal,gyro_rates+3*i,dt);
+                if (live) gyro_turn(&s,&gyro.cal,&gyro.filter,gyro_rates+3*i,dt,&r,&u);
+            }
+            gyro_playback_add(&gyro.play,gyro_ns[i],r,u); /* every sample: the playback's clock */
+        }
+    }
+    if (learned && (manual || !gyro.saved_us || now-gyro.saved_us>60000000u)) {
+        gyro.saved_us=now;
+        bbgpu_gyro_bias(gyro.cal.bias,1);
+        printf("Gyro: calibrated, offset %.3f %.3f %.3f deg/s\n",gyro.cal.bias[0]*57.29578f,
+               gyro.cal.bias[1]*57.29578f,gyro.cal.bias[2]*57.29578f);
+    }
+    const float since=gyro.play_us ? (float)(now-gyro.play_us)*1e-6f : 0.0f;
+    gyro.play_us=now;
+    float show_right, show_up;
+    gyro_playback_take(&gyro.play,since,&show_right,&show_up);
+    const float per_pixel=MOUSE_DEGREES_PER_PIXEL*input.mouse_sensitivity;
+    *dx=show_right/per_pixel;
+    *dy=-show_up/per_pixel; /* screen y grows downwards */
+    if (input.mouse_invert_y) *dy=-*dy;
+    return live || *dx!=0.0f || *dy!=0.0f;
+}
 static void sample_host(PadData *d) {
     memset(d,0,sizeof(*d));
     d->left_x=d->left_y=d->right_x=d->right_y=128;
@@ -1095,7 +1189,10 @@ static void sample_host(PadData *d) {
     float mdx=0, mdy=0;
     uint32_t mouse=0;
     int wheel=0, captured=bbgpu_mouse_sample(&mdx,&mdy,&mouse,&wheel);
-    if (bbgpu_overlay_captures_input()) return; /* settings menu open: neutral input */
+    const int menu_open=bbgpu_overlay_captures_input();
+    float gdx=0, gdy=0;
+    const int gyro_live=gyro_frame(g,d->timestamp,menu_open,&gdx,&gdy);
+    if (menu_open) return; /* settings menu open: neutral input */
     /* Scripted runs (BB_PAD_FILE) ignore the player's controller and keyboard: a pad in use on
      * the same PC reached the test window (BB_PAD_HOST=1 keeps them). */
     static int scripted=-1;
@@ -1174,25 +1271,31 @@ static void sample_host(PadData *d) {
      * its arc is known), with the right stick held a little the same way (follow_push); aiming, other
      * cameras and a follow camera that keeps no turns get the mouse as a right stick value in the joypad
      * state (all three games). Where a build's hooks were not found, the mouse is a right stick byte here. */
+    /* The built-in gyro turns the same cameras as the mouse, captured or not; the two add up. */
+    if (gyro_live) {
+        if (!captured) mdx=mdy=0.0f;
+        mdx+=gdx; mdy+=gdy;
+    }
+    const int moving=captured || gyro_live;
     pthread_mutex_lock(&camera_lock);
     const int following=camera_hook_us && now-camera_hook_us<100000;
     const int joypad=sticks_hook_us && now-sticks_hook_us<100000;
     const int cover=gyro_on() && cover_hook_us && now-cover_hook_us<100000;
     for (int q=0;q<2;++q) {
-        if (captured && (following || joypad || cover)) { camera_dx[q]+=mdx; camera_dy[q]+=mdy; }
+        if (moving && (following || joypad || cover)) { camera_dx[q]+=mdx; camera_dy[q]+=mdy; }
         else { camera_dx[q]=camera_dy[q]=0; }
     }
     /* gyro aiming: kept while aiming (at low frame rates the aim controller runs only every 100-200 ms) */
     const int raw_aiming=raw_aim_armed(now);
-    if (captured && raw_aiming) { aim_dx+=mdx; aim_dy+=mdy; }
+    if (moving && raw_aiming) { aim_dx+=mdx; aim_dy+=mdy; }
     else { aim_dx=aim_dy=0.0f; }
     pthread_mutex_unlock(&camera_lock);
     const int direct_x=joypad || raw_aiming || (cover && !aim_held) || (following && !aim_held && follow_direct);
     const int direct_y=joypad || raw_aiming || (cover && !aim_held) ||
                        (following && !aim_held && follow_direct && follow_has_arc);
-    if (captured && direct_x && direct_y) {
+    if (moving && direct_x && direct_y) {
         mouse_vx=mouse_vy=0; mouse_last_us=0;
-    } else if (captured) {
+    } else if (moving) {
         float dt=mouse_last_us ? (float)(now-mouse_last_us)*1e-6f : 0.0f;
         mouse_last_us=now;
         if (dt>0.0f) {

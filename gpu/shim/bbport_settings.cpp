@@ -62,6 +62,29 @@ void Set(Values& v, const std::string& key, const std::string& value) {
         v.show_fps = i != 0;
     } else if (key == "gyro_aim") {
         v.gyro_aim = i != 0;
+    } else if (key == "gyro_builtin") {
+        v.gyro_builtin = i != 0;
+    } else if (key == "gyro_button") {
+        v.gyro_button = std::clamp(i, -3, 63);
+    } else if (key == "gyro_button_mode") {
+        v.gyro_button_mode = std::clamp(i, 0, 2);
+    } else if (key == "gyro_sensitivity") {
+        v.gyro_sensitivity = Clamp(f, 0.05f, 10.0f);
+    } else if (key == "gyro_invert_x") {
+        v.gyro_invert_x = i != 0;
+    } else if (key == "gyro_invert_y") {
+        v.gyro_invert_y = i != 0;
+    } else if (key == "gyro_speed_deadzone") {
+        v.gyro_speed_deadzone = Clamp(f, 0.0f, 5.0f);
+    } else if (key == "gyro_precision_speed") {
+        v.gyro_precision_speed = Clamp(f, 0.0f, 10.0f);
+    } else if (key == "gyro_bias") {
+        float b[3]{};
+        if (std::sscanf(value.c_str(), "%f %f %f", &b[0], &b[1], &b[2]) == 3) {
+            for (int a = 0; a < 3; ++a) {
+                v.gyro_bias[a] = Clamp(b[a], -0.5f, 0.5f);
+            }
+        }
     } else if (key == "fsr4_auto_exposure") {
         v.fsr4_auto_exposure = i != 0;
     } else if (key == "fsr4_invert_jitter") {
@@ -219,6 +242,14 @@ void Save() {
                  v.reactive_scale.load(), v.reactive_threshold.load(), v.reactive_max.load(),
                  v.debug_view.load(), int(v.show_fps.load()), int(v.gyro_aim.load()),
                  int(v.fsr4_auto_exposure.load()), int(v.fsr4_invert_jitter.load()));
+    std::fprintf(file,
+                 "gyro_builtin=%d\ngyro_button=%d\ngyro_button_mode=%d\ngyro_sensitivity=%.2f\n"
+                 "gyro_invert_x=%d\ngyro_invert_y=%d\ngyro_bias=%.6f %.6f %.6f\n"
+                 "gyro_speed_deadzone=%.2f\ngyro_precision_speed=%.2f\n",
+                 int(v.gyro_builtin.load()), v.gyro_button.load(), v.gyro_button_mode.load(),
+                 v.gyro_sensitivity.load(), int(v.gyro_invert_x.load()), int(v.gyro_invert_y.load()),
+                 v.gyro_bias[0].load(), v.gyro_bias[1].load(), v.gyro_bias[2].load(),
+                 v.gyro_speed_deadzone.load(), v.gyro_precision_speed.load());
     // Read by patches.py at start.
     for (int e = 0; e < EffectCount; ++e) {
         std::fprintf(file, "%s=%d\n", Effects[e].key, int(v.effects[e].load()));

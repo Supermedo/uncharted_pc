@@ -148,6 +148,30 @@ void Slider(const char* label, std::atomic<float>& value, float lo, float hi) {
     Store(value, v, ImGui::SliderFloat(label, &v, lo, hi, "%.2f"));
 }
 
+// Built-in gyro (runtime_pad.c, runtime_gyro.c): its settings are on the
+// launcher's Controls page; here only which gyro is in use and Calibrate, which need the running game.
+void GyroSection(BbSettings::Values& s) {
+    ImGui::SeparatorText("Gyro");
+    const int source = s.gyro_source;
+    const char* controller = s.gyro_controller;
+    if (source == 2 && s.gyro_builtin) {
+        ImGui::Text("Built in: %s", controller ? controller : "controller");
+    } else if (source == 2) {
+        ImGui::TextDisabled("Built-in gyro off (launcher, Controls page)");
+    } else if (source == 1) {
+        ImGui::TextWrapped("Steam's gyro, or no gyro on this controller: Steam's own gyro settings apply.");
+    } else {
+        ImGui::TextDisabled("No controller");
+    }
+    ImGui::BeginDisabled(source != 2 || !s.gyro_builtin);
+    if (ImGui::Button("Calibrate")) {
+        s.gyro_calibrate = true;
+    }
+    ImGui::SameLine();
+    ImGui::TextDisabled("(lay the controller still for 2 seconds)");
+    ImGui::EndDisabled();
+}
+
 void Hint(const char* text) {
     ImGui::SameLine();
     ImGui::TextDisabled("(?)");
@@ -393,9 +417,7 @@ void Menu() {
 
     ImGui::SeparatorText("Other");
     Checkbox("FPS counter in the corner", s.show_fps);
-    Checkbox("Steam Gyro Aiming Fix", s.gyro_aim);
-    ImGui::SameLine();
-    ImGui::TextDisabled("(for a gyro set up in Steam as a mouse)");
+    GyroSection(s);
 
     ImGui::Spacing();
     if (ImGui::Button("Close")) {
