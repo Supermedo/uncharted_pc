@@ -345,7 +345,11 @@ def game_available(s, key):
         return False
     exe = next(e for k, _t, _s, e in GAMES if k == key)
     own = str(s.get(f'game_dir_{key}') or '').strip()
-    return (Path(folder) / exe).is_file() or bool(own and (Path(folder) / 'eboot.bin').is_file())
+    if (Path(folder) / exe).is_file():
+        return True
+    # In a collection folder eboot.bin is Uncharted 1, not this game (run.py locate).
+    from prepare import collection_folder
+    return bool(own and (Path(folder) / 'eboot.bin').is_file() and not collection_folder(folder))
 
 
 def mouse_sensitivity(s):

@@ -120,6 +120,22 @@ def sfo(data):
     return result
 
 
+# The Nathan Drake Collection's title IDs (EU, US, EU/Russian): eboot.bin there is Uncharted 1.
+COLLECTION_TITLE_IDS = {'CUSA02343', 'CUSA02320', 'CUSA02344'}
+
+
+def collection_folder(folder):
+    """The folder holds the collection (its eboot.bin is Uncharted 1), not a game dumped on its own: the
+    collection's title ID, or Uncharted 1's data next to it."""
+    folder = Path(folder)
+    if (folder / 'u1data').is_dir():
+        return True
+    try:
+        return sfo((folder / 'sce_sys/param.sfo').read_bytes()).get('TITLE_ID') in COLLECTION_TITLE_IDS
+    except (OSError, ValueError, struct.error):
+        return False
+
+
 def nid(name):
     salt = bytes.fromhex('518d64a635ded8c1e6b039b1c3e55230')
     digest = hashlib.sha1(name.encode('ascii') + salt).digest()[:8][::-1]
