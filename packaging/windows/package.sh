@@ -29,6 +29,13 @@ for module in argparse base64 collections hashlib json re shutil struct tempfile
               uncharted_art uncharted_fonts uncharted_i18n uncharted_widgets bbport_steam PIL.ImageTk; do
     hidden+=(--hidden-import "$module")
 done
+# launcher/covers/emblem.png (the sidebar's compass) is gitignored (*.png): draw it on a clean checkout,
+# only it (the covers stay as committed).
+if [[ ! -f launcher/covers/emblem.png ]]; then
+    (cd packaging/windows && ../../out/pyenv/Scripts/python.exe -c \
+        "import sys, make_uncharted_art as art; art.emblem(256).save(sys.argv[1])" \
+        "$(cygpath -w "$OLDPWD/launcher/covers/emblem.png")")
+fi
 out/pyenv/Scripts/python.exe -m PyInstaller --noconfirm --clean --log-level WARN --windowed \
     --name Uncharted --icon "$(cygpath -w "$PWD/launcher/uncharted.ico")" --distpath out/pyi-dist \
     --workpath out/pyi-work --specpath out/pyi-work --paths "$(cygpath -w "$PWD/scripts")" \
