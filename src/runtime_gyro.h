@@ -15,7 +15,21 @@ typedef struct { float rate[3]; uint64_t ns; } GyroSample;
  * Invert X Output, Invert Y Output, Gyro Speed Deadzone and Gyro Precision Speed (deg/s: below the
  * deadzone no turn, below the precision speed a turn scaled down by speed / precision speed; the turn held
  * back comes back once the controller moves fast). */
-typedef struct { float sensitivity; int invert_x, invert_y; float speed_deadzone, precision_speed; } GyroSettings;
+typedef struct {
+    float sensitivity; int invert_x, invert_y; float speed_deadzone, precision_speed;
+    int space;              /* 3DOF to 2D Conversion Style: GYRO_SPACE_* */
+    float local_angle;      /* Local Space: how far the turning axis is tipped back from the sticks' axis, degrees
+                             * (the angle the controller is held tipped up at) */
+    float local_complement; /* Local Space: how much the axis at 90 degrees to it counts, 0..1 */
+} GyroSettings;
+
+/* Steam's 3DOF to 2D Conversion Style. Yaw: turn around the controller's own vertical axis. Roll: lean it
+ * like a steering wheel. Yaw + Roll: the two added. Local Space: turn around an axis tipped back by
+ * local_angle, plus local_complement of the axis at 90 degrees to it. Player Space: yaw and roll combined
+ * around gravity, the controller's own pitch. World Space: all turning around gravity, pitch around the
+ * controller's side-to-side axis laid flat, none when the controller is on its side. Player and World
+ * Space are JibbSmart's (GamepadMotionHelpers, runtime_gyro.c). */
+enum { GYRO_SPACE_YAW, GYRO_SPACE_ROLL, GYRO_SPACE_YAW_ROLL, GYRO_SPACE_LOCAL, GYRO_SPACE_PLAYER, GYRO_SPACE_WORLD };
 
 /* The turn the deadzone and precision speed held back (degrees of controller, right and up), owed until
  * the controller moves fast in the same direction. */
@@ -31,15 +45,33 @@ typedef struct {
     int manual;           /* the menu's Calibrate: learn up to 10 deg/s (else 1.5), then clear */
 } GyroCalibration;
 
+/* Which way is down, in the controller's axes (length 1; SDL's axes: flat on a table it is 0,-1,0), from the
+ * gyro and the accelerometer (GamepadMotionHelpers' tracker, runtime_gyro.c). */
+typedef struct {
+    float grav[3];
+    float smooth_accel[3]; /* g */
+    float shakiness;       /* g */
+    int seen;              /* an accelerometer reading came */
+} GyroGravity;
+
 void gyro_calibration_reset(GyroCalibration *c);
 /* Learns the bias while the controller is still: once every sample has stayed within 1 deg/s of the
  * mean for 1.5 s and the mean is under 1.5 deg/s (a slower steady turn is aiming), the bias becomes
  * that mean. Returns 1 when it (re)learned the bias. */
 int gyro_calibration_add(GyroCalibration *c, const float rate[3], float dt);
 void gyro_filter_reset(GyroFilter *f);
-/* The camera turn for one sample of dt seconds, degrees: right and up positive. */
+/* Flat until the first accelerometer reading, which it takes at once. */
+void gyro_gravity_reset(GyroGravity *g);
+/* One sample: the gyro (rad/s, the calibration's offset taken off here) and the accelerometer (m/s^2 as SDL
+ * gives it; all 0 when there is no reading). */
+void gyro_gravity_add(GyroGravity *g, const GyroCalibration *c, const float rate[3], const float accel[3], float dt);
+/* The style's up-down (pitch, top tipping up positive) and left-right (yaw, left positive) turn from a
+ * calibrated rate, rad/s; grav NULL: flat. */
+void gyro_space_rates(const GyroSettings *s, const float rate[3], const float grav[3], float *pitch, float *yaw);
+/* The camera turn for one sample of dt seconds, degrees: right and up positive. grav: which way is down
+ * (Player and World Space), NULL for flat. */
 void gyro_turn(const GyroSettings *s, const GyroCalibration *c, GyroFilter *f, const float rate[3], float dt,
-               float *right_deg, float *up_deg);
+               const float grav[3], float *right_deg, float *up_deg);
 /* Playback: the turn shown follows the clock, not the arrival of the controller's reports, which come
  * in clumps (Bluetooth): each read shows the turn of the sensor time that passed since the last read, a
  * little behind the newest sample (GYRO_PLAYBACK_DELAY_MS), carried on at the last speed for a while when

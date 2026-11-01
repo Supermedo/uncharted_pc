@@ -20,12 +20,15 @@ u32 mouse_buttons{};
 std::atomic<bool> mouse_look{false}, mouse_captured{false};
 std::atomic<bool> window_focused{true};
 // bbport: the controller's gyro samples (runtime_pad.c enables the gyro and turns them into a camera
-// turn): rad/s as SDL gives them and the sensor's time, oldest first; the oldest go when it is full.
+// turn): rad/s as SDL gives them, the accelerometer's latest reading with each (m/s^2, 0 before the first)
+// and the sensor's time, oldest first; the oldest go when it is full.
 std::mutex gyro_mutex;
 struct GyroQueued {
     float rate[3];
+    float accel[3];
     u64 ns;
 };
+float gyro_accel[3]{};
 std::array<GyroQueued, 1024> gyro_queue;
 size_t gyro_head{}, gyro_count{};
 
@@ -95,12 +98,13 @@ extern "C" int bbgpu_mouse_sample(float* dx, float* dy, uint32_t* buttons, int* 
     return mouse_captured ? 1 : 0;
 }
 
-extern "C" int bbgpu_gyro_take(float* rates, uint64_t* ns, int max) {
+extern "C" int bbgpu_gyro_take(float* rates, float* accels, uint64_t* ns, int max) {
     std::scoped_lock lock{gyro_mutex};
     int taken = 0;
     while (gyro_count && taken < max) {
         const GyroQueued& q = gyro_queue[gyro_head];
         std::memcpy(rates + 3 * taken, q.rate, sizeof(q.rate));
+        std::memcpy(accels + 3 * taken, q.accel, sizeof(q.accel));
         ns[taken++] = q.ns;
         gyro_head = (gyro_head + 1) % gyro_queue.size();
         --gyro_count;
@@ -224,7 +228,11 @@ bool WindowSDL::PollEvents() {
                 }
                 GyroQueued& q = gyro_queue[(gyro_head + gyro_count++) % gyro_queue.size()];
                 std::memcpy(q.rate, event.gsensor.data, sizeof(q.rate));
+                std::memcpy(q.accel, gyro_accel, sizeof(q.accel));
                 q.ns = event.gsensor.sensor_timestamp;
+            } else if (event.gsensor.sensor == SDL_SENSOR_ACCEL) {
+                std::scoped_lock lock{gyro_mutex};
+                std::memcpy(gyro_accel, event.gsensor.data, sizeof(gyro_accel));
             }
             continue;
         }

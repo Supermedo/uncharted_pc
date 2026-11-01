@@ -14,14 +14,17 @@ int bbgpu_mouse_sample(float *dx, float *dy, uint32_t *buttons, int *wheel) {
 }
 int bbgpu_camera_yaw(float *yaw_degrees, double *age_seconds) { (void)yaw_degrees; (void)age_seconds; return 0; }
 void bbgpu_prompts_controller(int device) { (void)device; }
-int bbgpu_gyro_take(float *rates, uint64_t *ns, int max) { (void)rates; (void)ns; (void)max; return 0; }
+int bbgpu_gyro_take(float *rates, float *accels, uint64_t *ns, int max) {
+    (void)rates; (void)accels; (void)ns; (void)max; return 0;
+}
 int bbgpu_window_focused(void) { return 1; }
 int bbgpu_gyro_aim(void) { return 0; }
 _Thread_local int runtime_ndgi_open;
 void bbgpu_gyro_settings(float *sensitivity, int *invert_x, int *invert_y, float *speed_deadzone,
-                         float *precision_speed, int *builtin, int *button, int *mode) {
+                         float *precision_speed, int *builtin, int *button, int *mode, int *space,
+                         float *local_angle, float *local_complement) {
     *sensitivity=1.0f; *invert_x=*invert_y=0; *speed_deadzone=*precision_speed=0.0f;
-    *builtin=1; *button=-2; *mode=0;
+    *builtin=1; *button=-2; *mode=0; *space=0; *local_angle=*local_complement=0.0f;
 }
 void bbgpu_gyro_status(int source, const char *controller) {
     (void)source; (void)controller;

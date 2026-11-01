@@ -91,18 +91,21 @@ static struct {
     volatile int has_gyro;  /* the open controller's gyro is on */
     volatile int active;    /* built-in gyro is the source (gyro_on) */
     GyroFilter filter;
+    GyroGravity gravity;    /* which way is down (Player and World Space) */
     GyroPlayback play;      /* the turn shown at the pace of the clock, not of the reports' arrival */
     uint64_t play_us;
     int toggled, button_was;
     uint64_t last_ns, saved_us;
 } gyro;
-static float gyro_rates[3*256];
+static float gyro_rates[3*256], gyro_accels[3*256];
 static uint64_t gyro_ns[256];
-static void gyro_drop_queued(void) { while (bbgpu_gyro_take(gyro_rates,gyro_ns,256)>0) {} }
+static void gyro_drop_queued(void) { while (bbgpu_gyro_take(gyro_rates,gyro_accels,gyro_ns,256)>0) {} }
 static void gyro_open(SDL_Gamepad *g) {
     const unsigned vendor=SDL_GetGamepadVendor(g), product=SDL_GetGamepadProduct(g);
     const int has=SDL_GamepadHasSensor(g,SDL_SENSOR_GYRO);
     gyro.has_gyro=has && SDL_SetGamepadSensorEnabled(g,SDL_SENSOR_GYRO,true);
+    /* the accelerometer: which way is down, for Player and World Space; without it they start flat */
+    if (gyro.has_gyro && SDL_GamepadHasSensor(g,SDL_SENSOR_ACCEL)) SDL_SetGamepadSensorEnabled(g,SDL_SENSOR_ACCEL,true);
     printf("Gyro: %s, vendor %04x product %04x: %s\n",SDL_GetGamepadName(g),vendor,product,
            gyro.has_gyro ? "built in" : has ? "gyro could not be turned on" : "no gyro (Steam's or none)");
     if (has && !gyro.has_gyro) printf("Gyro: %s\n",SDL_GetError());
@@ -111,6 +114,7 @@ static void gyro_open(SDL_Gamepad *g) {
     gyro.cal.calibrated=gyro.cal.bias[0]!=0.0f || gyro.cal.bias[1]!=0.0f || gyro.cal.bias[2]!=0.0f;
     gyro.last_ns=0; gyro.toggled=gyro.button_was=0;
     gyro_filter_reset(&gyro.filter);
+    gyro_gravity_reset(&gyro.gravity);
     gyro_playback_reset(&gyro.play);
     gyro.play_us=0;
     gyro_drop_queued();
@@ -1129,7 +1133,7 @@ static int gyro_frame(SDL_Gamepad *g, uint64_t now, int menu_open, float *dx, fl
     GyroSettings s;
     int builtin, button, mode;
     bbgpu_gyro_settings(&s.sensitivity,&s.invert_x,&s.invert_y,&s.speed_deadzone,&s.precision_speed,
-                        &builtin,&button,&mode);
+                        &builtin,&button,&mode,&s.space,&s.local_angle,&s.local_complement);
     gyro.active=gyro.has_gyro && builtin;
     if (bbgpu_gyro_calibrate_requested()) {
         gyro_calibration_reset(&gyro.cal);
@@ -1148,7 +1152,7 @@ static int gyro_frame(SDL_Gamepad *g, uint64_t now, int menu_open, float *dx, fl
     if (!live) gyro_filter_reset(&gyro.filter); /* nothing held back is owed once the gyro is off */
     const int manual=gyro.cal.manual;
     int learned=0, n;
-    while ((n=bbgpu_gyro_take(gyro_rates,gyro_ns,256))>0) {
+    while ((n=bbgpu_gyro_take(gyro_rates,gyro_accels,gyro_ns,256))>0) {
         for (int i=0;i<n;++i) {
             const uint64_t step=gyro.last_ns && gyro_ns[i]>gyro.last_ns ? gyro_ns[i]-gyro.last_ns : 0;
             gyro.last_ns=gyro_ns[i];
@@ -1156,7 +1160,8 @@ static int gyro_frame(SDL_Gamepad *g, uint64_t now, int menu_open, float *dx, fl
             if (step && step<100000000u) { /* not the first sample, nor after a gap */
                 const float dt=(float)step*1e-9f;
                 learned|=gyro_calibration_add(&gyro.cal,gyro_rates+3*i,dt);
-                if (live) gyro_turn(&s,&gyro.cal,&gyro.filter,gyro_rates+3*i,dt,&r,&u);
+                gyro_gravity_add(&gyro.gravity,&gyro.cal,gyro_rates+3*i,gyro_accels+3*i,dt);
+                if (live) gyro_turn(&s,&gyro.cal,&gyro.filter,gyro_rates+3*i,dt,gyro.gravity.grav,&r,&u);
             }
             gyro_playback_add(&gyro.play,gyro_ns[i],r,u); /* every sample: the playback's clock */
         }

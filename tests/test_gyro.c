@@ -4,7 +4,7 @@
 #include <stdio.h>
 #include "runtime_gyro.h"
 
-static const GyroSettings plain={1.0f,0,0,0.0f,0.0f};
+static const GyroSettings plain={1.0f,0,0,0.0f,0.0f,GYRO_SPACE_YAW,0.0f,0.0f};
 
 static int near(float a, float b, float tolerance) { return fabsf(a-b)<=tolerance; }
 
@@ -15,7 +15,7 @@ static void turn_with(const GyroSettings *s, const GyroCalibration *c, GyroFilte
     const float rate[3]={pitch,yaw,0.0f};
     for (int i=0;i<(int)(seconds*1000.0f+0.5f);++i) {
         float r, u;
-        gyro_turn(s,c,f,rate,0.001f,&r,&u);
+        gyro_turn(s,c,f,rate,0.001f,NULL,&r,&u);
         *right+=r; *up+=u;
     }
 }
@@ -28,7 +28,7 @@ static void turn_for(const GyroSettings *s, const GyroCalibration *c, float pitc
 
 #define DEG (1.0f/57.29578f) /* rad/s per deg/s */
 /* Ben's Steam values: Gyro Speed Deadzone 0.36 deg/s, Gyro Precision Speed 0.75 deg/s. */
-static const GyroSettings steady={1.0f,0,0,0.36f,0.75f};
+static const GyroSettings steady={1.0f,0,0,0.36f,0.75f,GYRO_SPACE_YAW,0.0f,0.0f};
 
 static void deadzone_stops_slow(void) {
     GyroCalibration c; gyro_calibration_reset(&c);
@@ -39,7 +39,7 @@ static void deadzone_stops_slow(void) {
 
 static void precision_scales(void) {
     GyroCalibration c; gyro_calibration_reset(&c);
-    const GyroSettings precise={1.0f,0,0,0.0f,0.75f};
+    const GyroSettings precise={1.0f,0,0,0.0f,0.75f,GYRO_SPACE_YAW,0.0f,0.0f};
     float right, up;
     turn_for(&precise,&c,0.0f,-0.5f*DEG,1.0f,&right,&up); /* 0.5 deg/s right: two thirds of the turn */
     assert(near(right,0.5f*0.5f/0.75f,0.002f) && near(up,0.0f,1e-6f));
@@ -74,7 +74,7 @@ static void pitch_up_is_up(void) {
 
 static void sensitivity_scales(void) {
     GyroCalibration c; gyro_calibration_reset(&c);
-    const GyroSettings twice={2.0f,0,0,0.0f,0.0f};
+    const GyroSettings twice={2.0f,0,0,0.0f,0.0f,GYRO_SPACE_YAW,0.0f,0.0f};
     float right, up;
     turn_for(&twice,&c,1.0f,1.0f,0.5f,&right,&up);
     assert(near(right,-57.296f,0.02f));
@@ -83,7 +83,7 @@ static void sensitivity_scales(void) {
 
 static void invert_flips(void) {
     GyroCalibration c; gyro_calibration_reset(&c);
-    const GyroSettings x={1.0f,1,0,0.0f,0.0f}, y={1.0f,0,1,0.0f,0.0f};
+    const GyroSettings x={1.0f,1,0,0.0f,0.0f,GYRO_SPACE_YAW,0.0f,0.0f}, y={1.0f,0,1,0.0f,0.0f,GYRO_SPACE_YAW,0.0f,0.0f};
     float right, up;
     turn_for(&x,&c,1.0f,1.0f,0.5f,&right,&up);
     assert(near(right,28.648f,0.01f) && near(up,28.648f,0.01f));
@@ -125,7 +125,7 @@ static void bias_removed_before_sensitivity(void) {
     GyroCalibration c; gyro_calibration_reset(&c);
     const float drift[3]={0.01f,0.01f,0.0f};
     for (int i=0;i<2000;++i) gyro_calibration_add(&c,drift,0.001f);
-    const GyroSettings thrice={3.0f,0,0,0.0f,0.0f};
+    const GyroSettings thrice={3.0f,0,0,0.0f,0.0f,GYRO_SPACE_YAW,0.0f,0.0f};
     float right, up;
     turn_for(&thrice,&c,drift[0],drift[1],1.0f,&right,&up);
     assert(near(right,0.0f,0.01f) && near(up,0.0f,0.01f));
@@ -200,6 +200,196 @@ static void playback_follows_the_controllers_clock(void) {
     }
 }
 
+/* Gyro space (Steam's 3DOF to 2D Conversion Style). The controller turned left at 1 rad/s around the real
+ * vertical while its top is tipped up by `tip` degrees (90: held upright, sticks facing the player). */
+static void turn_left_tipped(float tip, float rate[3], float grav[3]) {
+    const float t=tip*DEG, c=cosf(t), s=sinf(t);
+    rate[0]=0.0f; rate[1]=c; rate[2]=-s; /* the real vertical in the controller's axes */
+    grav[0]=0.0f; grav[1]=-c; grav[2]=s;
+}
+static void space_of(int space, const float rate[3], const float grav[3], float *pitch, float *yaw) {
+    GyroSettings s=plain; s.space=space;
+    gyro_space_rates(&s,rate,grav,pitch,yaw);
+}
+static void local_of(float angle, float complement, const float rate[3], float *pitch, float *yaw) {
+    GyroSettings s=plain; s.space=GYRO_SPACE_LOCAL; s.local_angle=angle; s.local_complement=complement;
+    gyro_space_rates(&s,rate,NULL,pitch,yaw);
+}
+
+static void yaw_is_the_controllers_yaw(void) {
+    const float rate[3]={0.2f,0.5f,0.7f}, upright[3]={0.0f,0.0f,1.0f};
+    float pitch, yaw;
+    space_of(GYRO_SPACE_YAW,rate,upright,&pitch,&yaw);
+    assert(near(pitch,0.2f,1e-6f) && near(yaw,0.5f,1e-6f));
+    space_of(GYRO_SPACE_YAW,rate,NULL,&pitch,&yaw);
+    assert(near(pitch,0.2f,1e-6f) && near(yaw,0.5f,1e-6f));
+    float rate_up[3], grav[3];
+    turn_left_tipped(90.0f,rate_up,grav); /* held upright, Yaw loses the turn */
+    space_of(GYRO_SPACE_YAW,rate_up,grav,&pitch,&yaw);
+    assert(near(yaw,0.0f,1e-5f));
+}
+
+static void roll_is_leaning(void) {
+    const float lean_right[3]={0.1f,0.0f,-1.0f}; /* right side down, like a steering wheel */
+    float pitch, yaw;
+    space_of(GYRO_SPACE_ROLL,lean_right,NULL,&pitch,&yaw);
+    assert(near(yaw,-1.0f,1e-6f) && near(pitch,0.1f,1e-6f)); /* yaw left positive: right */
+}
+
+static void yaw_plus_roll_adds_turn_and_lean(void) {
+    const float both_left[3]={0.0f,0.5f,0.25f};
+    float pitch, yaw;
+    space_of(GYRO_SPACE_YAW_ROLL,both_left,NULL,&pitch,&yaw);
+    assert(near(yaw,0.75f,1e-6f));
+}
+
+static void local_space_turns_around_its_tipped_axis(void) {
+    float rate[3], grav[3], pitch, yaw;
+    const float any[3]={0.3f,0.5f,0.7f};
+    local_of(0.0f,0.0f,any,&pitch,&yaw);         /* untipped, no complement: Yaw */
+    assert(near(yaw,0.5f,1e-6f) && near(pitch,0.3f,1e-6f));
+    local_of(0.0f,1.0f,any,&pitch,&yaw);         /* untipped, full complement: Yaw + Roll */
+    assert(near(yaw,1.2f,1e-6f));
+    turn_left_tipped(40.0f,rate,grav);
+    local_of(40.0f,0.0f,rate,&pitch,&yaw);       /* the axis tipped as the controller is held */
+    assert(near(yaw,1.0f,1e-5f));
+    local_of(0.0f,0.0f,rate,&pitch,&yaw);        /* not tipped: part of the turn is lost */
+    assert(near(yaw,cosf(40.0f*DEG),1e-5f));
+    const float around_complement[3]={0.0f,sinf(40.0f*DEG),cosf(40.0f*DEG)};
+    local_of(40.0f,0.5f,around_complement,&pitch,&yaw); /* the axis at 90 degrees counts by half */
+    assert(near(yaw,0.5f,1e-5f));
+}
+
+static void player_and_world_turn_the_same_however_tipped(void) {
+    const float tips[]={0.0f,45.0f,90.0f,-45.0f,70.0f};
+    for (int i=0;i<5;++i) {
+        float rate[3], grav[3], pitch, yaw;
+        turn_left_tipped(tips[i],rate,grav);
+        space_of(GYRO_SPACE_PLAYER,rate,grav,&pitch,&yaw);
+        assert(near(yaw,1.0f,1e-4f) && near(pitch,0.0f,1e-4f));
+        space_of(GYRO_SPACE_WORLD,rate,grav,&pitch,&yaw);
+        assert(near(yaw,1.0f,1e-4f) && near(pitch,0.0f,1e-4f));
+    }
+}
+
+static void player_space_caps_an_out_of_line_turn(void) {
+    const float flat[3]={0.0f,-1.0f,0.0f};
+    const float roll[3]={0.0f,0.0f,1.0f}, leaning[3]={0.0f,0.5f,1.0f}, near_line[3]={0.0f,1.0f,0.3f};
+    float pitch, yaw;
+    space_of(GYRO_SPACE_PLAYER,roll,flat,&pitch,&yaw);      /* rolling a flat controller: no turn */
+    assert(near(yaw,0.0f,1e-6f));
+    space_of(GYRO_SPACE_PLAYER,leaning,flat,&pitch,&yaw);   /* well out of line: 1.41 x the real turn */
+    assert(near(yaw,0.705f,1e-4f));
+    space_of(GYRO_SPACE_PLAYER,near_line,flat,&pitch,&yaw); /* close to the line: the whole of it */
+    assert(near(yaw,sqrtf(1.09f),1e-4f));
+    const float pitching[3]={0.4f,0.0f,0.0f}, upright[3]={0.0f,0.0f,1.0f};
+    space_of(GYRO_SPACE_PLAYER,pitching,upright,&pitch,&yaw); /* up-down is the controller's own pitch */
+    assert(near(pitch,0.4f,1e-6f) && near(yaw,0.0f,1e-6f));
+}
+
+static void world_space_pitch_fades_on_the_side(void) {
+    const float rate[3]={1.0f,0.0f,0.0f};
+    const float flat[3]={0.0f,-1.0f,0.0f}, side[3]={1.0f,0.0f,0.0f};
+    const float s=0.17f, almost[3]={sqrtf(1.0f-s*s),-s,0.0f}; /* tipped onto its side but for 10 degrees */
+    float pitch, yaw;
+    space_of(GYRO_SPACE_WORLD,rate,flat,&pitch,&yaw);
+    assert(near(pitch,1.0f,1e-5f));
+    space_of(GYRO_SPACE_WORLD,rate,side,&pitch,&yaw);
+    assert(near(pitch,0.0f,1e-6f));
+    space_of(GYRO_SPACE_WORLD,rate,almost,&pitch,&yaw); /* the flattened axis catches 0.17, faded to 0.06 */
+    assert(pitch>0.03f && pitch<0.1f);
+}
+
+static void player_space_through_the_turn(void) {
+    GyroCalibration c; gyro_calibration_reset(&c);
+    GyroFilter f; gyro_filter_reset(&f);
+    GyroSettings player=plain; player.space=GYRO_SPACE_PLAYER;
+    float rate[3], grav[3], r, u;
+    turn_left_tipped(90.0f,rate,grav);
+    gyro_turn(&player,&c,&f,rate,0.01f,grav,&r,&u);
+    assert(near(r,-0.5729578f,1e-4f) && near(u,0.0f,1e-5f)); /* 1 rad/s left for 10 ms */
+}
+
+/* Gravity: m/s^2 as SDL gives it (at rest it reads 1 g upwards). */
+#define G 9.80665f
+static void gravity_feed(GyroGravity *g, const GyroCalibration *c, const float rate[3], const float accel[3],
+                         float seconds) {
+    for (int i=0;i<(int)(seconds*1000.0f+0.5f);++i) gyro_gravity_add(g,c,rate,accel,0.001f);
+}
+static float gap(const float a[3], const float b[3]) {
+    return sqrtf((a[0]-b[0])*(a[0]-b[0])+(a[1]-b[1])*(a[1]-b[1])+(a[2]-b[2])*(a[2]-b[2]));
+}
+
+static void gravity_starts_flat_then_takes_the_first_reading(void) {
+    GyroGravity g; gyro_gravity_reset(&g);
+    GyroCalibration c; gyro_calibration_reset(&c);
+    const float flat[3]={0.0f,-1.0f,0.0f}, upright[3]={0.0f,0.0f,1.0f};
+    assert(gap(g.grav,flat)<1e-6f);
+    const float still[3]={0}, reads_upright[3]={0.0f,0.0f,-G};
+    gyro_gravity_add(&g,&c,still,reads_upright,0.001f);
+    assert(gap(g.grav,upright)<1e-5f);
+}
+
+static void gravity_settles_on_the_accelerometer(void) {
+    GyroGravity g; gyro_gravity_reset(&g);
+    GyroCalibration c; gyro_calibration_reset(&c);
+    const float still[3]={0}, reads_upright[3]={0.0f,0.0f,-G}, reads_flat[3]={0.0f,G,0.0f};
+    const float flat[3]={0.0f,-1.0f,0.0f};
+    gravity_feed(&g,&c,still,reads_upright,0.1f);
+    gravity_feed(&g,&c,still,reads_flat,0.2f);
+    assert(gap(g.grav,flat)>0.5f);   /* not at once */
+    gravity_feed(&g,&c,still,reads_flat,4.0f);
+    assert(gap(g.grav,flat)<0.06f);  /* the last 0.05 g at 0.01 g/s while still (the reference's pace) */
+    gravity_feed(&g,&c,still,reads_flat,4.0f);
+    assert(gap(g.grav,flat)<0.02f);
+}
+
+static void gravity_follows_the_gyro(void) {
+    GyroGravity g; gyro_gravity_reset(&g);
+    GyroCalibration c; gyro_calibration_reset(&c);
+    const float tip_up[3]={90.0f*DEG,0.0f,0.0f}, none[3]={0}, upright[3]={0.0f,0.0f,1.0f};
+    gravity_feed(&g,&c,tip_up,none,1.0f); /* no readings: the gyro alone tips it upright */
+    assert(gap(g.grav,upright)<0.01f);
+}
+
+static void gravity_takes_off_the_gyros_offset(void) {
+    GyroGravity g; gyro_gravity_reset(&g);
+    GyroCalibration c; gyro_calibration_reset(&c);
+    c.bias[0]=5.0f*DEG; c.calibrated=1;
+    const float resting[3]={5.0f*DEG,0.0f,0.0f}, none[3]={0}, flat[3]={0.0f,-1.0f,0.0f};
+    gravity_feed(&g,&c,resting,none,1.0f);
+    assert(gap(g.grav,flat)<1e-4f);
+}
+
+static void gravity_trusts_a_shaken_reading_less(void) {
+    GyroCalibration c; gyro_calibration_reset(&c);
+    const float still[3]={0}, reads_flat[3]={0.0f,G,0.0f};
+    float moved[2];
+    for (int shaken=0;shaken<2;++shaken) {
+        GyroGravity g; gyro_gravity_reset(&g);
+        gravity_feed(&g,&c,still,reads_flat,0.5f);
+        const float start[3]={g.grav[0],g.grav[1],g.grav[2]};
+        for (int i=0;i<2000;++i) { /* 2 s of readings tipped 30 degrees, shaken hard (+-0.5 g) or not */
+            const float shake=shaken ? (i%2 ? 0.5f*G : -0.5f*G) : 0.0f;
+            const float accel[3]={shake,G*0.866f,-G*0.5f};
+            gyro_gravity_add(&g,&c,still,accel,0.001f);
+        }
+        moved[shaken]=gap(g.grav,start);
+    }
+    assert(moved[0]>0.45f && moved[1]<0.25f); /* the tip is 0.52 g away; shaken, 0.1 g/s at most */
+}
+
+static void gravity_ignores_a_small_wobble_while_still(void) {
+    GyroGravity g; gyro_gravity_reset(&g);
+    GyroCalibration c; gyro_calibration_reset(&c);
+    const float still[3]={0}, reads_flat[3]={0.0f,G,0.0f};
+    gravity_feed(&g,&c,still,reads_flat,0.5f);
+    const float start[3]={g.grav[0],g.grav[1],g.grav[2]};
+    const float reads_2_degrees[3]={G*0.0349f,G*0.9994f,0.0f};
+    gravity_feed(&g,&c,still,reads_2_degrees,1.0f);
+    assert(gap(g.grav,start)<0.015f); /* 0.01 g/s while it is this close and not turning */
+}
+
 int main(void) {
     turn_left_is_negative_right();
     pitch_up_is_up();
@@ -216,6 +406,20 @@ int main(void) {
     playback_keeps_every_degree();
     playback_bridges_a_stall();
     playback_follows_the_controllers_clock();
+    yaw_is_the_controllers_yaw();
+    roll_is_leaning();
+    yaw_plus_roll_adds_turn_and_lean();
+    local_space_turns_around_its_tipped_axis();
+    player_and_world_turn_the_same_however_tipped();
+    player_space_caps_an_out_of_line_turn();
+    world_space_pitch_fades_on_the_side();
+    player_space_through_the_turn();
+    gravity_starts_flat_then_takes_the_first_reading();
+    gravity_settles_on_the_accelerometer();
+    gravity_follows_the_gyro();
+    gravity_takes_off_the_gyros_offset();
+    gravity_trusts_a_shaken_reading_less();
+    gravity_ignores_a_small_wobble_while_still();
     puts("gyro tests passed");
     return 0;
 }

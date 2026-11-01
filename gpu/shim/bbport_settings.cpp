@@ -78,6 +78,12 @@ void Set(Values& v, const std::string& key, const std::string& value) {
         v.gyro_speed_deadzone = Clamp(f, 0.0f, 5.0f);
     } else if (key == "gyro_precision_speed") {
         v.gyro_precision_speed = Clamp(f, 0.0f, 10.0f);
+    } else if (key == "gyro_space") {
+        v.gyro_space = std::clamp(i, 0, 5);
+    } else if (key == "gyro_local_angle") {
+        v.gyro_local_angle = Clamp(f, -90.0f, 90.0f);
+    } else if (key == "gyro_local_complement") {
+        v.gyro_local_complement = Clamp(f, 0.0f, 1.0f);
     } else if (key == "gyro_bias") {
         float b[3]{};
         if (std::sscanf(value.c_str(), "%f %f %f", &b[0], &b[1], &b[2]) == 3) {
@@ -245,11 +251,13 @@ void Save() {
     std::fprintf(file,
                  "gyro_builtin=%d\ngyro_button=%d\ngyro_button_mode=%d\ngyro_sensitivity=%.2f\n"
                  "gyro_invert_x=%d\ngyro_invert_y=%d\ngyro_bias=%.6f %.6f %.6f\n"
-                 "gyro_speed_deadzone=%.2f\ngyro_precision_speed=%.2f\n",
+                 "gyro_speed_deadzone=%.2f\ngyro_precision_speed=%.2f\n"
+                 "gyro_space=%d\ngyro_local_angle=%.1f\ngyro_local_complement=%.2f\n",
                  int(v.gyro_builtin.load()), v.gyro_button.load(), v.gyro_button_mode.load(),
                  v.gyro_sensitivity.load(), int(v.gyro_invert_x.load()), int(v.gyro_invert_y.load()),
                  v.gyro_bias[0].load(), v.gyro_bias[1].load(), v.gyro_bias[2].load(),
-                 v.gyro_speed_deadzone.load(), v.gyro_precision_speed.load());
+                 v.gyro_speed_deadzone.load(), v.gyro_precision_speed.load(), v.gyro_space.load(),
+                 v.gyro_local_angle.load(), v.gyro_local_complement.load());
     // Read by patches.py at start.
     for (int e = 0; e < EffectCount; ++e) {
         std::fprintf(file, "%s=%d\n", Effects[e].key, int(v.effects[e].load()));

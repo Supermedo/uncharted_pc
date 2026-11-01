@@ -47,15 +47,18 @@ int bbgpu_camera_yaw(float *yaw_degrees, double *age_seconds);
 int bbgpu_gyro_aim(void);
 int bbgpu_mouse_sample(float *dx, float *dy, uint32_t *buttons, int *wheel);
 /* Built-in gyro (runtime_pad.c, runtime_gyro.c). Queued gyro samples, oldest first: 3 rates per
- * sample (rad/s, SDL's axes) and the sensor's time (ns); returns how many (window.cpp). */
-int bbgpu_gyro_take(float *rates, uint64_t *ns, int max);
+ * sample (rad/s, SDL's axes), the accelerometer's latest reading with it (m/s^2, 0 before the first) and the
+ * sensor's time (ns); returns how many (window.cpp). */
+int bbgpu_gyro_take(float *rates, float *accels, uint64_t *ns, int max);
 /* 1 while the game's window has the focus. */
 int bbgpu_window_focused(void);
-/* The menu's gyro settings (bbport.ini gyro_*): speed deadzone and precision speed in deg/s, builtin
+/* The launcher's gyro settings (bbport.ini gyro_*): speed deadzone and precision speed in deg/s, builtin
  * on/off, button (SDL button, -2/-3 the triggers, -1 none: always on), mode (0 hold to enable, 1 hold to
- * suppress, 2 toggle). */
+ * suppress, 2 toggle), space (3DOF to 2D Conversion Style, GYRO_SPACE_*), Local Space's axis angle
+ * (degrees) and complement (0..1). */
 void bbgpu_gyro_settings(float *sensitivity, int *invert_x, int *invert_y, float *speed_deadzone,
-                         float *precision_speed, int *builtin, int *button, int *mode);
+                         float *precision_speed, int *builtin, int *button, int *mode, int *space,
+                         float *local_angle, float *local_complement);
 /* What the menu shows: 0 no controller, 1 Steam or no gyro on this controller, 2 built in. */
 void bbgpu_gyro_status(int source, const char *controller);
 /* 1 once after the menu's Calibrate was pressed. */

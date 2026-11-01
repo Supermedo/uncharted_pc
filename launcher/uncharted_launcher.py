@@ -159,10 +159,16 @@ GYRO_BUTTONS = [('-2', 'L2 (default)'), ('-3', 'R2'), ('9', 'L1'), ('10', 'R1'),
                 ('0', 'Cross'), ('1', 'Circle'), ('2', 'Square'), ('3', 'Triangle'), ('20', 'Touchpad click'),
                 ('-1', 'None (always on)')]
 GYRO_MODES = [('0', 'Hold to Enable Gyro'), ('1', 'Hold to Suppress Gyro'), ('2', 'Toggle Gyro')]
+# Steam's 3DOF to 2D Conversion Style (src/runtime_gyro.h GYRO_SPACE_*); Steam's Laser Pointer is left out
+# (it points at a spot on the screen, it does not turn a camera).
+GYRO_SPACES = [('0', 'Yaw'), ('1', 'Roll'), ('2', 'Yaw + Roll'), ('3', 'Local Space'), ('4', 'Player Space'),
+               ('5', 'World Space')]
 GYRO_FLAGS = ('gyro_aim', 'gyro_builtin', 'gyro_invert_x', 'gyro_invert_y')
 GYRO_NUMBERS = {'gyro_sensitivity': (0.05, 10.0, '1.00'), 'gyro_speed_deadzone': (0.0, 5.0, '0.36'),
-                'gyro_precision_speed': (0.0, 10.0, '0.75')}  # the game's ranges and defaults
-GYRO_CHOICES = {'gyro_button': (GYRO_BUTTONS, '-2'), 'gyro_button_mode': (GYRO_MODES, '0')}
+                'gyro_precision_speed': (0.0, 10.0, '0.75'), 'gyro_local_angle': (-90.0, 90.0, '0.00'),
+                'gyro_local_complement': (0.0, 1.0, '0.00')}  # the game's ranges and defaults
+GYRO_CHOICES = {'gyro_button': (GYRO_BUTTONS, '-2'), 'gyro_button_mode': (GYRO_MODES, '0'),
+                'gyro_space': (GYRO_SPACES, '0')}
 # Fixes page: fixes that cost speed, so they run only where they help unless the player picks.
 # key -> (title, hint, {choice: {variable: value}}); 'auto' sets nothing (the game's own default).
 FIXES = {
@@ -214,7 +220,8 @@ APP_DEFAULTS = {'game_dir': '', 'game_dir_u1': '', 'game_dir_u2': '', 'game_dir_
                 'mouse_look': True, 'mouse_sensitivity': '1.0', 'mouse_invert_y': False,
                 'pad_invert_y': False, 'gyro_aim': False, 'gyro_builtin': True, 'gyro_button': '-2',
                 'gyro_button_mode': '0', 'gyro_sensitivity': '1.00', 'gyro_speed_deadzone': '0.36',
-                'gyro_precision_speed': '0.75', 'gyro_invert_x': False, 'gyro_invert_y': False, 'art_banner': '', 'art_u1': '', 'art_u2': '', 'art_u3': '', 'steam_art': '', 'art_crops': {}, 'shortcut_name': 'Uncharted: The Nathan Drake Collection', 'shortcut_icon': '', 'trophy_game': 'u1', 'pad_vibration': True, 'pad_vibration_strength': '100', 'button_prompts': 'auto', 'key_bindings': {}, 'pad_bindings': {}, 'check_updates': True,
+                'gyro_precision_speed': '0.75', 'gyro_invert_x': False, 'gyro_invert_y': False,
+                'gyro_space': '0', 'gyro_local_angle': '0.00', 'gyro_local_complement': '0.00', 'art_banner': '', 'art_u1': '', 'art_u2': '', 'art_u3': '', 'steam_art': '', 'art_crops': {}, 'shortcut_name': 'Uncharted: The Nathan Drake Collection', 'shortcut_icon': '', 'trophy_game': 'u1', 'pad_vibration': True, 'pad_vibration_strength': '100', 'button_prompts': 'auto', 'key_bindings': {}, 'pad_bindings': {}, 'check_updates': True,
                 **{key: 'auto' for key in FIXES},
                 **{f'{game}_infinite_{cheat}': False for game, _t, _s, _e in GAMES for cheat in ('health', 'ammo')}}
 
@@ -1519,6 +1526,22 @@ class Launcher:
                                       suffix='×' if key == 'gyro_sensitivity' else ' °/s'), hint)
         self.check(f, 'gyro_invert_x', _('Invert X Output'))
         self.check(f, 'gyro_invert_y', _('Invert Y Output'))
+        self.row(f, _('3DOF to 2D Conversion Style'), self.choice(f, 'gyro_space', GYRO_SPACES, 24),
+                 _('Which turns of the controller move the camera, as in Steam. Yaw: turn it around its own '
+                   'vertical axis. Roll: lean it like a steering wheel. Yaw + Roll: both added. Local Space: '
+                   'turn it around an axis tilted back as set below. Player Space: yaw and roll around the '
+                   'real vertical, so it works however far the controller is tipped up or down. World Space: '
+                   'all turning around the real vertical; no up-down when the controller is on its side.'))
+        for key, title, step, suffix, hint in (
+                ('gyro_local_angle', _('Local Space: Axis Tilt'), 1.0, '°',
+                 _('Local Space only: how far the turning axis tilts back, as the angle you hold the '
+                   'controller tipped up at (0: Yaw).')),
+                ('gyro_local_complement', _('Local Space: Complementary Axis'), 0.05, '',
+                 _('Local Space only: how much turning around the axis at 90 degrees to it counts '
+                   '(0: none, 1: fully; at a tilt of 0, fully is Yaw + Roll).'))):
+            low, high, _default = GYRO_NUMBERS[key]
+            self.row(f, title, Slider(self.tk, self.target(f), self.var(key), low, high, step, COLORS, self.px,
+                                      self.font_ui_md, width=300, entry=True, suffix=suffix), hint)
         steam = self.tk.StringVar()
         def show_steam(*_args):
             steam.set(_("To match these numbers in Steam's gyro settings, set Dots Per 360° to {} (it follows "
