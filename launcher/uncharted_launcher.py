@@ -164,12 +164,12 @@ GYRO_MODES = [('0', 'Hold to Enable Gyro'), ('1', 'Hold to Suppress Gyro'), ('2'
 GYRO_SPACES = [('0', 'Yaw'), ('1', 'Roll'), ('2', 'Yaw + Roll'), ('3', 'Local Space'), ('4', 'Player Space'),
                ('5', 'World Space')]
 GYRO_FLAGS = ('gyro_aim', 'gyro_builtin', 'gyro_invert_x', 'gyro_invert_y')
-GYRO_NUMBERS = {'gyro_sensitivity': (0.05, 10.0, '1.00'), 'gyro_speed_deadzone': (0.0, 5.0, '0.36'),
+GYRO_NUMBERS = {'gyro_sensitivity': (0.05, 10.0, '2.70'), 'gyro_speed_deadzone': (0.0, 5.0, '0.36'),
                 'gyro_precision_speed': (0.0, 10.0, '0.75'), 'gyro_local_angle': (-180.0, 180.0, '0.00'),
                 'gyro_complement': (-100.0, 100.0, '100.00'),
                 'gyro_rotate': (-180.0, 180.0, '0.00')}  # the game's ranges and defaults
 GYRO_CHOICES = {'gyro_button': (GYRO_BUTTONS, '-2'), 'gyro_button_mode': (GYRO_MODES, '0'),
-                'gyro_space': (GYRO_SPACES, '0')}
+                'gyro_space': (GYRO_SPACES, '4')}
 # Fixes page: fixes that cost speed, so they run only where they help unless the player picks.
 # key -> (title, hint, {choice: {variable: value}}); 'auto' sets nothing (the game's own default).
 FIXES = {
@@ -220,9 +220,9 @@ APP_DEFAULTS = {'game_dir': '', 'game_dir_u1': '', 'game_dir_u2': '', 'game_dir_
                 'frame_gen_multiplier': '2', 'extra_env': '', 'close_on_play': False,
                 'mouse_look': True, 'mouse_sensitivity': '1.0', 'mouse_invert_y': False,
                 'pad_invert_y': False, 'gyro_aim': False, 'gyro_builtin': True, 'gyro_button': '-2',
-                'gyro_button_mode': '0', 'gyro_sensitivity': '1.00', 'gyro_speed_deadzone': '0.36',
+                'gyro_button_mode': '0', 'gyro_sensitivity': '2.70', 'gyro_speed_deadzone': '0.36',
                 'gyro_precision_speed': '0.75', 'gyro_invert_x': False, 'gyro_invert_y': False,
-                'gyro_space': '0', 'gyro_local_angle': '0.00', 'gyro_complement': '100.00',
+                'gyro_space': '4', 'gyro_local_angle': '0.00', 'gyro_complement': '100.00',
                 'gyro_rotate': '0.00', 'art_banner': '', 'art_u1': '', 'art_u2': '', 'art_u3': '', 'steam_art': '', 'art_crops': {}, 'shortcut_name': 'Uncharted: The Nathan Drake Collection', 'shortcut_icon': '', 'trophy_game': 'u1', 'pad_vibration': True, 'pad_vibration_strength': '100', 'button_prompts': 'auto', 'key_bindings': {}, 'pad_bindings': {}, 'check_updates': True,
                 **{key: 'auto' for key in FIXES},
                 **{f'{game}_infinite_{cheat}': False for game, _t, _s, _e in GAMES for cheat in ('health', 'ammo')}}
@@ -1515,7 +1515,7 @@ class Launcher:
         self.row(f, _('Gyro Enable/Suppress/Toggle'), self.choice(f, 'gyro_button_mode', GYRO_MODES, 24))
         for key, title, step, log, hint in (
                 ('gyro_sensitivity', _('Gyro ° Sensitivity'), 0.05, True,
-                 _('1.00: the camera turns 1 degree for each degree you turn the controller.')),
+                 _('1.00: the camera turns 1 degree for each degree you turn the controller; the default is 2.70.')),
                 ('gyro_speed_deadzone', _('Gyro Speed Deadzone'), 0.01, False,
                  _('Degrees per second: slower movement does not turn the camera (hand shake). What it holds '
                    'back comes back when you move the controller fast.')),

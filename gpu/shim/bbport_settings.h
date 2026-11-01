@@ -78,13 +78,14 @@ struct Values {
     std::atomic<bool> gyro_builtin{true};
     std::atomic<int> gyro_button{-2};
     std::atomic<int> gyro_button_mode{0};
-    std::atomic<float> gyro_sensitivity{1.0f};
+    std::atomic<float> gyro_sensitivity{2.7f}; ///< default: the camera turns 2.7 degrees per degree
     std::atomic<bool> gyro_invert_x{false}, gyro_invert_y{false};
     /// Gyro Speed Deadzone and Gyro Precision Speed, deg/s (defaults: the values in Steam's own menu).
     std::atomic<float> gyro_speed_deadzone{0.36f}, gyro_precision_speed{0.75f};
-    /// 3DOF to 2D Conversion Style (runtime_gyro.h GYRO_SPACE_*: 0 Yaw .. 5 World Space); Local Space's
+    /// 3DOF to 2D Conversion Style (runtime_gyro.h GYRO_SPACE_*: 0 Yaw .. 5 World Space; default 4, Player
+    /// Space, its inventor's default for a separate controller); Local Space's
     /// Primary Axis Offset (degrees) and Complementary Axis Contribution (percent), Steam's defaults.
-    std::atomic<int> gyro_space{0};
+    std::atomic<int> gyro_space{4};
     std::atomic<float> gyro_local_angle{0.0f}, gyro_complement{100.0f};
     std::atomic<float> gyro_rotate{0.0f}; ///< Rotate Output, degrees clockwise
     std::atomic<float> gyro_bias[3]{}; ///< learned offset at rest, rad/s

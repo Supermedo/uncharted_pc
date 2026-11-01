@@ -66,7 +66,7 @@ class GyroIniTests(unittest.TestCase):
         LAUNCHER.write_gyro_ini({**LAUNCHER.APP_DEFAULTS, 'gyro_space': '9', 'gyro_local_angle': '-200',
                                  'gyro_complement': '300'})
         lines = self.path.read_text(encoding='utf-8').splitlines()
-        for line in ('gyro_space=0', 'gyro_local_angle=-180.00', 'gyro_complement=100.00'):
+        for line in ('gyro_space=4', 'gyro_local_angle=-180.00', 'gyro_complement=100.00'):
             self.assertIn(line, lines)
         LAUNCHER.write_gyro_ini({**LAUNCHER.APP_DEFAULTS, 'gyro_rotate': '-200'})
         self.assertIn('gyro_rotate=-180.00', self.path.read_text(encoding='utf-8').splitlines())
@@ -75,7 +75,9 @@ class GyroIniTests(unittest.TestCase):
 
     def test_conversion_styles_match_the_games_numbers(self):
         self.assertEqual([value for value, _name in LAUNCHER.GYRO_SPACES], ['0', '1', '2', '3', '4', '5'])
-        self.assertEqual(LAUNCHER.APP_DEFAULTS['gyro_space'], '0')  # Yaw, as before
+        self.assertEqual(LAUNCHER.APP_DEFAULTS['gyro_space'], '4')  # Player Space
+        self.assertEqual(LAUNCHER.APP_DEFAULTS['gyro_sensitivity'], '2.70')
+        self.assertEqual(LAUNCHER.GYRO_NUMBERS['gyro_sensitivity'][2], '2.70')
 
     def test_steam_dots_per_360_follows_the_mouse_sensitivity(self):
         self.assertEqual(LAUNCHER.steam_dots_per_360({'mouse_sensitivity': '1.0'}), 2400)
