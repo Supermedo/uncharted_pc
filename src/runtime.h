@@ -92,6 +92,8 @@ uintptr_t runtime_savedata_resolve(const char *name);
 void runtime_trophy_configure(const char *dir);
 uintptr_t runtime_trophy_resolve(const char *name);
 void runtime_savedata_report(void);
+/* Waits up to timeout_ms for a save in progress: 0 none, 1 it finished, -1 timed out. */
+int runtime_savedata_wait_idle(unsigned timeout_ms);
 int runtime_savedata_pick(int32_t user, const char *title, const char (*names)[32], uint32_t count,
                           int which, const char *focus, char out[32], void *param_out);
 void runtime_thread_attach_host(const char *name);
