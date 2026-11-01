@@ -22,9 +22,9 @@ int bbgpu_gyro_aim(void) { return 0; }
 _Thread_local int runtime_ndgi_open;
 void bbgpu_gyro_settings(float *sensitivity, int *invert_x, int *invert_y, float *speed_deadzone,
                          float *precision_speed, int *builtin, int *button, int *mode, int *space,
-                         float *local_angle, float *local_complement) {
+                         float *local_angle, float *local_complement, float *rotate) {
     *sensitivity=1.0f; *invert_x=*invert_y=0; *speed_deadzone=*precision_speed=0.0f;
-    *builtin=1; *button=-2; *mode=0; *space=0; *local_angle=*local_complement=0.0f;
+    *builtin=1; *button=-2; *mode=0; *space=0; *local_angle=*rotate=0.0f; *local_complement=1.0f;
 }
 void bbgpu_gyro_status(int source, const char *controller) {
     (void)source; (void)controller;

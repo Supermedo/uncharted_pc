@@ -18,14 +18,16 @@ typedef struct { float rate[3]; uint64_t ns; } GyroSample;
 typedef struct {
     float sensitivity; int invert_x, invert_y; float speed_deadzone, precision_speed;
     int space;              /* 3DOF to 2D Conversion Style: GYRO_SPACE_* */
-    float local_angle;      /* Local Space: how far the turning axis is tipped back from the sticks' axis, degrees
-                             * (the angle the controller is held tipped up at) */
-    float local_complement; /* Local Space: how much the axis at 90 degrees to it counts, 0..1 */
+    float local_angle;      /* Local Space's Primary Axis Offset, degrees: the turning axis tilted from the
+                             * sticks' axis (0, Yaw) towards the roll axis (90, Roll) */
+    float local_complement; /* Local Space's Complementary Axis Contribution: how much the axis at 90 degrees
+                             * to it counts, -1..1 (Steam's -100%..100%); Yaw + Roll's Roll Axis Contribution */
+    float rotate;           /* Rotate Output: the turn's direction turned clockwise, degrees */
 } GyroSettings;
 
 /* Steam's 3DOF to 2D Conversion Style. Yaw: turn around the controller's own vertical axis. Roll: lean it
- * like a steering wheel. Yaw + Roll: the two added. Local Space: turn around an axis tipped back by
- * local_angle, plus local_complement of the axis at 90 degrees to it. Player Space: yaw and roll combined
+ * like a steering wheel. Yaw + Roll: the two added. Local Space: turn around an axis tilted by
+ * local_angle, plus local_complement of the axis at 90 degrees to it (0 and full: Yaw + Roll). Player Space: yaw and roll combined
  * around gravity, the controller's own pitch. World Space: all turning around gravity, pitch around the
  * controller's side-to-side axis laid flat, none when the controller is on its side. Player and World
  * Space are JibbSmart's (GamepadMotionHelpers, runtime_gyro.c). */

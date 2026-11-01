@@ -83,9 +83,10 @@ struct Values {
     /// Gyro Speed Deadzone and Gyro Precision Speed, deg/s (defaults: the values in Steam's own menu).
     std::atomic<float> gyro_speed_deadzone{0.36f}, gyro_precision_speed{0.75f};
     /// 3DOF to 2D Conversion Style (runtime_gyro.h GYRO_SPACE_*: 0 Yaw .. 5 World Space); Local Space's
-    /// axis angle (degrees) and complement (0..1).
+    /// Primary Axis Offset (degrees) and Complementary Axis Contribution (percent), Steam's defaults.
     std::atomic<int> gyro_space{0};
-    std::atomic<float> gyro_local_angle{0.0f}, gyro_local_complement{0.0f};
+    std::atomic<float> gyro_local_angle{0.0f}, gyro_complement{100.0f};
+    std::atomic<float> gyro_rotate{0.0f}; ///< Rotate Output, degrees clockwise
     std::atomic<float> gyro_bias[3]{}; ///< learned offset at rest, rad/s
     /// Set by runtime_pad.c: 0 no controller, 1 Steam or no gyro, 2 built in; the controller's name.
     std::atomic<int> gyro_source{0};

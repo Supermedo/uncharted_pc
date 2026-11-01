@@ -54,11 +54,11 @@ int bbgpu_gyro_take(float *rates, float *accels, uint64_t *ns, int max);
 int bbgpu_window_focused(void);
 /* The launcher's gyro settings (bbport.ini gyro_*): speed deadzone and precision speed in deg/s, builtin
  * on/off, button (SDL button, -2/-3 the triggers, -1 none: always on), mode (0 hold to enable, 1 hold to
- * suppress, 2 toggle), space (3DOF to 2D Conversion Style, GYRO_SPACE_*), Local Space's axis angle
- * (degrees) and complement (0..1). */
+ * suppress, 2 toggle), space (3DOF to 2D Conversion Style, GYRO_SPACE_*), Local Space's Primary Axis
+ * Offset (degrees) and Complementary Axis Contribution (-1..1), Rotate Output (degrees clockwise). */
 void bbgpu_gyro_settings(float *sensitivity, int *invert_x, int *invert_y, float *speed_deadzone,
                          float *precision_speed, int *builtin, int *button, int *mode, int *space,
-                         float *local_angle, float *local_complement);
+                         float *local_angle, float *local_complement, float *rotate);
 /* What the menu shows: 0 no controller, 1 Steam or no gyro on this controller, 2 built in. */
 void bbgpu_gyro_status(int source, const char *controller);
 /* 1 once after the menu's Calibrate was pressed. */

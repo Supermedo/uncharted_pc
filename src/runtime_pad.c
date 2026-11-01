@@ -1133,7 +1133,7 @@ static int gyro_frame(SDL_Gamepad *g, uint64_t now, int menu_open, float *dx, fl
     GyroSettings s;
     int builtin, button, mode;
     bbgpu_gyro_settings(&s.sensitivity,&s.invert_x,&s.invert_y,&s.speed_deadzone,&s.precision_speed,
-                        &builtin,&button,&mode,&s.space,&s.local_angle,&s.local_complement);
+                        &builtin,&button,&mode,&s.space,&s.local_angle,&s.local_complement,&s.rotate);
     gyro.active=gyro.has_gyro && builtin;
     if (bbgpu_gyro_calibrate_requested()) {
         gyro_calibration_reset(&gyro.cal);

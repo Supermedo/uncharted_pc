@@ -4,7 +4,7 @@
 #include <stdio.h>
 #include "runtime_gyro.h"
 
-static const GyroSettings plain={1.0f,0,0,0.0f,0.0f,GYRO_SPACE_YAW,0.0f,0.0f};
+static const GyroSettings plain={1.0f,0,0,0.0f,0.0f,GYRO_SPACE_YAW,0.0f,0.0f,0.0f};
 
 static int near(float a, float b, float tolerance) { return fabsf(a-b)<=tolerance; }
 
@@ -28,7 +28,7 @@ static void turn_for(const GyroSettings *s, const GyroCalibration *c, float pitc
 
 #define DEG (1.0f/57.29578f) /* rad/s per deg/s */
 /* Ben's Steam values: Gyro Speed Deadzone 0.36 deg/s, Gyro Precision Speed 0.75 deg/s. */
-static const GyroSettings steady={1.0f,0,0,0.36f,0.75f,GYRO_SPACE_YAW,0.0f,0.0f};
+static const GyroSettings steady={1.0f,0,0,0.36f,0.75f,GYRO_SPACE_YAW,0.0f,0.0f,0.0f};
 
 static void deadzone_stops_slow(void) {
     GyroCalibration c; gyro_calibration_reset(&c);
@@ -39,7 +39,7 @@ static void deadzone_stops_slow(void) {
 
 static void precision_scales(void) {
     GyroCalibration c; gyro_calibration_reset(&c);
-    const GyroSettings precise={1.0f,0,0,0.0f,0.75f,GYRO_SPACE_YAW,0.0f,0.0f};
+    const GyroSettings precise={1.0f,0,0,0.0f,0.75f,GYRO_SPACE_YAW,0.0f,0.0f,0.0f};
     float right, up;
     turn_for(&precise,&c,0.0f,-0.5f*DEG,1.0f,&right,&up); /* 0.5 deg/s right: two thirds of the turn */
     assert(near(right,0.5f*0.5f/0.75f,0.002f) && near(up,0.0f,1e-6f));
@@ -74,7 +74,7 @@ static void pitch_up_is_up(void) {
 
 static void sensitivity_scales(void) {
     GyroCalibration c; gyro_calibration_reset(&c);
-    const GyroSettings twice={2.0f,0,0,0.0f,0.0f,GYRO_SPACE_YAW,0.0f,0.0f};
+    const GyroSettings twice={2.0f,0,0,0.0f,0.0f,GYRO_SPACE_YAW,0.0f,0.0f,0.0f};
     float right, up;
     turn_for(&twice,&c,1.0f,1.0f,0.5f,&right,&up);
     assert(near(right,-57.296f,0.02f));
@@ -83,7 +83,7 @@ static void sensitivity_scales(void) {
 
 static void invert_flips(void) {
     GyroCalibration c; gyro_calibration_reset(&c);
-    const GyroSettings x={1.0f,1,0,0.0f,0.0f,GYRO_SPACE_YAW,0.0f,0.0f}, y={1.0f,0,1,0.0f,0.0f,GYRO_SPACE_YAW,0.0f,0.0f};
+    const GyroSettings x={1.0f,1,0,0.0f,0.0f,GYRO_SPACE_YAW,0.0f,0.0f,0.0f}, y={1.0f,0,1,0.0f,0.0f,GYRO_SPACE_YAW,0.0f,0.0f,0.0f};
     float right, up;
     turn_for(&x,&c,1.0f,1.0f,0.5f,&right,&up);
     assert(near(right,28.648f,0.01f) && near(up,28.648f,0.01f));
@@ -125,7 +125,7 @@ static void bias_removed_before_sensitivity(void) {
     GyroCalibration c; gyro_calibration_reset(&c);
     const float drift[3]={0.01f,0.01f,0.0f};
     for (int i=0;i<2000;++i) gyro_calibration_add(&c,drift,0.001f);
-    const GyroSettings thrice={3.0f,0,0,0.0f,0.0f,GYRO_SPACE_YAW,0.0f,0.0f};
+    const GyroSettings thrice={3.0f,0,0,0.0f,0.0f,GYRO_SPACE_YAW,0.0f,0.0f,0.0f};
     float right, up;
     turn_for(&thrice,&c,drift[0],drift[1],1.0f,&right,&up);
     assert(near(right,0.0f,0.01f) && near(up,0.0f,0.01f));
@@ -238,9 +238,14 @@ static void roll_is_leaning(void) {
 
 static void yaw_plus_roll_adds_turn_and_lean(void) {
     const float both_left[3]={0.0f,0.5f,0.25f};
+    GyroSettings s=plain; s.space=GYRO_SPACE_YAW_ROLL;
     float pitch, yaw;
-    space_of(GYRO_SPACE_YAW_ROLL,both_left,NULL,&pitch,&yaw);
+    s.local_complement=1.0f;  /* Roll Axis Contribution 100%, Steam's default */
+    gyro_space_rates(&s,both_left,NULL,&pitch,&yaw);
     assert(near(yaw,0.75f,1e-6f));
+    s.local_complement=-0.5f; /* -50%: the lean counts half, the other way */
+    gyro_space_rates(&s,both_left,NULL,&pitch,&yaw);
+    assert(near(yaw,0.375f,1e-6f));
 }
 
 static void local_space_turns_around_its_tipped_axis(void) {
@@ -250,14 +255,18 @@ static void local_space_turns_around_its_tipped_axis(void) {
     assert(near(yaw,0.5f,1e-6f) && near(pitch,0.3f,1e-6f));
     local_of(0.0f,1.0f,any,&pitch,&yaw);         /* untipped, full complement: Yaw + Roll */
     assert(near(yaw,1.2f,1e-6f));
+    local_of(90.0f,0.0f,any,&pitch,&yaw);        /* tilted 90 degrees, no complement: Roll */
+    assert(near(yaw,0.7f,1e-6f));
     turn_left_tipped(40.0f,rate,grav);
-    local_of(40.0f,0.0f,rate,&pitch,&yaw);       /* the axis tipped as the controller is held */
-    assert(near(yaw,1.0f,1e-5f));
-    local_of(0.0f,0.0f,rate,&pitch,&yaw);        /* not tipped: part of the turn is lost */
+    local_of(-40.0f,0.0f,rate,&pitch,&yaw);      /* the axis tilted below the horizon, as the controller's top */
+    assert(near(yaw,1.0f,1e-5f));                /* is tipped up: the whole turn */
+    local_of(0.0f,0.0f,rate,&pitch,&yaw);        /* not tilted: part of the turn is lost */
     assert(near(yaw,cosf(40.0f*DEG),1e-5f));
     const float around_complement[3]={0.0f,sinf(40.0f*DEG),cosf(40.0f*DEG)};
-    local_of(40.0f,0.5f,around_complement,&pitch,&yaw); /* the axis at 90 degrees counts by half */
+    local_of(-40.0f,0.5f,around_complement,&pitch,&yaw); /* the axis at 90 degrees counts by half */
     assert(near(yaw,0.5f,1e-5f));
+    local_of(-40.0f,-1.0f,around_complement,&pitch,&yaw); /* or against */
+    assert(near(yaw,-1.0f,1e-5f));
 }
 
 static void player_and_world_turn_the_same_however_tipped(void) {
@@ -298,6 +307,18 @@ static void world_space_pitch_fades_on_the_side(void) {
     assert(near(pitch,0.0f,1e-6f));
     space_of(GYRO_SPACE_WORLD,rate,almost,&pitch,&yaw); /* the flattened axis catches 0.17, faded to 0.06 */
     assert(pitch>0.03f && pitch<0.1f);
+}
+
+static void rotate_output_turns_clockwise(void) {
+    GyroCalibration c; gyro_calibration_reset(&c);
+    GyroSettings turned=plain;
+    float right, up;
+    turned.rotate=90.0f;  /* a turn to the right shows as a turn down */
+    turn_for(&turned,&c,0.0f,-10.0f*DEG,1.0f,&right,&up);
+    assert(near(right,0.0f,1e-3f) && near(up,-10.0f,1e-3f));
+    turned.rotate=-30.0f; /* up, turned 30 degrees anticlockwise: up and a little left */
+    turn_for(&turned,&c,10.0f*DEG,0.0f,1.0f,&right,&up);
+    assert(near(right,-5.0f,1e-3f) && near(up,8.660254f,1e-3f));
 }
 
 static void player_space_through_the_turn(void) {
@@ -413,6 +434,7 @@ int main(void) {
     player_and_world_turn_the_same_however_tipped();
     player_space_caps_an_out_of_line_turn();
     world_space_pitch_fades_on_the_side();
+    rotate_output_turns_clockwise();
     player_space_through_the_turn();
     gravity_starts_flat_then_takes_the_first_reading();
     gravity_settles_on_the_accelerometer();

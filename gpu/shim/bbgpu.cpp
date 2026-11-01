@@ -400,7 +400,7 @@ extern "C" int bbgpu_gyro_aim(void) {
 
 extern "C" void bbgpu_gyro_settings(float* sensitivity, int* invert_x, int* invert_y, float* speed_deadzone,
                                     float* precision_speed, int* builtin, int* button, int* mode, int* space,
-                                    float* local_angle, float* local_complement) {
+                                    float* local_angle, float* local_complement, float* rotate) {
     const auto& s = BbSettings::Get();
     *sensitivity = s.gyro_sensitivity.load(std::memory_order_relaxed);
     *invert_x = s.gyro_invert_x.load(std::memory_order_relaxed) ? 1 : 0;
@@ -412,7 +412,8 @@ extern "C" void bbgpu_gyro_settings(float* sensitivity, int* invert_x, int* inve
     *mode = s.gyro_button_mode.load(std::memory_order_relaxed);
     *space = s.gyro_space.load(std::memory_order_relaxed);
     *local_angle = s.gyro_local_angle.load(std::memory_order_relaxed);
-    *local_complement = s.gyro_local_complement.load(std::memory_order_relaxed);
+    *local_complement = s.gyro_complement.load(std::memory_order_relaxed) / 100.0f;
+    *rotate = s.gyro_rotate.load(std::memory_order_relaxed);
 }
 
 extern "C" void bbgpu_gyro_status(int source, const char* controller) {

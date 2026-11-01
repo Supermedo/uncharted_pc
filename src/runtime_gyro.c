@@ -142,12 +142,12 @@ void gyro_space_rates(const GyroSettings *s, const float rate[3], const float gr
     default:
     case GYRO_SPACE_YAW: *yaw=rate[1]; break;
     case GYRO_SPACE_ROLL: *yaw=rate[2]; break;     /* lean left (right side up): left */
-    case GYRO_SPACE_YAW_ROLL: *yaw=rate[1]+rate[2]; break;
+    case GYRO_SPACE_YAW_ROLL: *yaw=rate[1]+s->local_complement*rate[2]; break; /* Roll Axis Contribution */
     case GYRO_SPACE_LOCAL: {
         const float t=s->local_angle/DEGREES_PER_RADIAN, ct=cosf(t), st=sinf(t);
-        /* the turning axis tipped back with the controller's top, and the axis at 90 degrees to it (at angle
-         * 0 the roll axis, so a full complement there is Yaw + Roll) */
-        *yaw=(rate[1]*ct-rate[2]*st)+s->local_complement*(rate[1]*st+rate[2]*ct);
+        /* the primary axis tilted from yaw (0) to roll (90), and the axis at 90 degrees to it (at 0 the roll
+         * axis, so a full complement there is Yaw + Roll) */
+        *yaw=(rate[1]*ct+rate[2]*st)+s->local_complement*(rate[2]*ct-rate[1]*st);
         break;
     }
     case GYRO_SPACE_PLAYER: {
@@ -197,6 +197,11 @@ void gyro_turn(const GyroSettings *s, const GyroCalibration *c, GyroFilter *f, c
                 f->owed[a]=0.0f;
             }
         }
+    }
+    if (s->rotate!=0.0f) { /* Rotate Output: clockwise on the screen */
+        const float t=s->rotate/DEGREES_PER_RADIAN, ct=cosf(t), st=sinf(t), right=out[0], up=out[1];
+        out[0]=right*ct+up*st;
+        out[1]=up*ct-right*st;
     }
     *right_deg=out[0]*s->sensitivity*(s->invert_x ? -1.0f : 1.0f);
     *up_deg=out[1]*s->sensitivity*(s->invert_y ? -1.0f : 1.0f);

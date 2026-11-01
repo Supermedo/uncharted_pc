@@ -59,15 +59,17 @@ class GyroIniTests(unittest.TestCase):
             self.assertIn(line, lines)
 
     def test_conversion_style_reads_writes_and_stays_in_range(self):
-        self.path.write_text('gyro_space=4\ngyro_local_angle=30.5\ngyro_local_complement=0.25\n', encoding='utf-8')
+        self.path.write_text('gyro_space=4\ngyro_local_angle=30.5\ngyro_complement=0.25\n', encoding='utf-8')
         values = LAUNCHER.gyro_from_ini()
-        self.assertEqual((values['gyro_space'], values['gyro_local_angle'], values['gyro_local_complement']),
+        self.assertEqual((values['gyro_space'], values['gyro_local_angle'], values['gyro_complement']),
                          ('4', '30.50', '0.25'))
-        LAUNCHER.write_gyro_ini({**LAUNCHER.APP_DEFAULTS, 'gyro_space': '9', 'gyro_local_angle': '-120',
-                                 'gyro_local_complement': '3'})
+        LAUNCHER.write_gyro_ini({**LAUNCHER.APP_DEFAULTS, 'gyro_space': '9', 'gyro_local_angle': '-200',
+                                 'gyro_complement': '300'})
         lines = self.path.read_text(encoding='utf-8').splitlines()
-        for line in ('gyro_space=0', 'gyro_local_angle=-90.00', 'gyro_local_complement=1.00'):
+        for line in ('gyro_space=0', 'gyro_local_angle=-180.00', 'gyro_complement=100.00'):
             self.assertIn(line, lines)
+        LAUNCHER.write_gyro_ini({**LAUNCHER.APP_DEFAULTS, 'gyro_rotate': '-200'})
+        self.assertIn('gyro_rotate=-180.00', self.path.read_text(encoding='utf-8').splitlines())
         LAUNCHER.write_gyro_ini({**LAUNCHER.APP_DEFAULTS, 'gyro_space': '5'})
         self.assertIn('gyro_space=5', self.path.read_text(encoding='utf-8').splitlines())
 

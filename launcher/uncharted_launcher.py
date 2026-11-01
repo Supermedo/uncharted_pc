@@ -165,8 +165,9 @@ GYRO_SPACES = [('0', 'Yaw'), ('1', 'Roll'), ('2', 'Yaw + Roll'), ('3', 'Local Sp
                ('5', 'World Space')]
 GYRO_FLAGS = ('gyro_aim', 'gyro_builtin', 'gyro_invert_x', 'gyro_invert_y')
 GYRO_NUMBERS = {'gyro_sensitivity': (0.05, 10.0, '1.00'), 'gyro_speed_deadzone': (0.0, 5.0, '0.36'),
-                'gyro_precision_speed': (0.0, 10.0, '0.75'), 'gyro_local_angle': (-90.0, 90.0, '0.00'),
-                'gyro_local_complement': (0.0, 1.0, '0.00')}  # the game's ranges and defaults
+                'gyro_precision_speed': (0.0, 10.0, '0.75'), 'gyro_local_angle': (-180.0, 180.0, '0.00'),
+                'gyro_complement': (-100.0, 100.0, '100.00'),
+                'gyro_rotate': (-180.0, 180.0, '0.00')}  # the game's ranges and defaults
 GYRO_CHOICES = {'gyro_button': (GYRO_BUTTONS, '-2'), 'gyro_button_mode': (GYRO_MODES, '0'),
                 'gyro_space': (GYRO_SPACES, '0')}
 # Fixes page: fixes that cost speed, so they run only where they help unless the player picks.
@@ -221,7 +222,8 @@ APP_DEFAULTS = {'game_dir': '', 'game_dir_u1': '', 'game_dir_u2': '', 'game_dir_
                 'pad_invert_y': False, 'gyro_aim': False, 'gyro_builtin': True, 'gyro_button': '-2',
                 'gyro_button_mode': '0', 'gyro_sensitivity': '1.00', 'gyro_speed_deadzone': '0.36',
                 'gyro_precision_speed': '0.75', 'gyro_invert_x': False, 'gyro_invert_y': False,
-                'gyro_space': '0', 'gyro_local_angle': '0.00', 'gyro_local_complement': '0.00', 'art_banner': '', 'art_u1': '', 'art_u2': '', 'art_u3': '', 'steam_art': '', 'art_crops': {}, 'shortcut_name': 'Uncharted: The Nathan Drake Collection', 'shortcut_icon': '', 'trophy_game': 'u1', 'pad_vibration': True, 'pad_vibration_strength': '100', 'button_prompts': 'auto', 'key_bindings': {}, 'pad_bindings': {}, 'check_updates': True,
+                'gyro_space': '0', 'gyro_local_angle': '0.00', 'gyro_complement': '100.00',
+                'gyro_rotate': '0.00', 'art_banner': '', 'art_u1': '', 'art_u2': '', 'art_u3': '', 'steam_art': '', 'art_crops': {}, 'shortcut_name': 'Uncharted: The Nathan Drake Collection', 'shortcut_icon': '', 'trophy_game': 'u1', 'pad_vibration': True, 'pad_vibration_strength': '100', 'button_prompts': 'auto', 'key_bindings': {}, 'pad_bindings': {}, 'check_updates': True,
                 **{key: 'auto' for key in FIXES},
                 **{f'{game}_infinite_{cheat}': False for game, _t, _s, _e in GAMES for cheat in ('health', 'ammo')}}
 
@@ -1529,16 +1531,20 @@ class Launcher:
         self.row(f, _('3DOF to 2D Conversion Style'), self.choice(f, 'gyro_space', GYRO_SPACES, 24),
                  _('Which turns of the controller move the camera, as in Steam. Yaw: turn it around its own '
                    'vertical axis. Roll: lean it like a steering wheel. Yaw + Roll: both added. Local Space: '
-                   'turn it around an axis tilted back as set below. Player Space: yaw and roll around the '
+                   'like Yaw + Roll, with the two settings below. Player Space: yaw and roll around the '
                    'real vertical, so it works however far the controller is tipped up or down. World Space: '
                    'all turning around the real vertical; no up-down when the controller is on its side.'))
         for key, title, step, suffix, hint in (
-                ('gyro_local_angle', _('Local Space: Axis Tilt'), 1.0, '°',
-                 _('Local Space only: how far the turning axis tilts back, as the angle you hold the '
-                   'controller tipped up at (0: Yaw).')),
-                ('gyro_local_complement', _('Local Space: Complementary Axis'), 0.05, '',
-                 _('Local Space only: how much turning around the axis at 90 degrees to it counts '
-                   '(0: none, 1: fully; at a tilt of 0, fully is Yaw + Roll).'))):
+                ('gyro_local_angle', _('Primary Axis Offset'), 1.0, '°',
+                 _('Local Space only. Tilts the turning axis around the controller\'s side-to-side axis: '
+                   '0° is Yaw, 90° is Roll; below 0 it tilts below the controller\'s own horizon.')),
+                ('gyro_complement', _('Complementary Axis Contribution (Roll)'), 1.0, '%',
+                 _('Local Space and Yaw + Roll (Steam calls it Roll Axis Contribution there): how much '
+                   'turning around the axis at 90 degrees to the primary axis counts (at an offset of 0°, '
+                   'that axis is Roll); below 0 it counts the other way.')),
+                ('gyro_rotate', _('Rotate Output'), 1.0, '°',
+                 _('Turns the gyro\'s output clockwise (or anticlockwise, below 0), whichever style is '
+                   'picked.'))):
             low, high, _default = GYRO_NUMBERS[key]
             self.row(f, title, Slider(self.tk, self.target(f), self.var(key), low, high, step, COLORS, self.px,
                                       self.font_ui_md, width=300, entry=True, suffix=suffix), hint)
