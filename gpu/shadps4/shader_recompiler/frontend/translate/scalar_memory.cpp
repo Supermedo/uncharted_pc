@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include "bbport_focus_fix.h"
 #include "shader_recompiler/frontend/translate/translate.h"
 
 namespace Shader::Gcn {
@@ -82,7 +83,18 @@ void Translator::S_BUFFER_LOAD_DWORD(int num_dwords, const GcnInst& inst) {
     IR::ScalarReg dst_reg{inst.dst[0].code};
     for (u32 i = 0; i < num_dwords; i++) {
         const IR::U32 index = ir.IAdd(dword_offset, ir.Imm32(i));
-        ir.SetScalarReg(dst_reg + i, ir.ReadConstBuffer(vsharp, index, buffer_info));
+        IR::U32 value = ir.ReadConstBuffer(vsharp, index, buffer_info);
+        // bbport: the autofocus's screen centre, for the render size (bbport_focus_fix.h).
+        if (smrd.imm && smrd.offset + i < 2 && BbFocusFix::FocusCentreShader(info.pgm_hash)) {
+            const u32 axis = smrd.offset + i;
+            const IR::F32 inverse_size = ir.BitCast<IR::F32>(
+                ir.ReadConstBuffer(vsharp, ir.Imm32(6 + axis), buffer_info));
+            const IR::F32 centre = ir.FPDiv(
+                ir.BitCast<IR::F32>(value),
+                ir.FPMul(inverse_size, ir.Imm32(axis == 0 ? 1920.0f : 1080.0f)));
+            value = ir.BitCast<IR::U32>(centre);
+        }
+        ir.SetScalarReg(dst_reg + i, value);
     }
 }
 

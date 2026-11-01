@@ -334,12 +334,15 @@ struct BufferCache::Landing {
     boost::container::small_vector<VAddr, 4> targets;         ///< guest address of each copy
 };
 
-bool BufferCache::DeferGuestCopy(VAddr src, VAddr dst, u64 size) {
+bool BufferCache::DeferGuestCopy(VAddr src, VAddr dst, u64 size, bool guest_part, bool gated) {
     static const bool enabled = [] {
         const char* env = std::getenv("BB_SCALAR_COPY64_DEFER");
         return env && env[0] == '1'; // run.py: on for Uncharted 2
     }();
-    if (!enabled || !side_queue || land_stopping.load(std::memory_order_acquire) || size == 0 ||
+    // The raycaster copies (guest_part) are opt-in; the small GPU results the guest reads in place
+    // (ReadBackSmallWrittenBuffers, guest_part false) always land on the landing thread:
+    // waiting for them stopped the GPU thread (U3 Cartagena square 60 -> 36 FPS).
+    if ((guest_part && !enabled) || !side_queue || land_stopping.load(std::memory_order_acquire) || size == 0 ||
         size > SideQueue::StagingSize / 2 || !memory->IsValidGpuMapping(src, size) ||
         !memory->IsValidGpuMapping(dst, size)) {
         return false;
@@ -382,14 +385,20 @@ bool BufferCache::DeferGuestCopy(VAddr src, VAddr dst, u64 size) {
     }
     landing->tick = tick;
     // The guest part of the copy now; the GPU-written bytes follow when they have landed.
-    memory->TryWriteBacking(reinterpret_cast<void*>(dst), reinterpret_cast<const void*>(src), size);
+    if (guest_part) {
+        memory->TryWriteBacking(reinterpret_cast<void*>(dst), reinterpret_cast<const void*>(src), size);
+    }
     {
         std::scoped_lock lk{landing_mutex};
         if (landing_stop) {
             return false;
         }
-        landing->seq = ++landing_registered_seq;
-        landing_registered.store(landing->seq, std::memory_order_release);
+        if (gated) {
+            landing->seq = ++landing_registered_seq;
+            landing_registered.store(landing->seq, std::memory_order_release);
+        } else {
+            landing->seq = landing_registered_seq; // no label waits for it
+        }
         landing_queue.push_back(std::move(landing));
         if (!landing_thread.joinable()) {
             landing_thread = std::thread([this] { LandingWorker(); });

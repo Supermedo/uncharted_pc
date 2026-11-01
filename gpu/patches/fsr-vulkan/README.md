@@ -7,3 +7,6 @@ patches here to its working tree when they are not applied yet:
   statistics of each pass) in the FSR 4 v07 provider.
 - `0002-...`: `#include <mutex>` in the FFX Vulkan backend; libc++ (the Windows MSYS2 CLANG64
   build) does not include it transitively.
+- `0003-...`: FSR 3.1 frame generation tells the bridge its frame and retires it, so the
+  constant buffers and descriptor sets allocated per dispatch are freed (they leaked ~2-3 MB of
+  video memory a frame until the GPU ran out, in all three games).

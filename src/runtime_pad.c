@@ -597,6 +597,13 @@ _Static_assert(sizeof(u2_focus_reset_100)==56 && sizeof(u2_focus_reset_102)==58,
 #define CC8 0xcc,0xcc,0xcc,0xcc,0xcc,0xcc,0xcc,0xcc
 static const unsigned char u2_leg_ik_zero_100[]={U2_LEG_IK_ZERO(0x2d),CC8,CC8,CC8,CC8,CC8};
 static const unsigned char u2_leg_ik_zero_102[]={U2_LEG_IK_ZERO(0x2f),CC8,CC8,CC8,CC8,CC8,0xcc,0xcc};
+/* U1 and U2 "pAction != NULL" (moveactioncontroller.cpp:40), from Mevlock's dev fork: the
+ * player's move actions come from a pool of 64 slots. Two move states swapping every frame
+ * (landing into a fight, often right after a jump) keep one action each swap; at 144 FPS bursts
+ * took 16-30 slots, and a longer one filled the pool and stopped the game. The slot count passed
+ * where the character is set up becomes 256 (+144 KB from the character's heap). One site in U1
+ * and one in U2, in every build; U3 has no such pool. */
+static const unsigned char move_pool_256[]={0xb9,0x00,0x01,0x00,0x00}; /* mov ecx, 256 */
 _Static_assert(sizeof(u2_leg_ik_zero_100)==51 && sizeof(u2_leg_ik_zero_102)==53,"patch sizes");
 /* U3 Player::UpdateFocus (player.cpp:1897, assertion m_lookAt.X() == m_lookAt.X(): the crash
  * climbing the fort in chapter 8). The point Nate looks at ([player+0xef0], velocity +0xf00)
@@ -621,6 +628,22 @@ static const unsigned char u3_focus_reset_102[]={
     0x83,0xf8,0x0f,0x0f,0x84,0xa5,0xfe,0xff,0xff,0xcd,0x41,CC8,CC8,CC8,
 };
 _Static_assert(sizeof(u3_focus_reset_100)==51 && sizeof(u3_focus_reset_102)==53,"patch sizes");
+/* Render command contexts (ndgi), from Mevlock's dev fork: Begin and End keep a per-thread flag,
+ * set while a job worker has a context open (runtime_ndgi_open, cleared too when a fiber leaves
+ * the thread, runtime_fiber.c), used by the job wait patch in probe.c. A context records its
+ * worker at Begin (+0xe810) and asserts the same one at End ("m_workerThreadIndex ==
+ * GetCurrentWorkerThreadIndex()"). One site each in all three games. */
+extern _Thread_local int runtime_ndgi_open; /* runtime_fiber.c */
+static void __attribute__((ms_abi)) ndgi_begin(uint64_t rdi, uint64_t rsi, uint64_t image, uint64_t r14,
+                                               const RuntimeGuestRegs *regs) {
+    (void)rdi; (void)rsi; (void)image; (void)r14; (void)regs;
+    runtime_ndgi_open=1;
+}
+static void __attribute__((ms_abi)) ndgi_end(uint64_t rdi, uint64_t rsi, uint64_t image, uint64_t r14,
+                                             const RuntimeGuestRegs *regs) {
+    (void)rdi; (void)rsi; (void)image; (void)r14; (void)regs;
+    runtime_ndgi_open=0;
+}
 /* The camera code, the pad code and the assertion are found by their instructions, so a build of the
  * game that has them works (version 1.00 and 1.02 are known; "build" below). RIP-relative
  * displacements and call targets are wildcards. Entries with one name are variants for the builds. */
@@ -763,6 +786,10 @@ static const RuntimeGuestCallback guest_callbacks[]={
       "8d 35 ?? ?? ?? ?? 48 8d 15 ?? ?? ?? ?? 48 8d 0d ?? ?? ?? ?? "
       "41 b8 87 01 00 00 45 31 c9 ff d0 cd 41 c4 c1 78 28 07 c4 e3 79 04 c0 01",
       0x0, 53, NULL, u2_leg_ik_zero_102},
+    /* U1 and U2 move action pool: mov edx,6; mov ecx,64 (slots); mov r8d,32 */
+    {"U1/U2 move action pool 256 slots",
+      "ba 06 00 00 00 b9 40 00 00 00 41 b8 20 00 00 00",
+      0x5, 5, NULL, move_pool_256},
     /* U3 player focus NaN reset, build 100 */
     {"U3 player focus NaN reset",
       "c4 e3 79 04 cb 00 c5 f0 c2 c9 00 c5 f8 50 c1 83 f8 0f 74 38 "
@@ -789,6 +816,16 @@ static const RuntimeGuestCallback guest_callbacks[]={
       "8d 35 ?? ?? ?? ?? 48 8d 15 ?? ?? ?? ?? 48 8d 0d ?? ?? ?? ?? "
       "41 b8 4d 04 00 00 45 31 c9 ff d0 cd 41 c5 f8 28 45 d0",
       0x0, 58, NULL, u2_focus_reset_102},
+    /* Render context Begin, build 100: mov [r12+0xe810], rax */
+    {"Job render context begin", "49 89 84 24 10 e8 00 00", 0x0, 8, ndgi_begin, NULL},
+    /* build 102: mov [r15+0xe810], r12 */
+    {"Job render context begin", "4d 89 a7 10 e8 00 00", 0x0, 7, ndgi_begin, NULL},
+    /* Render context End, build 100: mov rbx,[r14+0xe810]; call GetCurrentWorkerThreadIndex;
+     * cmp rbx,rax; je */
+    {"Job render context end", "49 8b 9e 10 e8 00 00 e8 ?? ?? ?? ?? 48 39 c3 74", 0x0, 7, ndgi_end, NULL},
+    /* build 102: cmp byte [r15+0xe7dc],0; je; mov r12,[r15+0xe810] (the index call is inlined) */
+    {"Job render context end", "41 80 bf dc e7 00 00 00 0f 84 ?? ?? ?? ?? 4d 8b a7 10 e8 00 00",
+      14, 7, ndgi_end, NULL},
 
 };
 const RuntimeGuestCallback *runtime_guest_callbacks(size_t *count) {

@@ -40,7 +40,7 @@ CONFIG_FILE = CONFIG_DIR / 'settings.json'
 NAME = 'Uncharted'
 AUTHOR = 'SuperMedo'
 # This build; GitHub release tags are v<VERSION> (their digits are compared).
-VERSION = '0.3.9'
+VERSION = '0.3.11'
 RELEASES_API = 'https://api.github.com/repos/Supermedo/uncharted_pc/releases/latest'
 RELEASES_PAGE = 'https://github.com/Supermedo/uncharted_pc/releases/latest'
 UPDATE_DIR = Path(tempfile.gettempdir()) / 'uncharted-update'
@@ -167,13 +167,13 @@ FIXES = {
         {'on': {'BB_SCALAR_COPY64_SYNC': '2', 'BB_SCALAR_COPY64_DEFER': '1'},
          'off': {'BB_SCALAR_COPY64_SYNC': '0', 'BB_SCALAR_COPY64_DEFER': '0'}}),
     'fix_tiny_readback': (
-        'Aim and turret focus (Uncharted 2)',
-        'Enemies stay in focus when aiming. Automatic: on in Uncharted 2 only; elsewhere it costs about 13%.',
+        'Aim and turret focus',
+        'Enemies stay in focus when aiming (blurry aim in Uncharted 2 and 3). Automatic: on in Uncharted 2 and 3, no measurable cost.',
         {'on': {'BB_TINY_READBACK': '1'}, 'off': {'BB_TINY_READBACK': '0'}}),
     'fix_small_buffers': (
         'Brightness flicker fix',
-        'Copies small GPU results back every frame (auto exposure). Automatic: off; it halved the frame '
-        'rate in Uncharted 3\'s Cartagena square.',
+        'Copies small GPU results back every frame (fixes black weapons and stuck brightness). '
+        'Automatic: on in Uncharted 2 and 3.',
         {'on': {'BB_READBACK_SMALL_BUFFERS': '1'}, 'off': {'BB_READBACK_SMALL_BUFFERS': '0'}}),
     'fix_vram': (
         'Small video memory mode',
@@ -181,12 +181,12 @@ FIXES = {
         {'on': {'BB_VRAM_LEGACY': '0'}, 'off': {'BB_VRAM_LEGACY': '1'}}),
     'fix_job_sleep': (
         'Idle game workers sleep',
-        'Frees CPU cores while the game\'s workers wait. Automatic: on for CPUs with up to 8 threads; '
+        'Frees CPU cores while the game\'s workers wait. Automatic: on for CPUs with up to 12 threads; '
         'on bigger CPUs it cost about 8%.',
         {'on': {'BB_JOB_SLEEP': '1'}, 'off': {'BB_JOB_SLEEP': '0'}}),
     'fix_thread_prio': (
         'PS4 thread priorities',
-        'Game threads get the priorities they have on PS4. Automatic: on.',
+        'Game threads get the priorities they have on PS4. Automatic: off (the 4-core crash they were for is fixed by the job wait).',
         {'on': {'BB_THREAD_PRIO': '1'}, 'off': {'BB_THREAD_PRIO': '0'}}),
 }
 FIX_CHOICES = [('auto', 'Automatic'), ('on', 'On'), ('off', 'Off')]
@@ -546,14 +546,14 @@ def game_environment(s, start=None):
 
 
 # ---------------------------------------------------------------------------------------------
-# Surfaces: near-black base, raised panels, Uncharted gold accent.
+# Surfaces: an old leather journal by lamplight: dark warm browns, parchment text, brass accent.
 
-BG, PANEL, SURFACE, CARD, LINE = '#08090a', '#0c0d0f', '#0f1012', '#17181b', '#26282c'
-TEXT, MUTED, GOLD, GOLD_HI, GOLD_DIM = '#f3efe6', '#8e8a82', '#e7c36a', '#f3d78a', '#a88942'
-CARD_HI = '#202226'
+BG, PANEL, SURFACE, CARD, LINE = '#0d0a07', '#110d09', '#15100b', '#1e1710', '#352a1d'
+TEXT, MUTED, GOLD, GOLD_HI, GOLD_DIM = '#f3e9d4', '#9c8e76', '#e2a64a', '#f4c46e', '#a5762f'
+CARD_HI = '#271e15'
 COLORS = {'surface': SURFACE, 'card': CARD, 'card_hi': CARD_HI, 'line': LINE, 'text': TEXT, 'muted': MUTED,
-          'gold': GOLD, 'gold_hi': GOLD_HI, 'track': '#2c2e33', 'knob': '#9a958b', 'knob_on': '#f7f1e2',
-          'button': '#25272b', 'button_hi': '#30333a'}
+          'gold': GOLD, 'gold_hi': GOLD_HI, 'track': '#33281c', 'knob': '#a3957d', 'knob_on': '#fbf1dc',
+          'button': '#2a2117', 'button_hi': '#36291c'}
 # Sidebar icons (Segoe Fluent Icons on Windows 11, Segoe MDL2 Assets on Windows 10).
 NAV_ICONS = {'play': '\ue768', 'game': '\ue7fc', 'display': '\ue7f4', 'controls': '\ue765',
              'cheats': '\ue945', 'fixes': '\ue90f', 'trophies': '\ue734', 'advanced': '\ue713', 'log': '\ue8a5'}
@@ -688,7 +688,7 @@ class Launcher:
                     lightcolor=CARD_HI, darkcolor=CARD_HI, background=CARD_HI, arrowsize=14)
         s.map('TCombobox', fieldbackground=[('readonly', CARD_HI)], foreground=[('readonly', TEXT)],
               selectbackground=[('readonly', CARD_HI)], selectforeground=[('readonly', TEXT)],
-              bordercolor=[('focus', GOLD_DIM)], lightcolor=[('focus', GOLD_DIM)], background=[('active', '#2a2c31')])
+              bordercolor=[('focus', GOLD_DIM)], lightcolor=[('focus', GOLD_DIM)], background=[('active', '#30251a')])
         s.configure('TEntry', foreground=TEXT, insertcolor=TEXT, padding=(8, 5), fieldbackground=CARD_HI,
                     bordercolor=CARD_HI, lightcolor=CARD_HI, darkcolor=CARD_HI)
         s.map('TEntry', bordercolor=[('focus', GOLD_DIM)], lightcolor=[('focus', GOLD_DIM)])
@@ -696,11 +696,11 @@ class Launcher:
         s.map('TButton', background=[('active', '#322c24'), ('disabled', PANEL)], foreground=[('disabled', MUTED)])
         s.configure('Play.TButton', background=GOLD, foreground='#1a1408', font=('Segoe UI', 13, 'bold'),
                     padding=(42, 12), borderwidth=0)
-        s.map('Play.TButton', background=[('active', '#f3d78a'), ('disabled', '#3a3428')],
+        s.map('Play.TButton', background=[('active', '#f4c46e'), ('disabled', '#3a3428')],
               foreground=[('disabled', '#8a8070'), ('active', '#1a1408')])
-        s.configure('Vertical.TScrollbar', background='#2a2c31', arrowcolor=MUTED, troughcolor=SURFACE,
-                    bordercolor=SURFACE, lightcolor='#2a2c31', darkcolor='#2a2c31', gripcount=0, arrowsize=12)
-        s.map('Vertical.TScrollbar', background=[('active', '#3a3d44')])
+        s.configure('Vertical.TScrollbar', background='#30251a', arrowcolor=MUTED, troughcolor=SURFACE,
+                    bordercolor=SURFACE, lightcolor='#30251a', darkcolor='#30251a', gripcount=0, arrowsize=12)
+        s.map('Vertical.TScrollbar', background=[('active', '#463624')])
 
     # ---- widget helpers ----------------------------------------------------------------------
     def var(self, key):
@@ -1000,15 +1000,25 @@ class Launcher:
         side.pack(side='left', fill='y')
         side.pack_propagate(False)
         brand_wrap = side_w - 36
+        self.emblem_image = None
+        try:
+            from PIL import ImageTk
+            import uncharted_art
+            mark = uncharted_art.emblem(self.px(64))
+            self.emblem_image = ImageTk.PhotoImage(mark) if mark else None
+        except Exception:
+            self.emblem_image = None
+        if self.emblem_image:
+            tk.Label(side, image=self.emblem_image, bg=BG, bd=0).pack(anchor='w', padx=14, pady=(22, 0))
         tk.Label(side, text='UNCHARTED', bg=BG, fg=GOLD, font=self.font_brand_lg, anchor='w').pack(
-            anchor='w', padx=18, pady=(28, 0))
+            anchor='w', padx=18, pady=(10 if self.emblem_image else 28, 0))
         tk.Label(side, text='NATHAN DRAKE', bg=BG, fg=MUTED, font=self.font_brand_sm, anchor='w').pack(
             anchor='w', padx=18, pady=(8, 0))
         tk.Label(side, text='COLLECTION', bg=BG, fg=MUTED, font=self.font_brand_sm, anchor='w').pack(
             anchor='w', padx=18, pady=(1, 0))
         tk.Label(side, text=_('by {}').format(AUTHOR), bg=BG, fg=TEXT, font=self.font_ui_md,
                  anchor='w', wraplength=brand_wrap, justify='left').pack(anchor='w', padx=18, pady=(10, 0))
-        tk.Label(side, text=_('version {}').format(VERSION), bg=BG, fg='#5c564c', font=self.font_ui_sm,
+        tk.Label(side, text=_('version {}').format(VERSION), bg=BG, fg='#6e604c', font=self.font_ui_sm,
                  anchor='w').pack(anchor='w', padx=18, pady=(1, 0))
         tk.Frame(side, bg=LINE, height=1).pack(fill='x', padx=18, pady=(16, 14))
         self.nav, self.nav_pills, self.nav_icons, self.nav_marks, self.current_page = {}, {}, {}, {}, None
@@ -1081,9 +1091,9 @@ class Launcher:
 
     def _nav_style(self, name, active=False, hover=False):
         if active:
-            bg, fg, icon = '#17181b', TEXT, GOLD
+            bg, fg, icon = '#1e1710', TEXT, GOLD
         elif hover:
-            bg, fg, icon = '#111214', TEXT, TEXT
+            bg, fg, icon = '#120d09', TEXT, TEXT
         else:
             bg, fg, icon = BG, MUTED, MUTED
         self.nav_pills[name].configure(bg=bg)
@@ -1232,7 +1242,7 @@ class Launcher:
             label = _('Change image')
             box_w = max(self.px(108), len(label) * self.px(7))
             card.create_rectangle(w - box_w - self.px(12), self.px(12), w - self.px(12), self.px(42),
-                                  fill='#111214', outline=GOLD_DIM, tags='edit_art')
+                                  fill='#120d09', outline=GOLD_DIM, tags='edit_art')
             card.create_text(w - box_w // 2 - self.px(12), self.px(27), text=label, fill=TEXT,
                              font=self.font_ui_sm, tags='edit_art')
             card.tag_bind('edit_art', '<Button-1>', lambda _e, k=key: self.edit_launcher_art(
@@ -1258,11 +1268,8 @@ class Launcher:
         key = (w, h, start, game_dir, self.app.get('art_banner', ''))
         if self.banner_key != key:
             self.banner_key = key
-            # The collection banner when this machine has it (launcher art is not distributed),
-            # otherwise the background art of the player's own dump.
-            self.banner_scaled = self.photo_collection_banner(w, h) or \
-                self.scaled_art(Path(game_dir or '.') / 'sce_sys' / 'pic1.png', w) or \
-                self.photo_hero(start, w, h)
+            # The collection banner (original art that comes with the port), else the scene.
+            self.banner_scaled = self.photo_collection_banner(w, h) or self.photo_hero(start, w, h)
             self.cover_image = None
         if self.banner_scaled:
             c.create_image(w // 2, h // 2, image=self.banner_scaled)
@@ -1273,7 +1280,7 @@ class Launcher:
         c.create_text(self.px(24), h - self.px(14), text=sub, anchor='sw', fill=GOLD,
                       font=self.font_brand_sm)
         c.create_text(w - self.px(24), h - self.px(14), text=f'{_(title)}  ·  {_(subtitle)}',
-                      anchor='se', fill='#f6f1e6', font=self.font_brand_md)
+                      anchor='se', fill='#f8eedb', font=self.font_brand_md)
         label = _('Change image')
         c.create_text(w - self.px(24), self.px(18), text=label, anchor='ne', fill='#d6c9ae',
                       font=self.font_ui_sm)
@@ -1438,7 +1445,7 @@ class Launcher:
             self.ttk.Label(table, text=_(title)).grid(row=r, column=0, sticky='w', padx=(0, 24), pady=3)
             for slot in (0, 1):
                 button = self.tk.Button(table, width=16, relief='flat', bg=CARD_HI, fg=TEXT,
-                                        activebackground='#2a2c31', activeforeground=TEXT,
+                                        activebackground='#30251a', activeforeground=TEXT,
                                         font=self.font_ui, cursor='hand2', bd=0, padx=8, pady=4,
                                         command=lambda a=action, i=slot: self.capture_key(a, i))
                 button.grid(row=r, column=1 + slot * 2, sticky='w', pady=3)
@@ -1814,7 +1821,7 @@ class Launcher:
         self.pill(head, _('Copy'), self.copy_log, background=SURFACE, padding=(16, 6)).pack(side='right')
         body = tk.Frame(shell, bg=SURFACE)
         body.pack(fill='both', expand=True, padx=self.px(26), pady=(0, self.px(8)))
-        self.log = tk.Text(body, bg=CARD, fg='#d9d4ca', insertbackground=TEXT, font=('Cascadia Mono', 9), wrap='none',
+        self.log = tk.Text(body, bg=CARD, fg='#e3d6bd', insertbackground=TEXT, font=('Cascadia Mono', 9), wrap='none',
                            relief='flat', state='disabled', highlightbackground=LINE, highlightthickness=1,
                            padx=self.px(12), pady=self.px(10))
         bar = self.ttk.Scrollbar(body, orient='vertical', command=self.log.yview)
@@ -2014,8 +2021,7 @@ class Launcher:
         log = None
         try:
             log_dir = Path(self.app.get('user_dir') or DATA_DIR / 'user')
-            log_dir.mkdir(parents=True, exist_ok=True)
-            log = open(log_dir / 'last_run.log', 'w', encoding='utf-8', buffering=1)
+            log = open_run_log(log_dir)
         except OSError:
             pass
         for raw in iter(process.stdout.readline, b''):
@@ -2538,13 +2544,26 @@ def install_update(target, wait_pid):
     return 0
 
 
+def open_run_log(log_dir, keep=5):
+    """last_run.log for a new run; the previous ones move to last_run.1.log ... last_run.<keep-1>.log
+    (a restart after a problem no longer overwrites the log that shows it)."""
+    log_dir.mkdir(parents=True, exist_ok=True)
+    for n in range(keep - 1, 0, -1):
+        older = log_dir / (f'last_run.{n - 1}.log' if n > 1 else 'last_run.log')
+        try:
+            if older.exists():
+                older.replace(log_dir / f'last_run.{n}.log')
+        except OSError:
+            pass
+    return open(log_dir / 'last_run.log', 'w', encoding='utf-8', buffering=1)
+
+
 def play_without_window(settings):
     """--play: the game with the saved settings (shortcuts, Steam); output to the console when
     there is one and to <saves folder>/last_run.log."""
     attach_stdio()
     log_dir = Path(settings.get('user_dir') or DATA_DIR / 'user')
-    log_dir.mkdir(parents=True, exist_ok=True)
-    with open(log_dir / 'last_run.log', 'w', encoding='utf-8', buffering=1) as log:
+    with open_run_log(log_dir) as log:
         try:
             env = game_environment(settings)
         except OSError as error:

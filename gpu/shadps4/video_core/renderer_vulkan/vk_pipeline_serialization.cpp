@@ -22,12 +22,13 @@
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_pipeline_cache.h"
 #include "video_core/renderer_vulkan/vk_shader_util.h"
+#include "bbport_focus_fix.h"
 
 namespace Serialization {
 /* You should increment versions below once corresponding serialization scheme is changed. */
-static constexpr u32 ShaderBinaryVersion = 11u; // bbport: motion shaders hold address stand-ins (10); scalar instructions split EXEC scopes (11)
-static constexpr u32 ShaderMetaVersion = 7u; // bbport: ImageResource::needs_native
-static constexpr u32 PipelineKeyVersion = 5u; // bbport: Info layout (ImageResource::needs_native)
+static constexpr u32 ShaderBinaryVersion = 12u; // bbport: motion shaders hold address stand-ins (10); scalar instructions split EXEC scopes (11); WorkgroupSplit (12)
+static constexpr u32 ShaderMetaVersion = 8u; // bbport: InfoPersistent::cs_split_eligible
+static constexpr u32 PipelineKeyVersion = 6u; // bbport: Info layout (cs_split_eligible)
 /// bbport (BilalReloaded): the cache name of a shader's SPIR-V. Shaders that gained multi-wave
 /// LDS barriers get a new name, so their binaries cached before the fix are not found and only
 /// those shaders recompile.
@@ -407,7 +408,8 @@ void PipelineCache::WarmUpThread() {
         stage.spec.info = &stage.program->info;
         std::optional<Shader::Gcn::FetchShaderData> unused;
         if (!LoadShaderMeta(meta_ar, stage.program->info, unused, stage.spec, stage.perm_idx) ||
-            Shader::Backend::SPIRV::IsForcedShader(stage.program->info.pgm_hash)) {
+            Shader::Backend::SPIRV::IsForcedShader(stage.program->info.pgm_hash) ||
+            BbFocusFix::FocusCentreShader(stage.program->info.pgm_hash)) {
             stage.program.reset();
             return;
         }

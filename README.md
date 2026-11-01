@@ -82,6 +82,11 @@ Several fixes come from BilalReloaded's
 [Uncharted port](https://github.com/bc160201983/Uncharted-The-Nathan-Drake-Collection-PC-port)
 (GPL v2): the Uncharted 3 cloth solver barriers (Sully's shirt), guest memory committed as the
 game allocates it (error 1450), the Uncharted 3 look-at reset and the garbage descriptor fixes.
+Many of the 0.3.10 fixes were found and made by drakolordx7 in the
+[community build](https://github.com/drakolordx7/uncharted_pc), and the FSR 3 frame generation
+memory leak fix is from Mevlock, the NVIDIA crash fix above 55 FPS (large compute
+workgroups) from Umar-Qayyum-dev.
+Most 0.3.11 fixes come from Mevlock's [dev builds](https://github.com/Mevlock/uncharted_pc-dev).
 
 Also used: [FSR-Vulkan](https://github.com/FireBurn/FSR-Vulkan) and the AMD FidelityFX SDK (FSR),
 FSR 4 assets from [FireBurn/Q2RTX](https://github.com/FireBurn/Q2RTX), the
@@ -95,8 +100,9 @@ FSR 4 assets from [FireBurn/Q2RTX](https://github.com/FireBurn/Q2RTX), the
 [MSYS2](https://www.msys2.org) / [LLVM](https://llvm.org), [PyInstaller](https://pyinstaller.org),
 [Pillow](https://python-pillow.org) and the Cinzel font (SIL Open Font License).
 
-NVIDIA, GeForce RTX and DLSS are trademarks of NVIDIA Corporation. The default covers and the
-icon are original artwork; no official art is included.
+NVIDIA, GeForce RTX and DLSS are trademarks of NVIDIA Corporation. The launcher's pictures (the
+game scenes, the map banner, the compass emblem and the icon) are original artwork drawn by
+code (packaging/windows/make_uncharted_art.py); no official art or game images are included.
 
 ## License
 

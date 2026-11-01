@@ -75,6 +75,9 @@ struct InfoPersistent {
     bool has_fetch_shader{};
     bool has_bitwise_xor{};
     bool uses_dma{};
+    /// bbport: a compute shader whose workgroups may run as smaller ones (no shared memory, no
+    /// workgroup barriers, no workgroup index); see WorkgroupSplit in runtime_info.h.
+    bool cs_split_eligible{};
 
     InfoPersistent() = default;
     InfoPersistent(HwStage hw_stage_, SwStage sw_stage_, u64 pgm_hash_)
