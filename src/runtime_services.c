@@ -180,6 +180,29 @@ static ABI int32_t np_state(int32_t user,int32_t *state) {
     return 0;
 }
 static ABI int32_t np_signed_out(void) { return NP_SIGNED_OUT; }
+/* BB_OFFLINE_NPID=1: the player's NP ID / online ID are a local one ("Player") instead of "signed out". The games ask
+ * for the NP ID once after Continue / New Game and, without one, stop on a "friends' stats are not available" notice.
+ * Sign-in state stays signed out: nothing goes online. SceNpOnlineId: 16 characters, terminator, 3 pad bytes;
+ * SceNpId: the online ID then 16 opaque bytes (36 bytes). (Mevlock 8e47c3a.) */
+static int offline_npid(void) {
+    static int on=-1;
+    if (on<0) { const char *e=getenv("BB_OFFLINE_NPID"); on=e && e[0]=='1'; }
+    return on;
+}
+static ABI int32_t np_get_npid(int32_t user,void *npid) {
+    (void)user;
+    if (!offline_npid()) return NP_SIGNED_OUT;
+    if (!npid) return NP_INVALID_ARGUMENT;
+    memset(npid,0,36); memcpy(npid,"Player",6);
+    return 0;
+}
+static ABI int32_t np_get_online_id(int32_t user,void *online_id) {
+    (void)user;
+    if (!offline_npid()) return NP_SIGNED_OUT;
+    if (!online_id) return NP_INVALID_ARGUMENT;
+    memset(online_id,0,20); memcpy(online_id,"Player",6);
+    return 0;
+}
 static ABI int32_t np_register(void *cb,void *arg) { (void)cb; (void)arg; return new_id(); }
 static ABI void np_register_void(void *cb,void *arg) { (void)cb; (void)arg; }
 static ABI int32_t np_request(const void *param) { (void)param; return new_id(); }
@@ -547,7 +570,7 @@ static const RuntimeExport exports[]={
     {"sceHttpSetEpoll",ok_void}, {"sceHttpUnsetEpoll",ok_void}, {"sceHttpWaitRequest",http_wait},
     {"sceHttpGetStatusCode",http_fail}, {"sceHttpGetResponseContentLength",http_fail},
     {"sceHttpReadData",http_fail},
-    {"sceNpGetState",np_state}, {"sceNpGetOnlineId",np_signed_out}, {"sceNpGetNpId",np_signed_out},
+    {"sceNpGetState",np_state}, {"sceNpGetOnlineId",np_get_online_id}, {"sceNpGetNpId",np_get_npid},
     {"sceNpRegisterStateCallback",np_register}, {"sceNpUnregisterStateCallback",ok_void},
     {"sceNpRegisterGamePresenceCallback",np_register_void}, {"sceNpRegisterPlusEventCallback",np_register},
     {"sceNpUnregisterPlusEventCallback",ok_void}, {"sceNpCheckCallback",ok_void},
