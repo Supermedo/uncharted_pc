@@ -30,6 +30,12 @@ namespace Vulkan {
 
 std::mutex Scheduler::submit_mutex;
 
+static thread_local bool on_recorder_thread = false;
+
+bool Scheduler::OnRecorderThread() {
+    return on_recorder_thread;
+}
+
 extern void (*g_gpu_stall_report)();
 bool (*g_draw_pipe_busy)() = nullptr;
 
@@ -349,6 +355,7 @@ void Scheduler::SyncRecording() {
 
 void Scheduler::RecorderThread(std::stop_token stoken) {
     Common::SetCurrentThreadName("bb:VkRecorder");
+    on_recorder_thread = true;
     while (true) {
         // Spin briefly before sleeping: the next chunk usually follows within microseconds,
         // and a sleeping recorder costs the GPU thread a wake-up syscall per kick. With few
