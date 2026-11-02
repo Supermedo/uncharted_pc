@@ -1189,6 +1189,28 @@ static void patch_job_sleep(uint64_t image_size) {
         return;
     }
 }
+/* U2 chapter 21 (convoy): Elena's truck sinks 2-4 m into the snow for ~0.5 s after a bump. The bump
+ * plays an animation on the truck by adding a node to its animation blend (US 0x399700, EU 0x102330:
+ * node, anim, params). Adding a node copies the params' bool at +0x11 into bit 2 of the previous
+ * node's flags as (flag << 2). The play-animation call the convoy uses (US 0xa21b20) never writes
+ * that bool: it is whatever was on the stack. With 0x64 there, 0x64 << 2 = 0x90 also sets bit 4 of
+ * the previous node, "the reference frame follows the object", so the rail animation that keeps the
+ * truck on its rail now takes the truck's own last position as its base each frame and the bump's
+ * offsets pile up (traced: flags 0xc8 -> 0xd8 at each sink, 0x64 at +0x11 each time). PS4 stack
+ * contents differ (the PS4 version does not sink). Only bit 0 of the bool is used:
+ *   and cl, 1; shl cl, 2; and byte [rax+0x80], 0xfb; or [rax+0x80], cl; nop  (same 20 bytes)
+ * Builds 102 US and EU. BB_CONVOY_SINK=0: off. */
+static void patch_u2_convoy_sink(uint64_t image_size) {
+    const char *env=getenv("BB_CONVOY_SINK");
+    if (env && env[0]=='0') return;
+    /* (mov cl, [r+0x11];) mov dl, [rax+0x80]; shl cl, 2; and dl, 0xfb; or dl, cl; mov [rax+0x80], dl */
+    const int64_t at=find_unique_pattern(image_size,"11 8a9080000000 c0e102 80e2fb 08ca 889080000000");
+    if (at<0) return; /* not U2, or not unique */
+    static const unsigned char code[20]={0x80,0xe1,0x01, 0xc0,0xe1,0x02, 0x80,0xa0,0x80,0x00,0x00,0x00,0xfb,
+                                         0x08,0x88,0x80,0x00,0x00,0x00, 0x90};
+    memcpy(image+at+1,code,sizeof(code));
+    printf("Convoy sink: animation node flag uses only bit 0 of its bool (%#" PRIx64 ")\n",(uint64_t)at+1);
+}
 /* Restarts the game through run.sh (the settings menu: a new render resolution is a patch
  * applied at start). Descriptors are closed first so the old GPU device and its memory are
  * released before the new process opens its own. */
@@ -1485,6 +1507,7 @@ int main(int argc, char **argv) {
         patch_job_sleep(image_end);
         patch_job_lock_wait(image_end);
         runtime_display_patch(image, image_end);
+        patch_u2_convoy_sink(image_end);
     }
 #ifdef _WIN32
     printf("Guest TCB loads redirected to the TEB TLS slot: %" PRIu64 "\n", patch_tcb_loads(segments, ns));
