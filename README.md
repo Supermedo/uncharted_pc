@@ -87,6 +87,8 @@ Many of the 0.3.10 fixes were found and made by drakolordx7 in the
 memory leak fix is from Mevlock, the NVIDIA crash fix above 55 FPS (large compute
 workgroups) from Umar-Qayyum-dev.
 Most 0.3.11 fixes come from Mevlock's [dev builds](https://github.com/Mevlock/uncharted_pc-dev).
+The 0.3.12 fixes are pull requests by Jhojan Jiménez, FerManjarres, dbcalo and mato215, and picks
+from drakolordx7's community build (Mevlock, Alex, iannitram).
 
 Also used: [FSR-Vulkan](https://github.com/FireBurn/FSR-Vulkan) and the AMD FidelityFX SDK (FSR),
 FSR 4 assets from [FireBurn/Q2RTX](https://github.com/FireBurn/Q2RTX), the
