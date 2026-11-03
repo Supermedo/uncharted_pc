@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <cstdlib>
 #include <span>
 #include <unordered_map>
 
@@ -260,6 +261,24 @@ public:
     /// Returns true if the subgroup size can be set to match guest subgroup size
     bool IsSubgroupSize64Supported() const {
         return vk13_features.subgroupSizeControl && vk13_props.maxSubgroupSize >= 64;
+    }
+
+    /// bbport (from BilalReloaded's port 0.8.1, #328): the subgroup size compute shaders are given where the driver
+    /// may pick another one per shader (Intel: 8, 16 or 32), 0 where it cannot (NVIDIA: always 32) or 64 is used.
+    /// The recompiler splits the guest's 64-lane waves by the device's subgroup size, so a shader the driver built
+    /// narrower ran its wave work (ballots, lane reads, LDS hand-offs) on the wrong lanes. BB_SUBGROUP_FIXED=0: off.
+    u32 FixedComputeSubgroupSize() const {
+        static const bool enabled = [] {
+            const char* env = std::getenv("BB_SUBGROUP_FIXED");
+            return !(env && env[0] == '0');
+        }();
+        const u32 size = vk11_props.subgroupSize;
+        if (!enabled || IsSubgroupSize64Supported() || !vk13_features.subgroupSizeControl ||
+            !(vk13_props.requiredSubgroupSizeStages & vk::ShaderStageFlagBits::eCompute) ||
+            vk13_props.minSubgroupSize >= size || size > vk13_props.maxSubgroupSize) {
+            return 0;
+        }
+        return size;
     }
 
     /// Returns true when VK_KHR_workgroup_memory_explicit_layout is supported.

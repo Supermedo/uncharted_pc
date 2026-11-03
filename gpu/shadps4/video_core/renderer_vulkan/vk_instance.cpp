@@ -391,7 +391,16 @@ bool Instance::CreateDevice() {
     const bool calibrated_timestamps =
         TRACY_GPU_ENABLED ? add_extension(VK_EXT_CALIBRATED_TIMESTAMPS_EXTENSION_NAME) : false;
     // bbport: what the GPU touched when the device is lost (reported by vk_semaphore.cpp).
-    g_device_fault_ext = add_extension(VK_EXT_DEVICE_FAULT_EXTENSION_NAME);
+    // GeForce GTX 10-series cards (Pascal) crash at start with it (BilalReloaded's port 0.8.1, #211/#285: a GTX 1070
+    // starts without it), so NVIDIA cards older than Turing (device IDs below 0x1e00) leave it off.
+    // BB_DEVICE_FAULT=1: on anyway, 0: off everywhere.
+    const char* fault_env = std::getenv("BB_DEVICE_FAULT");
+    const bool fault_safe = !(properties.vendorID == 0x10de && properties.deviceID < 0x1e00);
+    if ((fault_env && fault_env[0] == '1') || (fault_safe && !(fault_env && fault_env[0] == '0'))) {
+        g_device_fault_ext = add_extension(VK_EXT_DEVICE_FAULT_EXTENSION_NAME);
+    } else if (!fault_safe) {
+        std::printf("GPU device fault reports: off on NVIDIA cards older than Turing (BB_DEVICE_FAULT=1: on)\n");
+    }
     if (const char* env = std::getenv("BB_GPU_CHECKPOINTS"); env && env[0] == '1') {
         g_gpu_checkpoints = add_extension(VK_NV_DEVICE_DIAGNOSTIC_CHECKPOINTS_EXTENSION_NAME);
     }
