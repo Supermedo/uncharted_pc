@@ -174,8 +174,10 @@ struct Info : InfoPersistent {
         VAddr pgm_base;
     };
     static constexpr u32 MaxUdSnapshots = 6;
-    static inline thread_local UdSnapshot ud_snapshots[MaxUdSnapshots];
-    static inline thread_local u32 num_ud_snapshots = 0;
+    // constinit (perf7): constant-initialized, so no thread-local init routine is needed; with
+    // LTO on MinGW, the one referenced from other units was dropped (undefined symbol at link).
+    static inline constinit thread_local UdSnapshot ud_snapshots[MaxUdSnapshots]{};
+    static inline constinit thread_local u32 num_ud_snapshots = 0;
 
     const UdSnapshot* Snapshot() const noexcept {
         for (u32 i = 0; i < num_ud_snapshots; ++i) {

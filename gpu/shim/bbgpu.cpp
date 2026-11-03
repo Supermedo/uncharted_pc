@@ -193,7 +193,22 @@ u32 BbDisplayRefreshHz() {
     return hz;
 }
 
-#ifdef BB_PGO_GENERATE
+#if defined(BB_PGO_GENERATE) && defined(BB_PGO_CLANG)
+extern "C" int __llvm_profile_write_file(void);
+// Instrumented clang build (perf7, BB_PGO=generate): the counters only grow, so each write replaces the file
+// (LLVM_PROFILE_FILE, a fixed name) with the totals so far; the game often ends without the exit-time write.
+static void StartProfileWriter() {
+    std::thread([] {
+        Common::SetCurrentThreadName("bb:pgo");
+        for (;;) {
+            std::this_thread::sleep_for(std::chrono::seconds(30));
+            const int result = __llvm_profile_write_file();
+            std::printf("PGO: profile written (%d)\n", result);
+            std::fflush(stdout);
+        }
+    }).detach();
+}
+#elif defined(BB_PGO_GENERATE)
 extern "C" void __gcov_dump(void);
 extern "C" void __gcov_reset(void);
 // Instrumented build (BB_PGO=generate): the game often ends through _exit (watchdog, guest

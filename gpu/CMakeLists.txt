@@ -34,7 +34,19 @@ if (BB_LTO)
         message(WARNING "LTO unavailable: ${bb_ipo_error}")
     endif()
 endif()
-if (BB_PGO STREQUAL "generate")
+if (BB_PGO STREQUAL "generate" AND CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    # perf7, clang (Windows): IR instrumentation; the profile goes where LLVM_PROFILE_FILE says and is
+    # written every 30 s by bbgpu.cpp (the game often ends without the exit-time write). Atomic
+    # counters: several threads run the same code.
+    add_compile_options(-fprofile-generate -fprofile-update=atomic)
+    add_link_options(-fprofile-generate)
+    add_compile_definitions(BB_PGO_GENERATE BB_PGO_CLANG)
+elseif (BB_PGO STREQUAL "use" AND CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    # perf7, clang: the merged profile (llvm-profdata merge -o pgo/merged.profdata pgo/*.profraw).
+    # Functions changed since the profile keep the normal optimization.
+    add_compile_options(-fprofile-use=${BB_PGO_DIR}/merged.profdata -Wno-profile-instr-out-of-date
+                        -Wno-profile-instr-unprofiled -Wno-backend-plugin)
+elseif (BB_PGO STREQUAL "generate")
     # Atomic counters: the GPU, recording, preparation and copy threads run the same code.
     add_compile_options(-fprofile-generate=${BB_PGO_DIR} -fprofile-update=atomic)
     add_link_options(-fprofile-generate=${BB_PGO_DIR})
