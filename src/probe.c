@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
 #include <inttypes.h>
 #include <time.h>
 #include <cpuid.h>
@@ -990,6 +991,121 @@ static int64_t find_unique_pattern(uint64_t image_size, const char *pattern) {
     }
     return found;
 }
+/* Uncharted 1 (EU and US 1.02): the rigid-body integrator holds still any body slower than "Sticky Speed
+ * (nothing-moves speed)" or "Sticky Omega (nothing-rotates omega)", both 0.1 (EU 0x988674 / 0x988670, the game's own
+ * names). A body at rest gains g*dt per step: 0.16 m/s at 60 FPS gets it moving, 0.07 m/s at 144 FPS does not, so
+ * above 60 FPS bodies that should tip or drop off a ledge stay put and fall asleep (jet ski river barrels hanging in
+ * mid-air). The world step (EU 0x235350, dt in xmm0) scales both thresholds by min(1, 60*dt), so every step behaves
+ * as at 60 FPS. BB_U1_STICKY=0 keeps the game's values.
+ * The same step also scales "Max Stop Frames" (10) and "Max Crawl Frames" (30): a body that stays that slow for that many
+ * steps comes to rest (step counters at body+0x136 / +0x138), 0.17 s / 0.5 s at 60 FPS but 0.07 s / 0.21 s at 144, so
+ * objects and ragdolls settled early. They become N / min(1, 60*dt) steps, the same time at any rate. BB_U1_SETTLE=0:
+ * the game's counts. */
+static float *u1_sticky_omega, *u1_sticky_speed, u1_sticky_omega0, u1_sticky_speed0;
+static uint32_t *u1_settle_stop, *u1_settle_crawl, u1_settle_stop0, u1_settle_crawl0;
+/* "Artificial Damping V" / "W" (0.9998) multiply the velocities every step: 0.9998^(60*dt) per step is the 60 FPS loss
+ * per second at any rate. BB_U1_DAMPING=0: the game's factors. */
+static float *u1_damp_v, *u1_damp_w, u1_damp_v0, u1_damp_w0;
+static ABI void u1_sticky_step(float dt) {
+    if (!(dt>0.0f)) return;
+    const float scale=dt*60.0f<1.0f ? dt*60.0f : 1.0f;
+    if (u1_sticky_omega) {
+        *u1_sticky_omega=u1_sticky_omega0*scale;
+        *u1_sticky_speed=u1_sticky_speed0*scale;
+    }
+    if (u1_settle_stop) {
+        *u1_settle_stop=(uint32_t)((float)u1_settle_stop0/scale+0.5f);
+        *u1_settle_crawl=(uint32_t)((float)u1_settle_crawl0/scale+0.5f);
+    }
+    if (u1_damp_w) {
+        *u1_damp_v=powf(u1_damp_v0,scale);
+        *u1_damp_w=powf(u1_damp_w0,scale);
+    }
+}
+static void patch_u1_sticky(uint64_t image_size) {
+    const char *env=getenv("BB_U1_STICKY"), *settle_env=getenv("BB_U1_SETTLE"), *damping_env=getenv("BB_U1_DAMPING");
+    const int sticky=!(env && env[0]=='0'), settle=!(settle_env && settle_env[0]=='0'),
+              damping=!(damping_env && damping_env[0]=='0');
+    if (!sticky && !settle && !damping) return;
+    /* push rbp; mov rbp,rsp; push r14 | push rbx; sub rsp,0x10; mov r14,rsi; vmovss [rbp-0x14],xmm0; mov rbx,rdi;
+     * mov dword [rbx+0x14eb4],0 */
+    const int64_t at=find_unique_pattern(image_size,"554889e5 4156 53 4883ec10 4989f6 c5fa1145ec 4889fb c783b44e010000000000");
+    if (at<0) return; /* not Uncharted 1 */
+    /* the integrator's tests: vaddss; lea rax,[omega]; vucomiss xmm0,[rax]; jae; mov qword [r15],0 and
+     * vmulss xmm3,xmm3,xmm3; vmulss xmm2,xmm2,xmm3; lea rax,[speed]; vmovss xmm3,[rax]; vmulss xmm3,xmm3,xmm3 */
+    const int64_t o=find_unique_pattern(image_size,"c5f258c0 488d05???????? c5f82e00 73?? 49c70700000000");
+    const int64_t v=find_unique_pattern(image_size,"c5e259db c5ea59d3 488d05???????? c5fa1018 c5e259db");
+    /* the settle test: movzx eax,word [rcx+0x136]; lea rdx,[stop]; cmp eax,[rdx]; ja; movzx eax,word [rcx+0x138];
+     * lea rcx,[crawl]; cmp eax,[rcx]; ja (EU 0x1c7b63, US 0x1c80d3) */
+    const int64_t c=find_unique_pattern(image_size,"0fb78136010000 488d15???????? 3b02 77?? 0fb78138010000 488d0d???????? 3b01 77");
+    /* the artificial damping: vmovss xmm4,[rbp-0x2c]; lea rsi,[W]; vmulss xmm2,xmm4,[rsi] (EU 0x1c1e20, US 0x1c2390)
+     * and lea rsi,[V]; vmulss xmm2,xmm4,[rsi]; vmulss xmm0,xmm0,xmm2 (EU 0x1c1e50, US 0x1c23c0) */
+    const int64_t dw=find_unique_pattern(image_size,"c5fa1065d4 488d35???????? c5da5916");
+    const int64_t dv=find_unique_pattern(image_size,"488d35???????? c5da5916 c5fa59c2");
+    unsigned char *t=near_image_memory(512);
+    int32_t d;
+    if (damping && dw>=0 && dv>=0) {
+        memcpy(&d,image+dw+8,4); u1_damp_w=(float *)(image+dw+12+d);
+        memcpy(&d,image+dv+3,4); u1_damp_v=(float *)(image+dv+7+d);
+        u1_damp_w0=*u1_damp_w; u1_damp_v0=*u1_damp_v;
+        if (!(u1_damp_w0>0.9f && u1_damp_w0<=1.0f && u1_damp_v0>0.9f && u1_damp_v0<=1.0f)) u1_damp_w=NULL;
+    }
+    if (damping && !u1_damp_w) printf("U1 physics: artificial damping not found, not scaled\n");
+    if (sticky && o>=0 && v>=0) {
+        memcpy(&d,image+o+7,4); u1_sticky_omega=(float *)(image+o+11+d);
+        memcpy(&d,image+v+11,4); u1_sticky_speed=(float *)(image+v+15+d);
+        u1_sticky_omega0=*u1_sticky_omega; u1_sticky_speed0=*u1_sticky_speed;
+    } else if (sticky) {
+        printf("U1 physics: sticky thresholds not found, not scaled\n");
+    }
+    if (settle && c>=0) {
+        memcpy(&d,image+c+10,4); u1_settle_stop=(uint32_t *)(image+c+14+d);
+        memcpy(&d,image+c+28,4); u1_settle_crawl=(uint32_t *)(image+c+32+d);
+        u1_settle_stop0=*u1_settle_stop; u1_settle_crawl0=*u1_settle_crawl;
+        if (!u1_settle_stop0 || !u1_settle_crawl0 || u1_settle_stop0>1000 || u1_settle_crawl0>1000) u1_settle_stop=NULL;
+    }
+    if (settle && !u1_settle_stop) printf("U1 physics: settle frame counts not found, not scaled\n");
+    if ((!u1_sticky_omega && !u1_settle_stop && !u1_damp_w) || !t) return;
+    unsigned char *p=image+at;
+    size_t k=0;
+    static const unsigned char save[]={0x57,0x56,0x50,0x51,0x52,0x41,0x50,0x41,0x51,0x41,0x52,0x41,0x53}; /* push rdi rsi rax rcx rdx r8-r11 */
+    memcpy(t+k,save,sizeof(save)); k+=sizeof(save);
+    /* The world step's float arguments (dt in xmm0, read right after the prologue) and every other XMM register are
+     * live here and caller-saved for u1_sticky_step: sub rsp,0x100; movdqu [rsp+16*n],xmmN for N = 0..15 (13 pushes
+     * on the entry's rsp-8 leave rsp 16-byte aligned). */
+    static const unsigned char sub_rsp[]={0x48,0x81,0xec,0x00,0x01,0x00,0x00}, add_rsp[]={0x48,0x81,0xc4,0x00,0x01,0x00,0x00};
+    memcpy(t+k,sub_rsp,sizeof(sub_rsp)); k+=sizeof(sub_rsp);
+    for (int n=0;n<16;++n) {
+        const int32_t disp=n*16;
+        t[k++]=0xf3; if (n>=8) t[k++]=0x44; t[k++]=0x0f; t[k++]=0x7f;  /* movdqu [rsp+disp32], xmmN */
+        t[k++]=(unsigned char)(0x84|((n&7)<<3)); t[k++]=0x24; memcpy(t+k,&disp,4); k+=4;
+    }
+    const uintptr_t host=(uintptr_t)u1_sticky_step;
+    t[k++]=0x48; t[k++]=0xb8; memcpy(t+k,&host,8); k+=8; /* movabs rax, u1_sticky_step */
+    t[k++]=0xff; t[k++]=0xd0;                            /* call rax: u1_sticky_step(xmm0) */
+    for (int n=0;n<16;++n) {
+        const int32_t disp=n*16;
+        t[k++]=0xf3; if (n>=8) t[k++]=0x44; t[k++]=0x0f; t[k++]=0x6f;  /* movdqu xmmN, [rsp+disp32] */
+        t[k++]=(unsigned char)(0x84|((n&7)<<3)); t[k++]=0x24; memcpy(t+k,&disp,4); k+=4;
+    }
+    memcpy(t+k,add_rsp,sizeof(add_rsp)); k+=sizeof(add_rsp);
+    static const unsigned char restore[]={0x41,0x5b,0x41,0x5a,0x41,0x59,0x41,0x58,0x5a,0x59,0x58,0x5e,0x5f};
+    memcpy(t+k,restore,sizeof(restore)); k+=sizeof(restore);
+    memcpy(t+k,p,6); k+=6;                               /* push rbp; mov rbp,rsp; push r14 */
+    const uint64_t back=(uint64_t)(uintptr_t)(p+6);
+    t[k++]=0xff; t[k++]=0x25; memset(t+k,0,4); k+=4; memcpy(t+k,&back,8); k+=8; /* jmp [rip]: p+6 */
+    const int32_t to=(int32_t)((int64_t)(uintptr_t)t-(int64_t)(uintptr_t)(p+5));
+    p[0]=0xe9; memcpy(p+1,&to,4); p[5]=0x90;
+    if (u1_sticky_omega)
+        printf("U1 physics: sticky speed %.3f and omega %.3f scale with the step (world step %#" PRIx64 ")\n",
+               u1_sticky_speed0,u1_sticky_omega0,(uint64_t)at);
+    if (u1_settle_stop)
+        printf("U1 physics: bodies settle after %u / %u steps at 60 FPS, the same time at any rate (counts at %#" PRIx64 ")\n",
+               u1_settle_stop0,u1_settle_crawl0,(uint64_t)c);
+    if (u1_damp_w)
+        printf("U1 physics: artificial damping %.4f / %.4f per 60 FPS step, the same loss per second at any rate\n",
+               u1_damp_v0,u1_damp_w0);
+}
 /* The job system's counter wait (corelib job scheduling: until [counter+0x20] == or <= a target),
  * from Mevlock's dev fork: a job worker that finds the counter not there yet suspends its job
  * (SuspendJob) and retries when the job runs again, which may be on another worker; other threads
@@ -1506,6 +1622,7 @@ int main(int argc, char **argv) {
         patch_eop_tick_wait(image_end);
         patch_job_sleep(image_end);
         patch_job_lock_wait(image_end);
+        patch_u1_sticky(image_end);
         runtime_display_patch(image, image_end);
         patch_u2_convoy_sink(image_end);
     }
