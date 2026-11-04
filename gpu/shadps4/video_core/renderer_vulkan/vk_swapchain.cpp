@@ -39,6 +39,9 @@ void Swapchain::Create(u32 width_, u32 height_) {
     needs_recreation = false;
 
     Destroy();
+    // RefreshSemaphores sizes the semaphores to the new image count: a smaller count left
+    // frame_index past their end (from BilalReloaded's port 0.8.0).
+    image_index = frame_index = 0;
 
     SetSurfaceProperties();
 

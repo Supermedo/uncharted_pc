@@ -66,7 +66,8 @@ Sampler::Sampler(const Vulkan::Instance& instance, const AmdGpu::Sampler& sample
         .compareEnable = is_depth,
         .compareOp = LiverpoolToVK::DepthCompare(sampler.depth_compare_func),
         .minLod = sampler.MinLod(),
-        .maxLod = sampler.MaxLod(),
+        // maxLod below minLod is invalid Vulkan (garbage S#s; from BilalReloaded's port 0.8.0).
+        .maxLod = std::max(sampler.MinLod(), sampler.MaxLod()),
         .borderColor = border_color,
         .unnormalizedCoordinates = false, // Handled in shader due to Vulkan limitations.
     };
