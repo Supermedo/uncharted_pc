@@ -20,8 +20,10 @@ namespace Vulkan {
 
 class Dlss {
 public:
-    /// The process-wide instance, or null when the DLLs are absent or BB_DLSS=0.
+    /// The process-wide instance, or null when the bridge is absent or BB_DLSS=0.
     static Dlss* Get();
+    /// Linux fork: the log text when the bridge files are absent (named per platform).
+    static const char* MissingFilesText();
     ~Dlss();
 
     /// Instance and device creation: adds what NGX needs (or disables DLSS when it is missing).
