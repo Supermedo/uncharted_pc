@@ -33,6 +33,11 @@ void ResourcePatchingPass(Shader::Info& info, const ResourceDiscoveryList& sharp
                           const Profile& profile);
 void CollectShaderInfoPass(IR::Program& program, const Profile& profile);
 void LowerBufferFormatToRaw(IR::Program& program);
+/// bbport (Mevlock, from BilalReloaded's port): clamps the loop bound of the effect/crowd skinning
+/// shaders and a shadow filter (effect_loop_clamp_pass.cpp); EffectLoopClamp tells whether a shader
+/// gets it (cache names).
+void EffectLoopClampPass(IR::Program& program);
+bool EffectLoopClamp(u64 pgm_hash);
 void LowerUserClipPlanes(IR::Program& program, const RuntimeInfo& runtime_info);
 void LowerFp64ToFp32(IR::Program& program);
 void RingAccessElimination(const IR::Program& program, const RuntimeInfo& runtime_info);

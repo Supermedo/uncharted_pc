@@ -32,9 +32,13 @@ static constexpr u32 PipelineKeyVersion = 6u; // bbport: Info layout (cs_split_e
 /// bbport (BilalReloaded): the cache name of a shader's SPIR-V. Shaders that gained multi-wave
 /// LDS barriers get a new name, so their binaries cached before the fix are not found and only
 /// those shaders recompile.
+/// Shaders with a clamped loop bound (BB_EFFECT_LOOP_CLAMP) get their own names too.
 static std::string ShaderBinaryName(u64 pgm_hash, size_t perm_idx) {
-    return fmt::format("{:#018x}_{}{}", pgm_hash, perm_idx,
-                       Shader::Optimization::MultiwaveLdsBarriers(pgm_hash) ? "_lds4" : "");
+    const char* clamp = !Shader::Optimization::EffectLoopClamp(pgm_hash) ? ""
+                        : pgm_hash == 0x689d1af9                       ? "_lc2"
+                                                                       : "_lc1";
+    return fmt::format("{:#018x}_{}{}{}", pgm_hash, perm_idx,
+                       Shader::Optimization::MultiwaveLdsBarriers(pgm_hash) ? "_lds4" : "", clamp);
 }
 } // namespace Serialization
 
