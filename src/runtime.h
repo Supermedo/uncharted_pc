@@ -121,6 +121,8 @@ typedef struct {
     void (__attribute__((ms_abi)) *callback)(uint64_t rdi, uint64_t rsi, uint64_t image, uint64_t r14,
                                              const RuntimeGuestRegs *regs);
     const unsigned char *patch;
+    /* 0 accepts any unique match; a build-specific hook also requires this image offset. */
+    uint64_t required_offset;
 } RuntimeGuestCallback;
 const RuntimeGuestCallback *runtime_guest_callbacks(size_t *count);
 #endif
