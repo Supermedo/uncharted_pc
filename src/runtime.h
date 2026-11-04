@@ -125,4 +125,6 @@ typedef struct {
     const unsigned char *patch;
 } RuntimeGuestCallback;
 const RuntimeGuestCallback *runtime_guest_callbacks(size_t *count);
+/* Called for each entry of runtime_guest_callbacks() that was installed. */
+void runtime_guest_callback_installed(const RuntimeGuestCallback *callback);
 #endif

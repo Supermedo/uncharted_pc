@@ -152,6 +152,24 @@ TK_KEYS = {'space': 'Space', 'Return': 'Return', 'Escape': 'Escape', 'Tab': 'Tab
 WIN_NUMPAD = {**{0x60 + n: f'Keypad {n}' for n in range(10)},
               0x6A: 'Keypad *', 0x6B: 'Keypad +', 0x6D: 'Keypad -', 0x6E: 'Keypad .', 0x6F: 'Keypad /'}
 MOUSE_SENS_MIN, MOUSE_SENS_MAX = 0.1, 10.0  # the Controls page slider (the game's default pace is 1)
+# Gyro (Controls page; bbport.ini gyro_*, read by the game: src/runtime_pad.c and src/runtime_gyro.c).
+# Steam's names, so a player can copy their Steam numbers. Buttons: SDL's numbers,
+# -2/-3 the triggers, -1 none (always on).
+GYRO_BUTTONS = [('-2', 'L2 (default)'), ('-3', 'R2'), ('9', 'L1'), ('10', 'R1'), ('7', 'L3'), ('8', 'R3'),
+                ('0', 'Cross'), ('1', 'Circle'), ('2', 'Square'), ('3', 'Triangle'), ('20', 'Touchpad click'),
+                ('-1', 'None (always on)')]
+GYRO_MODES = [('0', 'Hold to Enable Gyro'), ('1', 'Hold to Suppress Gyro'), ('2', 'Toggle Gyro')]
+# Steam's 3DOF to 2D Conversion Style (src/runtime_gyro.h GYRO_SPACE_*); Steam's Laser Pointer is left out
+# (it points at a spot on the screen, it does not turn a camera).
+GYRO_SPACES = [('0', 'Yaw'), ('1', 'Roll'), ('2', 'Yaw + Roll'), ('3', 'Local Space'), ('4', 'Player Space'),
+               ('5', 'World Space')]
+GYRO_FLAGS = ('gyro_aim', 'gyro_builtin', 'gyro_invert_x', 'gyro_invert_y')
+GYRO_NUMBERS = {'gyro_sensitivity': (0.05, 10.0, '2.70'), 'gyro_speed_deadzone': (0.0, 5.0, '0.36'),
+                'gyro_precision_speed': (0.0, 10.0, '0.75'), 'gyro_local_angle': (-180.0, 180.0, '0.00'),
+                'gyro_complement': (-100.0, 100.0, '100.00'),
+                'gyro_rotate': (-180.0, 180.0, '0.00')}  # the game's ranges and defaults
+GYRO_CHOICES = {'gyro_button': (GYRO_BUTTONS, '-2'), 'gyro_button_mode': (GYRO_MODES, '0'),
+                'gyro_space': (GYRO_SPACES, '4')}
 # Fixes page: fixes that cost speed, so they run only where they help unless the player picks.
 # key -> (title, hint, {choice: {variable: value}}); 'auto' sets nothing (the game's own default).
 FIXES = {
@@ -208,7 +226,11 @@ APP_DEFAULTS = {'game_dir': '', 'game_dir_u1': '', 'game_dir_u2': '', 'game_dir_
                 'anti_aliasing': 'off', 'aa_sharpness': '0.2', 'frame_generation': 'off',
                 'frame_gen_multiplier': '2', 'extra_env': '', 'close_on_play': False,
                 'mouse_look': True, 'mouse_sensitivity': '1.0', 'mouse_invert_y': False,
-                'pad_invert_y': False, 'art_banner': '', 'art_u1': '', 'art_u2': '', 'art_u3': '', 'steam_art': '', 'art_crops': {}, 'shortcut_name': 'Uncharted: The Nathan Drake Collection', 'shortcut_icon': '', 'trophy_game': 'u1', 'pad_vibration': True, 'pad_vibration_strength': '100', 'button_prompts': 'auto', 'key_bindings': {}, 'pad_bindings': {}, 'check_updates': True,
+                'pad_invert_y': False, 'gyro_aim': False, 'gyro_builtin': True, 'gyro_button': '-2',
+                'gyro_button_mode': '0', 'gyro_sensitivity': '2.70', 'gyro_speed_deadzone': '0.36',
+                'gyro_precision_speed': '0.75', 'gyro_invert_x': False, 'gyro_invert_y': False,
+                'gyro_space': '4', 'gyro_local_angle': '0.00', 'gyro_complement': '100.00',
+                'gyro_rotate': '0.00', 'art_banner': '', 'art_u1': '', 'art_u2': '', 'art_u3': '', 'steam_art': '', 'art_crops': {}, 'shortcut_name': 'Uncharted: The Nathan Drake Collection', 'shortcut_icon': '', 'trophy_game': 'u1', 'pad_vibration': True, 'pad_vibration_strength': '100', 'button_prompts': 'auto', 'key_bindings': {}, 'pad_bindings': {}, 'check_updates': True,
                 **{key: 'auto' for key in FIXES},
                 **{f'{game}_infinite_{cheat}': False for game, _t, _s, _e in GAMES for cheat in ('health', 'ammo')}}
 
@@ -297,23 +319,80 @@ def ini_path():
     return Path(os.environ.get('BB_CONFIG', DATA_DIR / 'bbport.ini'))
 
 
+def ini_values():
+    """bbport.ini's keys and values, or {} without one."""
+    try:
+        lines = ini_path().read_text(encoding='utf-8').splitlines()
+    except OSError:
+        return {}
+    return {k.strip(): v.strip() for k, sep, v in (line.partition('=') for line in lines)
+            if sep and not k.lstrip().startswith('#')}
+
+
 def set_ini(key, value):
     """bbport.ini (read by the game; the in-game menu edits it): one key rewritten in place."""
+    set_ini_values({key: value})
+
+
+def set_ini_values(values):
+    """bbport.ini: each key rewritten in place, the missing ones added at the end."""
     path = ini_path()
     try:
         lines = path.read_text(encoding='utf-8').splitlines()
     except OSError:
         lines = []
-    out, found = [], False
+    out, left = [], dict(values)
     for line in lines:
-        if '=' in line and not line.lstrip().startswith('#') and line.split('=', 1)[0].strip() == key:
-            out.append(f'{key}={value}')
-            found = True
+        key = line.split('=', 1)[0].strip()
+        if '=' in line and not line.lstrip().startswith('#') and key in left:
+            out.append(f'{key}={left.pop(key)}')
         else:
             out.append(line)
-    if not found:
-        out.append(f'{key}={value}')
+    out += [f'{key}={value}' for key, value in left.items()]
     path.write_text('\n'.join(out) + '\n', encoding='utf-8')
+
+
+def gyro_number(key, value):
+    """A gyro number as the game reads it (its range, two decimals), or None."""
+    low, high, _default = GYRO_NUMBERS[key]
+    try:
+        return f'{min(high, max(low, float(value))):.2f}'
+    except (TypeError, ValueError):
+        return None
+
+
+def gyro_from_ini():
+    """The gyro settings bbport.ini holds, as the Controls page keeps them (the file is their one store)."""
+    values, out = ini_values(), {}
+    for key in GYRO_FLAGS:
+        if values.get(key, '').lstrip('-').isdigit():
+            out[key] = int(values[key]) != 0
+    for key in GYRO_NUMBERS:
+        number = gyro_number(key, values.get(key))
+        if number is not None:
+            out[key] = number
+    for key in GYRO_CHOICES:
+        if values.get(key, '').lstrip('-').isdigit():
+            out[key] = str(int(values[key]))
+    return out
+
+
+def write_gyro_ini(s):
+    """The Controls page's gyro settings into bbport.ini (the learned gyro_bias stays as the game wrote it)."""
+    values = {key: '1' if s.get(key) else '0' for key in GYRO_FLAGS}
+    for key, (_low, _high, default) in GYRO_NUMBERS.items():
+        values[key] = gyro_number(key, s.get(key)) or default
+    for key, (options, default) in GYRO_CHOICES.items():
+        value = str(s.get(key))
+        values[key] = value if value in dict(options) or (key == 'gyro_button' and value.lstrip('-').isdigit()) \
+            else default
+    set_ini_values(values)
+
+
+def steam_dots_per_360(s):
+    """Steam's Dots Per 360 that turns the camera as far as the same gyro setting here: the game turns
+    0.15 degrees per mouse dot at mouse sensitivity 1 (src/runtime_pad.c)."""
+    return round(2400 / float(mouse_sensitivity(s)))
 
 
 def game_info(folder):
@@ -574,7 +653,7 @@ class Launcher:
         global UI_LANGUAGE
         self.tk, self.ttk, self.filedialog, self.messagebox = tk, ttk, filedialog, messagebox
         self.root = root
-        self.app = {**APP_DEFAULTS, **load_json(CONFIG_FILE, {})}
+        self.app = {**APP_DEFAULTS, **load_json(CONFIG_FILE, {}), **gyro_from_ini()}
         UI_LANGUAGE = uncharted_i18n.language_code(self.app.get('ui_language', ''))
         self.configure_art()
         self.vars = {}
@@ -1435,6 +1514,63 @@ class Launcher:
                    'type a number (0.1 to 10) for a faster turn.'))
         self.check(f, 'mouse_invert_y', _('Invert the mouse vertically'))
 
+        self.section(f, _('Gyro'))
+        self.check(f, 'gyro_builtin', _("Aim with the controller's own gyro"),
+                   _("When Steam is not translating the controller (Steam closed, or Steam Input off for the "
+                     "game). Under Steam, Steam's own gyro settings apply."))
+        self.row(f, _('Choose Gyro Button'), self.choice(f, 'gyro_button', GYRO_BUTTONS, 24))
+        self.row(f, _('Gyro Enable/Suppress/Toggle'), self.choice(f, 'gyro_button_mode', GYRO_MODES, 24))
+        for key, title, step, log, hint in (
+                ('gyro_sensitivity', _('Gyro ° Sensitivity'), 0.05, True,
+                 _('1.00: the camera turns 1 degree for each degree you turn the controller; the default is 2.70.')),
+                ('gyro_speed_deadzone', _('Gyro Speed Deadzone'), 0.01, False,
+                 _('Degrees per second: slower movement does not turn the camera (hand shake). What it holds '
+                   'back comes back when you move the controller fast.')),
+                ('gyro_precision_speed', _('Gyro Precision Speed'), 0.01, False,
+                 _('Degrees per second: slower movement turns the camera less, for fine aim. What it holds '
+                   'back comes back when you move the controller fast.'))):
+            low, high, _default = GYRO_NUMBERS[key]
+            self.row(f, title, Slider(self.tk, self.target(f), self.var(key), low, high, step, COLORS, self.px,
+                                      self.font_ui_md, width=300, log=log, entry=True,
+                                      suffix='×' if key == 'gyro_sensitivity' else ' °/s'), hint)
+        self.check(f, 'gyro_invert_x', _('Invert X Output'))
+        self.check(f, 'gyro_invert_y', _('Invert Y Output'))
+        self.row(f, _('3DOF to 2D Conversion Style'), self.choice(f, 'gyro_space', GYRO_SPACES, 24),
+                 _('Which turns of the controller move the camera, as in Steam. Yaw: turn it around its own '
+                   'vertical axis. Roll: lean it like a steering wheel. Yaw + Roll: both added. Local Space: '
+                   'like Yaw + Roll, with the two settings below. Player Space: yaw and roll around the '
+                   'real vertical, so it works however far the controller is tipped up or down. World Space: '
+                   'all turning around the real vertical; no up-down when the controller is on its side.'))
+        for key, title, step, suffix, hint in (
+                ('gyro_local_angle', _('Primary Axis Offset'), 1.0, '°',
+                 _('Local Space only. Tilts the turning axis around the controller\'s side-to-side axis: '
+                   '0° is Yaw, 90° is Roll; below 0 it tilts below the controller\'s own horizon.')),
+                ('gyro_complement', _('Complementary Axis Contribution (Roll)'), 1.0, '%',
+                 _('Local Space and Yaw + Roll (Steam calls it Roll Axis Contribution there): how much '
+                   'turning around the axis at 90 degrees to the primary axis counts (at an offset of 0°, '
+                   'that axis is Roll); below 0 it counts the other way.')),
+                ('gyro_rotate', _('Rotate Output'), 1.0, '°',
+                 _('Turns the gyro\'s output clockwise (or anticlockwise, below 0), whichever style is '
+                   'picked.'))):
+            low, high, _default = GYRO_NUMBERS[key]
+            self.row(f, title, Slider(self.tk, self.target(f), self.var(key), low, high, step, COLORS, self.px,
+                                      self.font_ui_md, width=300, entry=True, suffix=suffix), hint)
+        steam = self.tk.StringVar()
+        def show_steam(*_args):
+            steam.set(_("To match these numbers in Steam's gyro settings, set Dots Per 360° to {} (it follows "
+                        "the mouse sensitivity above).").format(steam_dots_per_360({'mouse_sensitivity':
+                                                                                     self.var('mouse_sensitivity').get()})))
+        self.var('mouse_sensitivity').trace_add('write', show_steam)
+        show_steam()
+        card = self.target(f)
+        self.ttk.Label(card, textvariable=steam, style='Muted.TLabel', wraplength=self.px(680), justify='left').grid(
+            row=self.next_row(card), column=0, columnspan=2, sticky='w', pady=(12, 0))
+        self.check(f, 'gyro_aim', _('Steam Gyro Aiming Fix'),
+                   _('For a gyro set up in Steam as a mouse: popping out of cover keeps the aim, and the gyro '
+                     "turns the aiming and cover cameras directly. The controller's own gyro does this by itself."))
+        self.note(f, _('Calibrate is in the in-game menu (Insert, or L3 + R3): lay the controller still, then '
+                       'press it. The game also calibrates by itself whenever the controller rests.'))
+
         self.section(f, _('Button pictures'))
         self.row(f, _('Show in the game'), self.choice(f, 'button_prompts', BUTTON_PROMPTS, 40),
                  _('The pictures of buttons in menus and hints. Automatic shows your keys while you use '
@@ -1926,6 +2062,7 @@ class Launcher:
         CONFIG_FILE.write_text(json.dumps(self.app, indent=2) + '\n', encoding='utf-8')
         try:
             set_ini('show_fps', '1' if self.app['show_fps'] else '0')
+            write_gyro_ini(self.app)
         except OSError:
             pass
 

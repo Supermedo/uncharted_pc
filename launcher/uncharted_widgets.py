@@ -162,7 +162,7 @@ class Slider:
             box.pack(side='left', padx=(px(12), 0), ipady=2)
             for sequence in ('<Return>', '<FocusOut>'):
                 box.bind(sequence, lambda _e: self.var.set(self.fmt.format(self.value())))
-            self.label = tk.Label(self.frame, bg=colors['card'], fg=colors['muted'], font=font, text='×')
+            self.label = tk.Label(self.frame, bg=colors['card'], fg=colors['muted'], font=font, text=suffix)
         else:
             self.label = tk.Label(self.frame, bg=colors['card'], fg=colors['text'], font=font, width=6, anchor='w')
         self.label.pack(side='left', padx=(px(12) if not entry else px(4), 0))

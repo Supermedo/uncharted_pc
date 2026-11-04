@@ -854,6 +854,7 @@ static void install_game_callbacks(Segment *segments, uint64_t ns, uint64_t imag
         if (!c->callback) {
             memcpy(image+offset,c->patch,c->moved);
             installed[i]=1;
+            runtime_guest_callback_installed(c);
             printf("Callbacks: %s at %#" PRIx64 " (patch)\n",c->name,offset);
             continue;
         }
@@ -900,6 +901,7 @@ static void install_game_callbacks(Segment *segments, uint64_t ns, uint64_t imag
         f[0]=0xe9; memcpy(f+1,&to,4); memset(f+5,0x90,c->moved-5);
         used+=(k+15)&~(size_t)15;
         installed[i]=1;
+        runtime_guest_callback_installed(c);
         printf("Callbacks: %s at %#" PRIx64 "\n",c->name,offset);
     }
     /* Names start with the game ("U2 ..."): a callback missing from a game whose other callbacks
