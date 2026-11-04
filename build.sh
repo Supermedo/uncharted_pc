@@ -32,6 +32,27 @@ MINGW*|MSYS*)
         echo 'Build failed (full log: out/gpu-build.log)' >&2; exit 1
     fi
     cp out/gpu/bb-probe.exe out/gpu/bb-gpu-capabilities.exe out/gpu/bb-play.exe out/
+    if [[ $pgo == use ]]; then
+        # How far the code has moved from the profile: clang's per-file counts of functions
+        # changed since it was recorded (out of date) or added (no data). Only the files
+        # compiled in this build: a full build (CI, a clean out/) gives the whole picture.
+        profiled=$(llvm-profdata show pgo/merged.profdata 2>/dev/null | awk '/^Total functions:/ {print $3}')
+        awk -v profiled="${profiled:-0}" '
+             /(hash mismatch|no profile data available for function)/ {
+                 file=$0; sub(/^warning: /, "", file); sub(/: (no profile data|function control flow).*/, "", file)
+                 sub(/^.*\/(gpu|src|tools|packaging)\//, "", file)
+                 if ($0 ~ /hash mismatch/) stale++; else added++
+                 sf[file]++
+             }
+             /^\[[0-9]+\/[0-9]+\] / { compiled++ }
+             END {
+                 if (!compiled) exit
+                 printf "PGO profile: %d functions changed and %d are new since the profile, in the %d steps built now", stale, added, compiled
+                 if (profiled) printf " (%.1f%% of the %d profiled)", 100*(stale+added)/profiled, profiled
+                 printf "\n"
+                 for (f in sf) printf "%d %s\n", sf[f], f | "sort -rn | head -5 | sed \"s/^/  /\""
+             }' out/gpu-build.log
+    fi
     echo "Built $PWD/out/bb-probe.exe"
     exit 0
     ;;
