@@ -210,6 +210,8 @@ def main():
     player_tiny = env.get('BB_TINY_READBACK')
     player_small = env.get('BB_READBACK_SMALL_BUFFERS')
     player_copy = env.get('BB_SCALAR_COPY64_SYNC')
+    player_gate = env.get('BB_READBACK_SMALL_GATE')
+    player_copy_eop = env.get('BB_COPY64_EOP_READBACK')
     all_cheats = env.setdefault('BB_CHEATS_ALL', env.get('BB_CHEATS', ''))
     while True:
         if player_merge is None:
@@ -225,6 +227,17 @@ def main():
         # once the GPU is done with them, so nothing waits (U3 Cartagena square: 60 FPS with and without).
         if player_small is None:
             env['BB_READBACK_SMALL_BUFFERS'] = '1' if exe in (EXECUTABLES['u2'], EXECUTABLES['u3']) else '0'
+        # U3 characters sinking into the ground, floating or twitching (#727, #745, #751; fix from
+        # drakolordx7's community build): the raycaster copy's results are read back at the end-of-pipe
+        # label (Cartagena square 88 -> 66 FPS uncapped). The full fix also makes the label wait for
+        # every small result (BB_READBACK_SMALL_GATE=1, launcher On: 53 FPS), so it is left to the player.
+        if player_copy_eop is None:
+            if exe == EXECUTABLES['u3']:
+                env['BB_COPY64_EOP_READBACK'] = '1'
+            else:
+                env.pop('BB_COPY64_EOP_READBACK', None)
+        if player_gate is None:
+            env.pop('BB_READBACK_SMALL_GATE', None)
         # The mesh raycaster copies land in guest memory too (iSubMesh after checkpoints; U1 crashes
         # in the Customs House and cutscenes without it). On for U1 and U2: -9 to -16% at 110-130 FPS
         # in U1, so none at 60. Off in U3: it cost 94 -> 54 FPS in Cartagena square.
