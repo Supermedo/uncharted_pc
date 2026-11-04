@@ -18,20 +18,41 @@
 #endif
 #include <windows.h>
 #include "../../../dlss_bridge/bbport_dlss_bridge.h"
+#elif defined(__linux__)
+// Linux: the same bridge built as libbbport_dlss.so against the DLSS SDK's Linux libraries
+// (libnvsdk_ngx.a and libnvidia-ngx-dlss.so.<version>, github.com/NVIDIA/DLSS).
+#include <dlfcn.h>
+#include "../../../dlss_bridge/bbport_dlss_bridge.h"
+#define BB_DLSS_BRIDGE 1
+#endif
+#ifdef _WIN32
+#define BB_DLSS_BRIDGE 1
 #endif
 
 namespace Vulkan {
+
+const char* Dlss::MissingFilesText() {
+#ifdef _WIN32
+    return "bbport_dlss.dll and nvngx_dlss.dll are not installed";
+#else
+    return "libbbport_dlss.so and libnvidia-ngx-dlss.so.* are not installed next to bb-probe "
+           "or in BB_DLSS_DIR";
+#endif
+}
 
 int Dlss::QualityForScale(float scale) {
     // DLAA only for equal sizes: any real upscale needs at least the Quality mode.
     return scale >= 2.9f ? 4 : scale >= 1.95f ? 3 : scale >= 1.65f ? 2 : scale > 1.01f ? 1 : 0;
 }
 
-#ifdef _WIN32
+#ifdef BB_DLSS_BRIDGE
 
 namespace {
+#ifdef _WIN32
 constexpr wchar_t BridgeName[] = L"bbport_dlss.dll";
 constexpr wchar_t NgxName[] = L"nvngx_dlss.dll";
+constexpr char BridgeLabel[] = "bbport_dlss.dll";
+using ModuleHandle = HMODULE;
 
 std::filesystem::path ExecutableDirectory() {
     std::wstring path(MAX_PATH, L'\0');
@@ -39,6 +60,67 @@ std::filesystem::path ExecutableDirectory() {
     path.resize(length);
     return std::filesystem::path{path}.parent_path();
 }
+
+std::filesystem::path DlssDirectory() {
+    return ExecutableDirectory();
+}
+
+bool HasNgxLibrary(const std::filesystem::path& directory) {
+    return std::filesystem::is_regular_file(directory / NgxName);
+}
+
+ModuleHandle OpenModule(const std::filesystem::path& path) {
+    return LoadLibraryW(path.c_str());
+}
+
+void* FindSymbol(ModuleHandle module, const char* name) {
+    return reinterpret_cast<void*>(GetProcAddress(module, name));
+}
+#else
+constexpr char BridgeName[] = "libbbport_dlss.so";
+constexpr char BridgeLabel[] = "libbbport_dlss.so";
+using ModuleHandle = void*;
+
+std::filesystem::path ExecutableDirectory() {
+    std::error_code error;
+    const auto exe = std::filesystem::read_symlink("/proc/self/exe", error);
+    return error ? std::filesystem::current_path(error) : exe.parent_path();
+}
+
+/// BB_DLSS_DIR: the folder with libbbport_dlss.so and libnvidia-ngx-dlss.so.*; default: next to
+/// bb-probe (bin/ of the package).
+std::filesystem::path DlssDirectory() {
+    if (const char* dir = std::getenv("BB_DLSS_DIR"); dir && dir[0]) {
+        return std::filesystem::path{dir};
+    }
+    return ExecutableDirectory();
+}
+
+/// NGX looks for the DLSS snippet (libnvidia-ngx-dlss.so.<version>) in the bridge's folder.
+bool HasNgxLibrary(const std::filesystem::path& directory) {
+    std::error_code error;
+    for (const auto& entry : std::filesystem::directory_iterator(directory, error)) {
+        if (entry.path().filename().string().starts_with("libnvidia-ngx-dlss.so") &&
+            entry.is_regular_file(error)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+ModuleHandle OpenModule(const std::filesystem::path& path) {
+    ModuleHandle module = dlopen(path.c_str(), RTLD_NOW | RTLD_LOCAL);
+    if (!module) {
+        const char* error = dlerror();
+        std::printf("DLSS: cannot load %s: %s\n", path.c_str(), error ? error : "unknown error");
+    }
+    return module;
+}
+
+void* FindSymbol(ModuleHandle module, const char* name) {
+    return dlsym(module, name);
+}
+#endif
 
 void BridgeLog(int warning, const char* message) {
     std::printf("DLSS: %s%s\n", warning ? "warning: " : "", message);
@@ -70,7 +152,7 @@ bool CollectExtensions(const VkExtensionProperties* required, u32 count,
 } // namespace
 
 struct Dlss::Impl {
-    HMODULE module{};
+    ModuleHandle module{};
     const BbDlssApi* api{};
     std::vector<std::string> instance_extensions, device_extensions;
     std::optional<FeatureDesc> feature;
@@ -92,9 +174,9 @@ Dlss* Dlss::Get() {
         if (setting && setting[0] == '0') {
             return nullptr;
         }
-        const auto directory = ExecutableDirectory();
+        const auto directory = DlssDirectory();
         if (!std::filesystem::is_regular_file(directory / BridgeName) ||
-            !std::filesystem::is_regular_file(directory / NgxName)) {
+            !HasNgxLibrary(directory)) {
             return nullptr;
         }
         auto* created = new Dlss;
@@ -110,15 +192,15 @@ Dlss* Dlss::Get() {
 }
 
 Dlss::Dlss() : impl{std::make_unique<Impl>()} {
-    const auto directory = ExecutableDirectory();
-    impl->module = LoadLibraryW((directory / BridgeName).c_str());
+    const auto directory = DlssDirectory();
+    impl->module = OpenModule(directory / BridgeName);
     const auto get_api =
-        impl->module ? reinterpret_cast<BbDlssGetApiFn>(GetProcAddress(impl->module, "BbDlssGetApi"))
+        impl->module ? reinterpret_cast<BbDlssGetApiFn>(FindSymbol(impl->module, "BbDlssGetApi"))
                      : nullptr;
     impl->api = get_api ? get_api() : nullptr;
     // ABI 1 bridges (DLSS only) still work; Frame Generation needs ABI 2.
     if (!impl->api || impl->api->abi < 1 || impl->api->abi > BBPORT_DLSS_BRIDGE_ABI) {
-        impl->Disable("bbport_dlss.dll is missing or from another version");
+        impl->Disable(std::string{BridgeLabel} + " is missing or from another version");
         return;
     }
     // NGX writes its logs and model updates here: beside the saves and shader caches.
@@ -128,7 +210,10 @@ Dlss::Dlss() : impl{std::make_unique<Impl>()} {
     }
     std::error_code error;
     std::filesystem::create_directories(data, error);
-    if (!impl->api->Configure(directory.c_str(), data.c_str(), BridgeLog)) {
+    // The bridge takes wide-character paths on every platform (NGX's own interface).
+    const std::wstring directory_w = directory.wstring();
+    const std::wstring data_w = data.wstring();
+    if (!impl->api->Configure(directory_w.c_str(), data_w.c_str(), BridgeLog)) {
         impl->Disable("bridge configuration failed");
     }
 }
@@ -213,9 +298,21 @@ bool Dlss::CreateFeature(vk::CommandBuffer command, const FeatureDesc& desc) {
         return false;
     }
     impl->feature.reset();
+    // BB_DLSS_PRESET: the DLSS model, as a letter (J, K, L, M) or NVIDIA's number; unset or 0 is
+    // the driver's default (K, the transformer model, for DLAA).
+    static const u32 preset = [] {
+        const char* env = std::getenv("BB_DLSS_PRESET");
+        if (!env || !env[0]) {
+            return 0u;
+        }
+        const char c = char(env[0] & ~0x20);
+        const u32 value = c >= 'A' && c <= 'O' ? u32(c - 'A' + 1) : u32(std::atoi(env));
+        std::printf("DLSS: preset %s (%u)\n", env, value);
+        return value;
+    }();
     const BbDlssFeature feature{desc.input_width,  desc.input_height, desc.output_width,
                                 desc.output_height, desc.quality,      0,
-                                0,                  desc.hdr ? 1 : 0};
+                                preset,             desc.hdr ? 1 : 0};
     if (!impl->api->CreateFeature(command, &feature)) {
         return false;
     }

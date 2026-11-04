@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Builds dist/uncharted-windows/ (and dist/uncharted-windows.zip): Uncharted.exe (the launcher,
+# Builds dist/uncharted-windows/ and a versioned ZIP: Uncharted.exe (the launcher,
 # frozen with PyInstaller so players need no Python), Play Uncharted.exe, bb-probe.exe with the
 # MSYS2 CLANG64 DLLs it needs, the preparation scripts and run.py. Run from an MSYS2 CLANG64
 # shell after `bash build.sh`. Freezing uses a Windows Python 3.10+ (python.org; WINPYTHON
@@ -7,22 +7,26 @@
 set -euo pipefail
 cd -- "$(dirname -- "$0")/../.."
 source ./msys2-env.sh
-[[ -f out/bb-probe.exe && -f out/bb-gpu-capabilities.exe && -f out/bb-play.exe ]] || { echo 'Build first: bash build.sh' >&2; exit 1; }
+[[ -f out/bb-probe.exe && -f out/bb-gpu-capabilities.exe && -f out/bb-play.exe && -f out/VERSION ]] || { echo 'Build first: bash build.sh' >&2; exit 1; }
 
 # A Windows Python (not MSYS2's) for PyInstaller.
 python=${WINPYTHON:-}
+if [[ -n $python && $python == [A-Za-z]:* ]]; then python=$(cygpath -u "$python"); fi
 if [[ -z $python ]]; then
     for candidate in /c/Python3*/python.exe "${LOCALAPPDATA:-/c/Users/$USER/AppData/Local}"/Programs/Python/Python3*/python.exe; do
         [[ -x $candidate ]] && python=$candidate
     done
 fi
-[[ -n $python ]] || { echo 'Need a Windows Python 3 (python.org) or WINPYTHON=path\to\python.exe' >&2; exit 1; }
+[[ -n $python && -x $python ]] || { echo 'Need a native Windows Python 3 or WINPYTHON=path\to\python.exe' >&2; exit 1; }
 # Windows Python needs USERPROFILE (some MSYS2 shells start without it).
 export USERPROFILE=${USERPROFILE:-$(cygpath -w "/c/Users/$(id -un)")}
 if [[ ! -x out/pyenv/Scripts/python.exe ]]; then
     "$python" -m venv out/pyenv
 fi
 out/pyenv/Scripts/python.exe -m pip install -q --disable-pip-version-check pyinstaller pillow tkinterdnd2
+# Generate the PNG from the same source as the tracked ICO; .gitignore excludes generated PNGs.
+out/pyenv/Scripts/python.exe packaging/windows/make_uncharted_icon.py \
+    "$(cygpath -w "$PWD/out/uncharted.ico")" "$(cygpath -w "$PWD/out/uncharted.png")"
 # The scripts run inside Uncharted.exe (--script): the standard modules they import come along.
 hidden=()
 for module in argparse base64 collections hashlib json re shutil struct tempfile zlib ctypes.wintypes cheats \
@@ -45,7 +49,7 @@ rm -rf -- out/stage
 mkdir -p "$dest/bin" "$dest/launcher" "$dest/scripts"
 cp -r out/pyi-dist/Uncharted/. "$dest/"
 llvm-strip -o "$dest/Play Uncharted.exe" out/bb-play.exe
-cp launcher/uncharted.ico launcher/uncharted.png "$dest/launcher/"
+cp launcher/uncharted.ico out/uncharted.png "$dest/launcher/"
 # The executables without debug information (out/ keeps the symbols for crash reports).
 for exe in bb-probe.exe bb-gpu-capabilities.exe; do
     llvm-strip --strip-debug -o "$dest/bin/$exe" "out/$exe"
@@ -55,9 +59,10 @@ ldd "$dest/bin/bb-probe.exe" "$dest/bin/bb-gpu-capabilities.exe" |
     awk '/\/clang64\/bin\// {print $3}' | sort -u | while read -r dll; do
         cp -u "$dll" "$dest/bin/"
     done
-# Only what run.py runs to prepare a game (Bloodborne's patch and mod tools stay out).
+# Only the preparation scripts run.py uses for Uncharted.
 cp scripts/prepare.py scripts/link_modules.py scripts/link_libc.py scripts/content_profile.py scripts/trophies.py "$dest/scripts/"
 cp run.py LICENSE "$dest/"
+cp out/VERSION "$dest/"
 cp packaging/windows/README-Uncharted.txt "$dest/README.txt"
 mkdir -p "$dest/licenses"
 cp packaging/windows/licenses/*.txt "$dest/licenses/" 2>/dev/null || true
@@ -93,12 +98,17 @@ for package in protobuf abseil-cpp openssl miniupnpc zlib; do
 done
 find "$dest" -name __pycache__ -prune -exec rm -r {} +
 mkdir -p dist
-rm -f dist/uncharted-windows.zip
+version=$(cat out/VERSION)
+[[ $version =~ ^[A-Za-z0-9._-]+$ ]] || { echo "Invalid build version: $version" >&2; exit 1; }
+asset="Uncharted-${version}-windows.zip"
+archive=$(cygpath -w "$PWD/dist/$asset")
 # Not Compress-Archive, which writes backslashes that Linux tools keep in the file names (#246).
 (cd out/stage && ../pyenv/Scripts/python.exe -c "
-import pathlib, zipfile
-with zipfile.ZipFile('../../dist/uncharted-windows.zip', 'w', zipfile.ZIP_DEFLATED, compresslevel=9) as z:
-    for p in sorted(pathlib.Path('uncharted-windows').rglob('*')): z.write(p)")
+import pathlib, sys, zipfile
+with zipfile.ZipFile(sys.argv[1], 'w', zipfile.ZIP_DEFLATED, compresslevel=9) as z:
+    for p in sorted(pathlib.Path('uncharted-windows').rglob('*')): z.write(p)
+" "$archive")
+(cd dist && sha256sum "$asset" > "$asset.sha256" && sha256sum --check "$asset.sha256")
 
 # Refresh dist/uncharted-windows, keeping what players create there (saves, settings), and only
 # while nothing runs from it: deleting a running launcher's files breaks it.
@@ -106,11 +116,11 @@ play=dist/uncharted-windows
 running=$(powershell -NoProfile -Command \
     "@(Get-Process | Where-Object { \$_.Path -like '$(cygpath -w "$PWD/$play")\\*' }).Count" | tr -d '\r')
 if [[ ${running:-0} != 0 ]]; then
-    echo "dist/uncharted-windows is in use ($running processes): not refreshed; the zip is ready." >&2
+    echo "dist/uncharted-windows is in use ($running processes): $asset is ready." >&2
 else
     mkdir -p "$play"
     find "$play" -mindepth 1 -maxdepth 1 ! -name user ! -name out ! -name art ! -name bbport.ini \
         ! -name input.ini ! -name last_run.log -exec rm -rf {} +
     cp -r "$dest/." "$play/"
 fi
-du -sh "$dest" dist/uncharted-windows.zip
+du -sh "$dest" "dist/$asset"

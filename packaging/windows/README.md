@@ -1,4 +1,4 @@
-# bbport on Windows
+# Uncharted on Windows
 
 The port builds and runs natively on 64-bit Windows 10 (1903+) / 11 with the same sources as
 on Linux. Players: see `README-Windows.txt` (it ships in the package).
@@ -18,26 +18,22 @@ pacman -S --needed git patch \
   mingw-w64-clang-x86_64-{protobuf,openssl,zlib,miniupnpc,nlohmann-json}
 ```
 
-magic_enum, miniz and xbyak (not packaged by MSYS2) are submodules under `gpu/third_party/`.
+The CI Windows job must install this same CLANG64 package list. `magic_enum`, miniz and xbyak are submodules under `gpu/third_party/`.
 Then, in the repository:
 
 ```bash
 git submodule update --init --recursive
-bash build.sh                      # out/bb-probe.exe, out/bb-gpu-capabilities.exe
-BB_GAME_DIR=F:/path/to/CUSA03173 python run.py
-python launcher/bbport_launcher_win.py
-bash packaging/windows/package.sh  # dist/bbport-windows/ and .zip: Bloodborne.exe + DLLs
+bb_game_dir=F:/path/to/CUSA02320
+bash build.sh                      # out/bb-probe.exe, out/bb-gpu-capabilities.exe, out/bb-play.exe
+BB_GAME_DIR="$bb_game_dir" python run.py
+python launcher/uncharted_launcher.py
+bash packaging/windows/package.sh  # dist/Uncharted-<version>-windows.zip
 ```
 
-`run.py` is the Windows `run.sh` (same variables; works from a plain Windows Python too).
-The package freezes the launcher with PyInstaller (a private venv in `out/pyenv`, from a
-python.org Python) into `Bloodborne.exe`, which also runs `run.py` (`--run`), the preparation
-scripts (`--script`) and the game without the window (`--play`): players need no Python.
-`Play Bloodborne.exe` (`packaging/windows/play.c`) is a small native program that runs
-`Bloodborne.exe --play` from its folder and waits for it, for players who want to start the
-game directly with the saved settings.
-`patches.py` applies the 1.09 patches only to a 1.09 game (`BB_FORCE_PATCHES=1` overrides);
-`run.py` then runs other versions at 30 FPS with live resolution changes.
+`run.py` is the shared Python game runner used by the Windows and Linux launchers.
+The package freezes `launcher/uncharted_launcher.py` with PyInstaller into `Uncharted.exe`, which also runs `run.py` and the preparation scripts: players need no Python. `Play Uncharted.exe` (`packaging/windows/play.c`) starts the game directly with saved settings. The packager uses a native Windows Python 3.10+ from python.org or `actions/setup-python`, supplied through `WINPYTHON` when needed; MSYS2's Python is only used for source tools. It creates a private venv in `out/pyenv`, generates the missing PNG icon from `packaging/windows/make_uncharted_icon.py`, and writes a versioned ZIP plus its SHA-256 checksum. The ZIP version comes from `out/VERSION`, written by `build.sh`.
+
+For a GitHub runner, install native Python with `actions/setup-python` and pass its `python.exe` path as `WINPYTHON` to the MSYS2 packaging step. The path may be in Windows or MSYS2 form. The release workflow fetches FSR 4 assets and NVIDIA's pinned DLSS SDK, builds the DLSS bridge, and includes their runtime files and licenses. Intel XeSS is available as an optional manual packaging step.
 From a source tree it adds `C:\msys64\clang64\bin` (or `$MSYS2_ROOT`) to `PATH` for the DLLs.
 `bash tools/fetch_fsr4_assets.sh` works in the CLANG64 shell as on Linux.
 
@@ -53,11 +49,7 @@ license into `out/` (next to `out/bb-probe.exe`); `package.sh` ships them when p
 loads the DLL at run time (`vk_xess.cpp`, no MSVC needed) with the same inputs as DLSS. The PC needs the
 Visual C++ 2022 x64 Redistributable. `BB_XESS=0` turns it off, `BB_XESS_DLL=<file>` picks another copy.
 
-The launcher texts are written in English with the Russian beside them; the other languages
-are in `launcher/bbport_lang.py` (one list per language in the order of `KEYS`; a missing or
-empty text falls back to English). The icon (`launcher/bloodborne.ico`/`.png`) is drawn by
-`packaging/windows/make_icon.py` and built into `Bloodborne.exe`, `bb-probe.exe` (the game
-window) and `bb-gpu-capabilities.exe`.
+The Uncharted launcher and icon are in `launcher/uncharted_launcher.py` and `launcher/uncharted.ico`. The packager generates `out/uncharted.png` from the icon script for the portable ZIP.
 
 ## What is different from Linux
 
