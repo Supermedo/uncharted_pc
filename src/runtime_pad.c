@@ -828,9 +828,28 @@ static const RuntimeGuestCallback guest_callbacks[]={
       14, 7, ndgi_end, NULL},
 
 };
+/* U1 US CUSA02320 1.02: eboot.bin is both the collection's game selection ("bootloader") and
+ * Uncharted 1. At boot (image+0x9c27a) it starts task 0xed857351 of group 0xf26a97ed when the
+ * options flag [+0x4814] (the "showbootloader" argument) or [+0x3a04] is set, as in this collection,
+ * else 0xd006e7b5: Uncharted 1 on its own, its logos and its own title, as Uncharted 2 and 3 start.
+ * With BB_START_GAME=u1 (the launcher's --play u1) the jne at 0x9c29a no longer jumps, so Uncharted 1
+ * starts without the bootloader; its profile saves are read as with the bootloader. Seen on 1.02 by
+ * tracing the task lookup (0x31d820) and start calls (0x321640, 0x322360) at run time. */
+static const unsigned char u1_102_boot_branch_nop[]={0x90,0x90};
+static const RuntimeGuestCallback start_u1={"U1 1.02 boot without the collection's bootloader",
+    "75 05 be b5 e7 06 d0 bf ed 97 6a f2 e8 ?? ?? ?? ?? 48 89 c7 e8 ?? ?? ?? ?? e8",
+    0x0, sizeof(u1_102_boot_branch_nop), NULL, u1_102_boot_branch_nop};
 const RuntimeGuestCallback *runtime_guest_callbacks(size_t *count) {
-    *count=sizeof(guest_callbacks)/sizeof(*guest_callbacks);
-    return guest_callbacks;
+    static RuntimeGuestCallback active[sizeof(guest_callbacks)/sizeof(*guest_callbacks)+1];
+    static size_t n;
+    if (!n) {
+        memcpy(active,guest_callbacks,sizeof(guest_callbacks));
+        n=sizeof(guest_callbacks)/sizeof(*guest_callbacks);
+        const char *start=getenv("BB_START_GAME");
+        if (start && !strcmp(start,"u1")) active[n++]=start_u1;
+    }
+    *count=n;
+    return active;
 }
 
 /* The button pictures for this controller: 1 PlayStation (DualShock, DualSense: the game's own),

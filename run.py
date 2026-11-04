@@ -6,6 +6,7 @@ BB_GAME_DIR   the game folder (CUSA02343, CUSA02320, ...; the one with eboot.bin
 BB_GAME_DIR_U1 / _U2 / _U3   optional: the folder of a game that was dumped on its own; used for
               that game instead of BB_GAME_DIR (its executable may be that folder's eboot.bin)
 BB_EXE        u1 / u2 / u3 or an executable name (default u1: eboot.bin, the collection menu)
+BB_START_GAME u1: Uncharted 1 without the collection's game selection (first start only)
 BB_USER_DIR   saves and shader caches (default user/ beside this script)
 Extra arguments go to bb-probe. When the game starts another executable of the collection
 (sceSystemServiceLoadExec), that one is prepared and started in its place.
@@ -277,6 +278,9 @@ def main():
         loadexec.unlink(missing_ok=True)
         # No stdin: an inherited pipe (shells such as Git Bash) cost the game its console output.
         code = subprocess.run([*command, *args], stdin=subprocess.DEVNULL, creationflags=no_console()).returncode
+        # BB_START_GAME (--play u1) is for the first start only: back in the collection's menu from
+        # Uncharted 2 or 3, the player chooses again.
+        env.pop('BB_START_GAME', None)
         if code != LOADEXEC_EXIT or not loadexec.is_file():
             return code
         lines = loadexec.read_text(encoding='utf-8', errors='replace').splitlines()

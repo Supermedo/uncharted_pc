@@ -208,7 +208,7 @@ APP_DEFAULTS = {'game_dir': '', 'game_dir_u1': '', 'game_dir_u2': '', 'game_dir_
                 'anti_aliasing': 'off', 'aa_sharpness': '0.2', 'frame_generation': 'off',
                 'frame_gen_multiplier': '2', 'extra_env': '', 'close_on_play': False,
                 'mouse_look': True, 'mouse_sensitivity': '1.0', 'mouse_invert_y': False,
-                'pad_invert_y': False, 'art_banner': '', 'art_u1': '', 'art_u2': '', 'art_u3': '', 'steam_art': '', 'art_crops': {}, 'shortcut_name': 'Uncharted: The Nathan Drake Collection', 'shortcut_icon': '', 'trophy_game': 'u1', 'pad_vibration': True, 'pad_vibration_strength': '100', 'button_prompts': 'auto', 'key_bindings': {}, 'pad_bindings': {}, 'check_updates': True,
+                'pad_invert_y': False, 'art_banner': '', 'art_u1': '', 'art_u2': '', 'art_u3': '', 'steam_art': '', 'art_crops': {}, 'shortcut_name': 'Uncharted: The Nathan Drake Collection', 'shortcut_icon': '', 'steam_entries': 'collection', 'trophy_game': 'u1', 'pad_vibration': True, 'pad_vibration_strength': '100', 'button_prompts': 'auto', 'key_bindings': {}, 'pad_bindings': {}, 'check_updates': True,
                 **{key: 'auto' for key in FIXES},
                 **{f'{game}_infinite_{cheat}': False for game, _t, _s, _e in GAMES for cheat in ('health', 'ammo')}}
 
@@ -1171,14 +1171,19 @@ class Launcher:
         tk.Frame(shell, bg=SURFACE, height=1).pack(fill='x', padx=self.px(22), pady=(self.px(4), self.px(8)))
         row = tk.Frame(shell, bg=SURFACE)
         row.pack(fill='x', padx=self.px(22), pady=(0, self.px(8)))
-        self.toggle(row, self.var('fullscreen'), SURFACE).pack(side='left')
+        self.toggle(row, self.var('fullscreen'), SURFACE).pack(side='left', anchor='n', pady=(self.px(4), 0))
         fullscreen = tk.Label(row, text=_('Fullscreen'), bg=SURFACE, fg=TEXT, font=self.font_ui, cursor='hand2')
-        fullscreen.pack(side='left', padx=(self.px(10), 0))
+        fullscreen.pack(side='left', anchor='n', padx=(self.px(10), 0), pady=(self.px(4), 0))
         fullscreen.bind('<Button-1>', lambda _e: self.var('fullscreen').set(not self.var('fullscreen').get()))
-        self.pill(row, _('Add to Steam'), self.add_to_steam, background=SURFACE, padding=(14, 6)).pack(
-            side='left', padx=(self.px(24), 0))
+        # Add to Steam, with the kind of entries under it (one for the collection or one per game).
+        steam = tk.Frame(row, bg=SURFACE)
+        steam.pack(side='left', anchor='n', padx=(self.px(24), 0))
+        self.pill(steam, _('Add to Steam'), self.add_to_steam, background=SURFACE, padding=(14, 6)).pack(anchor='w')
+        self.choice(steam, 'steam_entries', [('collection', 'One entry for the collection'),
+                                             ('games', 'One entry per game')], width=26).pack(
+            anchor='w', pady=(self.px(6), 0))
         self.pill(row, _('Desktop shortcut'), self.shortcut, background=SURFACE, padding=(14, 6)).pack(
-            side='left', padx=(self.px(8), 0))
+            side='left', anchor='n', padx=(self.px(8), 0))
         self.ready = tk.Label(shell, text='', bg=SURFACE, fg=MUTED, font=self.font_ui_sm,
                               wraplength=self.px(820), justify='left')
         self.ready.pack(anchor='w', padx=self.px(22), pady=(0, self.px(16)))
@@ -2324,7 +2329,17 @@ class Launcher:
             self.messagebox.showerror(NAME, result.stderr.decode(errors='replace')[:400])
 
     def add_to_steam(self):
-        """Preview the collection art before writing the non-Steam shortcut."""
+        """Add to Steam as the choice under the button says (steam_entries): one entry for the
+        collection (its pictures chosen first, in collection_art) or one per game (--play u1/u2/u3,
+        each with its own pictures). Adding one kind replaces the other's entries."""
+        self.collect()
+        if self.app.get('steam_entries') == 'games':
+            self.write_to_steam('games')
+        else:
+            self.collection_art()
+
+    def collection_art(self):
+        """Preview the collection art before writing the collection's Steam entry."""
         from PIL import Image, ImageTk
         import uncharted_art
 
@@ -2407,25 +2422,21 @@ class Launcher:
                 {f'steam_{name}': crop for name, crop in selected['crops'].items()})
             self.collect()
             window.destroy()
-            self.perform_add_to_steam()
+            self.write_to_steam('collection')
 
         self.pill(footer, _('Add to Steam'), add, kind='primary', background=PANEL).pack(side='right', padx=(0, 6))
         redraw()
         window.bind('<Escape>', lambda _event: window.destroy())
 
-    def perform_add_to_steam(self):
-        """Write the collection shortcut and its user-selected artwork to Steam."""
+    def write_to_steam(self, kind):
+        """Writes the Steam entries of this kind ('collection' or 'games'), closing Steam while it
+        is done when it runs."""
         import bbport_steam
         steam = bbport_steam.steam_folder()
         configs = bbport_steam.user_configs(steam) if steam else []
         if not configs:
             self.messagebox.showerror(NAME, _('Steam was not found on this PC (or nobody has signed in to it yet).'))
             return
-        if FROZEN:
-            exe, options = Path(sys.executable), '--play'
-        else:
-            pythonw = Path(sys.executable).with_name('pythonw.exe')
-            exe, options = (pythonw if pythonw.exists() else Path(sys.executable)), f'"{Path(__file__).resolve()}" --play'
         self.collect()
         restart = False
         if bbport_steam.steam_running():
@@ -2442,27 +2453,23 @@ class Launcher:
                 return
             time.sleep(1)
             restart = True
-        title = 'Uncharted: The Nathan Drake Collection'
         try:
             for config in configs:
-                bbport_steam.add_shortcut(config / 'shortcuts.vdf', title, str(exe), str(PORT_DIR), str(exe), options)
-                # Library pictures (cover, header, hero) from the box art of the player's game folder.
-                try:
-                    import uncharted_art
-                    uncharted_art.steam_artwork(
-                        game_folder(self.app, 'u1') or game_folder(self.app, 'u2'), config / 'grid',
-                        bbport_steam.shortcut_id(f'"{exe}"', title), self.app.get('steam_art', ''), {
-                            name: self.app.get('art_crops', {}).get(f'steam_{name}', {})
-                            for name in ('portrait', 'header', 'hero')})
-                except Exception:  # pictures are a nicety: the shortcut works without them
-                    pass
+                if kind == 'games':
+                    add_steam_games(config)
+                else:
+                    add_steam_collection(config, self.app)
         except (OSError, ValueError) as error:
-            self.messagebox.showerror(NAME, _('Could not add the game to Steam: {}').format(error))
+            self.messagebox.showerror(NAME, _('Could not add the games to Steam: {}').format(error))
             return
         if restart:
             os.startfile('steam://open/games')
-        self.messagebox.showinfo(NAME, _('The collection is in your Steam library. It starts with the settings '
-                                         'saved in this launcher.'))
+        if kind == 'games':
+            self.messagebox.showinfo(NAME, _('Uncharted 1, 2 and 3 are in your Steam library. Each starts with the '
+                                             'settings saved in this launcher.'))
+        else:
+            self.messagebox.showinfo(NAME, _('The collection is in your Steam library. It starts with the settings '
+                                             'saved in this launcher.'))
 
     def close(self):
         try:
@@ -2551,6 +2558,116 @@ def install_update(target, wait_pid):
     return 0
 
 
+STEAM_TITLES = {'u1': "Uncharted: Drake's Fortune", 'u2': 'Uncharted 2: Among Thieves',
+                'u3': "Uncharted 3: Drake's Deception"}
+COLLECTION_TITLE = 'Uncharted: The Nathan Drake Collection'  # the single entry of earlier versions
+
+
+def steam_launch():
+    """(exe, launch options before the game key) of a Steam shortcut that starts this launcher."""
+    if FROZEN:
+        return Path(sys.executable), '--play'
+    pythonw = Path(sys.executable).with_name('pythonw.exe')
+    return (pythonw if pythonw.exists() else Path(sys.executable)), f'"{Path(__file__).resolve()}" --play'
+
+
+def steam_games():
+    """(game key, Steam name, launch options) of the three shortcuts."""
+    _exe, play = steam_launch()
+    return [(key, STEAM_TITLES[key], f'{play} {key}') for key, _t, _s, _e in GAMES]
+
+
+def add_steam_shortcuts(vdf_path, now=None, icons=None):
+    """The three games in one shortcuts.vdf, each with its icon (icons: game key -> picture, else
+    the exe). The old single collection entry is replaced only when it starts this launcher with a
+    plain --play; every other entry stays as it is."""
+    import bbport_steam
+    exe, play = steam_launch()
+
+    def old_collection(fields):
+        return (str(fields.get('exe', '')).lower() == f'"{exe}"'.lower()
+                and str(fields.get('launchoptions', '')).strip() == play)
+    wanted = [(name, str(exe), str(PORT_DIR), str((icons or {}).get(key, exe)), options)
+              for key, name, options in steam_games()]
+    return exe, bbport_steam.set_shortcuts(vdf_path, wanted, old_collection, now)
+
+
+def add_steam_games(config, now=None):
+    """One Steam account (userdata/<id>/config): each game's library pictures in grid/ (the
+    player's art/<game>_<kind> files, else made from the game's poster), then the three shortcuts,
+    each with its own icon."""
+    import bbport_steam
+    exe, _play = steam_launch()
+    icons = {}
+    for key, name, _options in steam_games():
+        try:
+            import uncharted_art
+            pictures = uncharted_art.steam_game_art(Path(config) / 'grid', bbport_steam.shortcut_id(f'"{exe}"', name), key)
+            icons[key] = str(pictures['icon'])
+        except Exception:  # pictures are a nicety: the shortcut works without them
+            pass
+    return add_steam_shortcuts(Path(config) / 'shortcuts.vdf', now, icons)
+
+
+def add_collection_shortcut(vdf_path, now=None):
+    """The single collection entry (a plain --play: the game selected in the launcher) in one
+    shortcuts.vdf. It replaces this launcher's three game entries; every other entry stays."""
+    import bbport_steam
+    exe, play = steam_launch()
+    games = {options for _key, _name, options in steam_games()}
+
+    def game_entry(fields):
+        return (str(fields.get('exe', '')).lower() == f'"{exe}"'.lower()
+                and str(fields.get('launchoptions', '')).strip() in games)
+    wanted = [(COLLECTION_TITLE, str(exe), str(PORT_DIR), str(exe), play)]
+    return exe, bbport_steam.set_shortcuts(vdf_path, wanted, game_entry, now)
+
+
+def add_steam_collection(config, settings, now=None):
+    """One Steam account (userdata/<id>/config): the collection entry, then its library pictures
+    (the image and crops chosen in Add to Steam, else the game folder's box art)."""
+    import bbport_steam
+    exe, result = add_collection_shortcut(Path(config) / 'shortcuts.vdf', now)
+    try:
+        import uncharted_art
+        uncharted_art.steam_artwork(
+            game_folder(settings, 'u1') or game_folder(settings, 'u2'), Path(config) / 'grid',
+            bbport_steam.shortcut_id(f'"{exe}"', COLLECTION_TITLE), custom_art=settings.get('steam_art', ''),
+            crops={name: settings.get('art_crops', {}).get(f'steam_{name}', {})
+                   for name in ('portrait', 'header', 'hero')})
+    except Exception:  # pictures are a nicety: the shortcut works without them
+        pass
+    return exe, result
+
+
+def play_request(args):
+    """--play [u1|u2|u3]: None without --play, '' for the selected game, else the word after it
+    (checked by the caller)."""
+    if '--play' not in args:
+        return None
+    rest = args[args.index('--play') + 1:]
+    return rest[0].strip().lower() if rest and not rest[0].startswith('--') else ''
+
+
+def play_problem(settings, key):
+    """Why --play <key> cannot start, or None."""
+    if key not in STEAM_TITLES:
+        return _('Unknown game "{}". Use --play u1, u2 or u3.').format(key)
+    if not game_available(settings, key):
+        return _('{} is not available: open the launcher and choose its game folder.').format(STEAM_TITLES[key])
+    return None
+
+
+def play_environment(settings, start=None):
+    """The game's environment for --play: with a game named, BB_START_GAME takes Uncharted 1
+    past the collection's menu (it shares eboot.bin with it; U2 and U3 start on their own)."""
+    env = game_environment(settings, start)
+    env.pop('BB_START_GAME', None)
+    if start:
+        env['BB_START_GAME'] = start
+    return env
+
+
 def open_run_log(log_dir, keep=5):
     """last_run.log for a new run; the previous ones move to last_run.1.log ... last_run.<keep-1>.log
     (a restart after a problem no longer overwrites the log that shows it)."""
@@ -2565,14 +2682,14 @@ def open_run_log(log_dir, keep=5):
     return open(log_dir / 'last_run.log', 'w', encoding='utf-8', buffering=1)
 
 
-def play_without_window(settings):
+def play_without_window(settings, start=None):
     """--play: the game with the saved settings (shortcuts, Steam); output to the console when
     there is one and to <saves folder>/last_run.log."""
     attach_stdio()
     log_dir = Path(settings.get('user_dir') or DATA_DIR / 'user')
     with open_run_log(log_dir) as log:
         try:
-            env = game_environment(settings)
+            env = play_environment(settings, start)
         except OSError as error:
             text = _('Could not save the input configuration: {}').format(error) + '\n'
             log.write(text)
@@ -2603,7 +2720,14 @@ def main():
     if FROZEN and UPDATE_DIR not in PORT_DIR.parents:
         shutil.rmtree(UPDATE_DIR, ignore_errors=True)  # what a finished update left behind
     settings = {**APP_DEFAULTS, **load_json(CONFIG_FILE, {})}
-    if '--play' in args and game_available(settings, settings['start']):
+    play = play_request(args)
+    if play:  # --play u1|u2|u3: that game, or a message (never another game)
+        problem = play_problem(settings, play)
+        if problem:
+            ctypes.windll.user32.MessageBoxW(None, problem, NAME, 0x10)
+            sys.exit(2)
+        sys.exit(play_without_window(settings, play))
+    if play == '' and game_available(settings, settings['start']):
         sys.exit(play_without_window(settings))
     try:
         ctypes.windll.shcore.SetProcessDpiAwareness(1)
