@@ -1995,13 +1995,17 @@ constexpr u64 Copy64ShaderHash = 0x6a6422a9;
 constexpr u64 Copy64ReadbackMax = 64_KB;
 constexpr size_t Copy64ReadbackRanges = 256; ///< per end-of-pipe event
 
+bool Copy64Gated();
+
 bool Copy64EopReadback() {
     static const bool on = [] {
         const char* env = std::getenv("BB_COPY64_EOP_READBACK");
         const bool enabled = env && env[0] == '1';
         if (enabled) {
             std::printf("COPY64EOP: on: what copy shader 6a6422a9 writes, up to 64 KiB a "
-                        "dispatch, lands before the next end-of-pipe label\n");
+                        "dispatch, lands in guest memory once the GPU is done (%s)\n",
+                        Copy64Gated() ? "the end-of-pipe label waits for it"
+                                      : "the label does not wait; BB_COPY64_EOP_GATE=1 to wait");
             std::fflush(stdout);
         }
         return enabled;
