@@ -1305,6 +1305,47 @@ static void patch_job_sleep(uint64_t image_size) {
         return;
     }
 }
+/* The engine's job runner copies a descriptor it reaches through the job's record
+ * (mov rax, [r10+8]; mov rcx, [rax+0x20]); a job run before its descriptor was set read address 0x20
+ * and the game stopped (BilalReloaded's port 0.8.0, its #205 #304 #326, all three games). From
+ * Mevlock's dev builds: before the two loads a jump goes to a stub in the function's dead assert path
+ * (it keeps its int 0x41 first); a null pointer ends the job at the function's own exit, otherwise the
+ * loads run and it jumps back. 1.02 code (US CUSA02320, EU/Russian CUSA02344, EU 1.02): the same bytes
+ * in those dumps. Both sites are found by their exact bytes and patched only together, at the distance
+ * the jumps were made for (1.00 is compiled differently and is left alone). BB_JOB_GUARD=0: off. */
+static void patch_job_descriptor_guard(uint64_t image_size) {
+    const char *env=getenv("BB_JOB_GUARD");
+    if (env && env[0]=='0') return;
+    static const struct {
+        const char *game, *loads, *cave;
+        unsigned char jump[27], stub[24];
+        int64_t distance;
+    } builds[]={
+        {"U1","49c7424800000000488b05a4b6b80049894210498b4208488b4820","488b05efe6a9004885c07427488d3d2ce91e00488d35c4e7",
+         {0x49,0xc7,0x42,0x48,0x00,0x00,0x00,0x00,0x48,0x8b,0x05,0xa4,0xb6,0xb8,0x00,0x49,0x89,0x42,0x10,0xe9,0xff,0x0a,0x00,0x00,0x90,0x90,0x90},
+         {0xcd,0x41,0x49,0x8b,0x42,0x08,0x48,0x85,0xc0,0x0f,0x84,0x9a,0xff,0xff,0xff,0x48,0x8b,0x48,0x20,0xe9,0xee,0xf4,0xff,0xff},0xb15},
+        {"U2","49c7424800000000488b0514e4940049894210498b4208488b4820","488b05618484004885c07427488d3dfa731800488d35ef71",
+         {0x49,0xc7,0x42,0x48,0x00,0x00,0x00,0x00,0x48,0x8b,0x05,0x14,0xe4,0x94,0x00,0x49,0x89,0x42,0x10,0xe9,0xfd,0x0a,0x00,0x00,0x90,0x90,0x90},
+         {0xcd,0x41,0x49,0x8b,0x42,0x08,0x48,0x85,0xc0,0x0f,0x84,0x9a,0xff,0xff,0xff,0x48,0x8b,0x48,0x20,0xe9,0xf0,0xf4,0xff,0xff},0xb13},
+        {"U3","49c7424800000000488b05c4c3d60049894210498b4208488b4820","488b05418dc6004885c07427488d3d08414f00488d35fd3e",
+         {0x49,0xc7,0x42,0x48,0x00,0x00,0x00,0x00,0x48,0x8b,0x05,0xc4,0xc3,0xd6,0x00,0x49,0x89,0x42,0x10,0xe9,0xfd,0x0a,0x00,0x00,0x90,0x90,0x90},
+         {0xcd,0x41,0x49,0x8b,0x42,0x08,0x48,0x85,0xc0,0x0f,0x84,0x9a,0xff,0xff,0xff,0x48,0x8b,0x48,0x20,0xe9,0xf0,0xf4,0xff,0xff},0xb13},
+    };
+    for (size_t b=0;b<sizeof(builds)/sizeof(*builds);++b) {
+        const int64_t loads=find_unique_pattern(image_size,builds[b].loads);
+        if (loads<0) continue;
+        const int64_t cave=find_unique_pattern(image_size,builds[b].cave);
+        if (cave-loads!=builds[b].distance) {
+            printf("Job descriptor guard: %s 1.02 loads found, its stub site not where expected; not patched\n",builds[b].game);
+            return;
+        }
+        memcpy(image+cave,builds[b].stub,sizeof(builds[b].stub));
+        memcpy(image+loads,builds[b].jump,sizeof(builds[b].jump));
+        printf("Job descriptor guard: %s 1.02 job runner skips a job without its descriptor (%#" PRIx64 ", stub %#" PRIx64 ")\n",
+               builds[b].game,(uint64_t)loads,(uint64_t)cave);
+        return;
+    }
+}
 /* U2 chapter 21 (convoy): Elena's truck sinks 2-4 m into the snow for ~0.5 s after a bump. The bump
  * plays an animation on the truck by adding a node to its animation blend (US 0x399700, EU 0x102330:
  * node, anim, params). Adding a node copies the params' bool at +0x11 into bit 2 of the previous
@@ -1625,6 +1666,7 @@ int main(int argc, char **argv) {
         patch_u1_sticky(image_end);
         runtime_display_patch(image, image_end);
         patch_u2_convoy_sink(image_end);
+        patch_job_descriptor_guard(image_end);
     }
 #ifdef _WIN32
     printf("Guest TCB loads redirected to the TEB TLS slot: %" PRIu64 "\n", patch_tcb_loads(segments, ns));
