@@ -21,9 +21,12 @@ MINGW*|MSYS*)
         fi
     done
     # perf7: BB_PGO=generate|use|off (use = pgo/merged.profdata, see gpu/CMakeLists.txt), BB_LTO=ON|OFF.
+    # perf7: BB_OPT=2|3: optimization level of the RelWithDebInfo build (CMake's default is -O2).
+    opt="-O${BB_OPT:-2} -g -DNDEBUG"
     cmake -S gpu -B out/gpu -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DBB_PGO="${BB_PGO:-off}" \
-        -DBB_PGO_DIR="$PWD/pgo" -DBB_LTO="${BB_LTO:-OFF}" -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ >/dev/null
-    echo "GPU library and loader: LTO ${BB_LTO:-OFF}, PGO ${BB_PGO:-off}"
+        -DBB_PGO_DIR="$PWD/pgo" -DBB_LTO="${BB_LTO:-OFF}" -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
+        -DCMAKE_C_FLAGS_RELWITHDEBINFO="$opt" -DCMAKE_CXX_FLAGS_RELWITHDEBINFO="$opt" >/dev/null
+    echo "GPU library and loader: LTO ${BB_LTO:-OFF}, PGO ${BB_PGO:-off}, -O${BB_OPT:-2}"
     if ! ninja -C out/gpu bb-probe bb-gpu-capabilities bb-play > out/gpu-build.log 2>&1; then
         grep -v '^\[' out/gpu-build.log | tail -40 >&2
         echo 'Build failed (full log: out/gpu-build.log)' >&2; exit 1
