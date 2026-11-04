@@ -278,6 +278,14 @@ if (WIN32)
 endif()
 
 # Explicit test targets; neither launches the game nor needs a Vulkan device.
+add_executable(button-prompts-test EXCLUDE_FROM_ALL ../tests/test_button_prompts.cpp
+    shadps4/video_core/texture_cache/button_prompts.cpp)
+target_compile_options(button-prompts-test PRIVATE -UNDEBUG)
+target_include_directories(button-prompts-test PRIVATE shadps4 third_party/imgui)
+target_compile_definitions(button-prompts-test PRIVATE
+    BB_FONT_PATH="${CMAKE_CURRENT_SOURCE_DIR}/third_party/fonts/DejaVuSans.ttf")
+target_link_libraries(button-prompts-test PRIVATE PkgConfig::SDL3 miniz::miniz)
+
 add_executable(motion-history-test EXCLUDE_FROM_ALL ../tests/test_motion_history.cpp)
 target_compile_options(motion-history-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
 target_include_directories(motion-history-test PRIVATE ..)
