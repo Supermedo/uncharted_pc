@@ -123,5 +123,6 @@ pkgs.stdenv.mkDerivation {
       --prefix PATH : ${lib.makeBinPath [ pkgs.bash pkgs.coreutils ]} \
       --run 'export BB_DATA_DIR=''${BB_DATA_DIR:-''${XDG_DATA_HOME:-$HOME/.local/share}/bbport}; mkdir -p "$BB_DATA_DIR"'
   '';
-  meta.mainProgram = "bbport";
+  # BB_APPIMAGE_GAME=1: the AppImage starts the game (run.sh) instead of the launcher.
+  meta.mainProgram = if builtins.getEnv "BB_APPIMAGE_GAME" == "1" then "bbport-game" else "bbport";
 }

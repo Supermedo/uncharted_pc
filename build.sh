@@ -55,7 +55,7 @@ read -r -a includes <<< "$(pkg-config --cflags vulkan sdl3)"
 [[ -f third_party/Vulkan-Headers/include/vulkan/vulkan.h ]] || git submodule update --init third_party/Vulkan-Headers
 vulkan_headers=$PWD/third_party/Vulkan-Headers/include
 includes=(-I"$vulkan_headers" "${includes[@]}")
-read -r -a libraries <<< "$(pkg-config --libs vulkan sdl3)"
+read -r -a libraries <<< "$(pkg-config --libs vulkan sdl3 libavcodec libavutil)"
 # GPU library (shadPS4 video core + drivers), built by CMake into out/gpu/libbbgpu.so.
 # BB_PGO: generate (instrumented build that writes pgo/ while the game runs), use, off.
 # Default: use the profile in pgo/ when there is one. BB_LTO=OFF disables link-time optimization.
