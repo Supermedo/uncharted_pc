@@ -612,7 +612,18 @@ void Rasterizer::NotePendingGpuWrite(VAddr address, u64 size) {
         return;
     }
     // Draws write the same buffers over and over: an entry for the range only moves on.
-    const u64 position = draw_pipe->Head();
+    // bbport (Mevlock, U2 chapter 1 train flash): Head() is where the packet being prepared
+    // starts, and Reached(Head()) holds as soon as the packet before it has run. A write noted by
+    // PostDraw before its packet is committed (a draw's or dispatch's written resources) counted
+    // as done while that packet had not run: a copy shader the recording thread runs on the CPU
+    // wrote a material constant after stage A had walked the resource tables holding it into a
+    // later draw, and the train's platform flashed white for a frame. One past the start: done
+    // once this packet has run. BB_PENDING_NOTE_FIX=0: as before.
+    static const bool note_fix = [] {
+        const char* env = std::getenv("BB_PENDING_NOTE_FIX");
+        return !(env && env[0] == '0');
+    }();
+    const u64 position = draw_pipe->Head() + (note_fix && notes_before_commit ? 1 : 0);
     const VAddr end = address + size;
     for (auto& write : pending_writes) {
         if (address <= write.end && write.begin <= end) {
@@ -749,6 +760,7 @@ void Rasterizer::PostDraw(const Pipeline* pipeline, const PreparedDraw* used_pre
     u32 num_stages = 0;
     u32 size = sizeof(DrawPacket) + AlignPacket(num_blocks * sizeof(u16)) +
                num_blocks * AmdGpu::RegDirty::BlockWords * sizeof(u32);
+    notes_before_commit = true;
     for (const auto* stage : stages) {
         if (stage) {
             auto& ring = rings[num_stages];
@@ -855,6 +867,7 @@ void Rasterizer::PostDraw(const Pipeline* pipeline, const PreparedDraw* used_pre
     }
     dirty.Clear();
     draw_pipe->Commit(static_cast<u32>(out - start));
+    notes_before_commit = false;
     PrintPipeStats();
 }
 

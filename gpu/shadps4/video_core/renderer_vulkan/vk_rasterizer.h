@@ -124,6 +124,9 @@ public:
     /// Stage A: guest memory the recording thread will write for work handed to it (storage
     /// buffers, DMA, WriteData, fences); constants overlapping it are bound there, not copied here.
     void NotePendingGpuWrite(VAddr address, u64 size);
+    /// bbport: set while PostDraw prepares a packet (its written resources are noted before the
+    /// packet is committed): such notes last until that packet has run, not the one before it.
+    bool notes_before_commit{false};
     /// bbport: small buffers (up to 64 bytes) a compute shader writes are read by the game's CPU
     /// code (the auto-exposure multiplier of Uncharted, among others). The dispatch notes them and
     /// the next end-of-pipe event copies them to guest memory (BB_READBACK_SMALL_BUFFERS=0: off).
