@@ -8,6 +8,9 @@ case $(uname -s) in
 MINGW*|MSYS*)
     # shellcheck source=msys2-env.sh
     source ./msys2-env.sh
+    # MSYS2's Vulkan headers, as on the GitHub runner: an installed Vulkan SDK (VULKAN_SDK) would
+    # point CMake at its own, older headers, which lack extensions the port uses.
+    unset VULKAN_SDK
     for tool in clang cmake ninja pkg-config; do
         command -v "$tool" >/dev/null || { echo "Need $tool from MSYS2 CLANG64 (packaging/windows/README.md)." >&2; exit 1; }
     done
@@ -29,14 +32,40 @@ MINGW*|MSYS*)
     if [[ $pgo == use && ! -f pgo/merged.profdata ]]; then
         echo 'BB_PGO=use needs pgo/merged.profdata.' >&2; exit 1
     fi
+    # libc++ stamps its version into the names of its internal helpers (abi tag "nqe230103" =
+    # 23.1.3): with any other clang (the GitHub runner updates MSYS2) none of them matched the
+    # profile, two thirds of it (0.3.6.41's release build). The profile gets this compiler's
+    # stamp, in a copy under out/pgo; code that really changed in libc++ is still skipped.
+    pgo_dir=$PWD/pgo
+    if [[ $pgo == use ]]; then
+        here=$(echo '#include <version>' | clang++ -x c++ -dM -E - | awk '/define _LIBCPP_VERSION /{print $3}')
+        mkdir -p out/pgo
+        llvm-profdata merge --text pgo/merged.profdata -o out/pgo/profile.proftext
+        # The tag as written (three signature letters, the version), found and replaced as plain
+        # text by awk: Git for Windows' grep and sed missed these patterns.
+        tag=$(awk 'match($0, /B9[a-z][a-z][a-z][0-9][0-9][0-9][0-9][0-9][0-9]/) {
+                       print substr($0, RSTART + 2, 9); exit }' out/pgo/profile.proftext)
+        stamp=${tag:3}
+        if [[ -n $here && -n $stamp && $here != "$stamp" ]]; then
+            awk -v from="B9$tag" -v to="B9${tag:0:3}$here" '{
+                     out = ""; while ((i = index($0, from)) > 0) {
+                         out = out substr($0, 1, i - 1) to; $0 = substr($0, i + length(from)) }
+                     print out $0 }' out/pgo/profile.proftext > out/pgo/stamped.proftext
+            llvm-profdata merge out/pgo/stamped.proftext -o out/pgo/new.profdata
+            if ! cmp -s out/pgo/new.profdata out/pgo/merged.profdata; then mv out/pgo/new.profdata out/pgo/merged.profdata; fi
+            pgo_dir=$PWD/out/pgo
+            echo "PGO profile: libc++ names from $stamp renamed for this compiler's $here"
+        fi
+        rm -f out/pgo/profile.proftext out/pgo/stamped.proftext out/pgo/new.profdata
+    fi
     # perf7: BB_OPT=2|3: optimization level of the RelWithDebInfo build (CMake's default is -O2).
     opt="-O${BB_OPT:-2} -g -DNDEBUG"
     cmake -S gpu -B out/gpu -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DBB_PGO="$pgo" \
-        -DBB_PGO_DIR="$PWD/pgo" -DBB_LTO="${BB_LTO:-OFF}" -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
+        -DBB_PGO_DIR="$pgo_dir" -DBB_LTO="${BB_LTO:-OFF}" -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
         -DCMAKE_C_FLAGS_RELWITHDEBINFO="$opt" -DCMAKE_CXX_FLAGS_RELWITHDEBINFO="$opt" >/dev/null
     echo "GPU library and loader: LTO ${BB_LTO:-OFF}, PGO $pgo, -O${BB_OPT:-2}"
     if ! ninja -C out/gpu bb-probe bb-gpu-capabilities bb-play > out/gpu-build.log 2>&1; then
-        grep -v '^\[' out/gpu-build.log | tail -40 >&2
+        awk 'substr($0, 1, 1) != "["' out/gpu-build.log | tail -40 >&2 || true
         echo 'Build failed (full log: out/gpu-build.log)' >&2; exit 1
     fi
     cp out/gpu/bb-probe.exe out/gpu/bb-gpu-capabilities.exe out/gpu/bb-play.exe out/
@@ -45,7 +74,9 @@ MINGW*|MSYS*)
         # changed since it was recorded (out of date) or added (no data). Only the files
         # compiled in this build: a full build (CI, a clean out/) gives the whole picture.
         profiled=$(llvm-profdata show pgo/merged.profdata 2>/dev/null | awk '/^Total functions:/ {print $3}')
-        awk -v profiled="${profiled:-0}" '
+        # BB_PGO_MAX_UNMATCHED=<percent> (the GitHub build): more than that unmatched fails the
+        # build, so a release never ships mostly without its profile.
+        awk -v profiled="${profiled:-0}" -v limit="${BB_PGO_MAX_UNMATCHED:-}" '
              /(hash mismatch|no profile data available for function)/ {
                  file=$0; sub(/^warning: /, "", file); sub(/: (no profile data|function control flow).*/, "", file)
                  sub(/^.*\/(gpu|src|tools|packaging)\//, "", file)
@@ -59,7 +90,12 @@ MINGW*|MSYS*)
                  if (profiled) printf " (%.1f%% of the %d profiled)", 100*(stale+added)/profiled, profiled
                  printf "\n"
                  for (f in sf) printf "%d %s\n", sf[f], f | "sort -rn | head -5 | sed \"s/^/  /\""
-             }' out/gpu-build.log
+                 close("sort -rn | head -5 | sed \"s/^/  /\"")
+                 if (limit != "" && profiled && 100*(stale+added)/profiled > limit+0) {
+                     printf "PGO profile: more than %s%% unmatched (BB_PGO_MAX_UNMATCHED): build stopped\n", limit
+                     exit 3
+                 }
+             }' out/gpu-build.log || exit 1
     fi
     echo "Built $PWD/out/bb-probe.exe"
     exit 0
