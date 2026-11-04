@@ -101,13 +101,17 @@ FRAME_GENERATION = [('off', 'Off'), ('fsr3', 'AMD FSR 3 Frame Generation (any GP
 BUTTON_PROMPTS = [('auto', 'Automatic (follows the device you used last)'),
                   ('keyboard', 'Keyboard and mouse keys'), ('xbox', 'Xbox buttons'),
                   ('0', "PlayStation buttons (the game's own)")]
+CONTROLLER_PROFILES = [('auto', 'Automatic'), ('playstation', 'PlayStation'), ('xbox', 'Xbox'),
+                       ('nintendo', 'Nintendo'), ('gamecube', 'Nintendo GameCube'),
+                       ('steam', 'Steam Deck / Steam'), ('generic', 'Generic')]
+MAPPING_MODES = [('recommended', 'Default'), ('custom', 'Custom')]
 FRAME_GEN_MULTIPLIERS = [('2', '2× (one generated frame)'), ('3', '3× (DLSS on GeForce RTX 50)'),
                          ('4', '4× (DLSS on GeForce RTX 50)')]
 # Controls (input.ini, read by the game: src/runtime_pad.c). Actions with their PS4 names, the
 # default keys ("A|B": two bindings) and the default controller buttons (SDL names).
 BUTTON_ACTIONS = [
     ('cross', 'Cross ✕', 'Space', 'a'), ('circle', 'Circle ○', 'C', 'b'),
-    ('square', 'Square □', 'F', 'x'), ('triangle', 'Triangle △', 'E', 'y'),
+    ('square', 'Square ▢', 'F', 'x'), ('triangle', 'Triangle △', 'E', 'y'),
     ('l1', 'L1', 'Q', 'leftshoulder'), ('r1', 'R1', 'G', 'rightshoulder'),
     ('l2', 'L2 (aim)', 'Mouse Right', 'lefttrigger'), ('r2', 'R2 (fire)', 'Mouse Left', 'righttrigger'),
     ('l3', 'L3', 'Left Shift', 'leftstick'), ('r3', 'R3', 'V', 'rightstick'),
@@ -131,7 +135,33 @@ PAD_BUTTONS = [('a', 'A / Cross'), ('b', 'B / Circle'), ('x', 'X / Square'), ('y
                ('dpup', 'D-pad up'), ('dpdown', 'D-pad down'), ('dpleft', 'D-pad left'),
                ('dpright', 'D-pad right'), ('misc1', 'Share / Mic (misc)'), ('paddle1', 'Paddle 1'),
                ('paddle2', 'Paddle 2'), ('paddle3', 'Paddle 3'), ('paddle4', 'Paddle 4'),
+               ('misc2', 'Extra button 2'), ('misc3', 'Extra button 3'),
+               ('misc4', 'Extra button 4'), ('misc5', 'Extra button 5'), ('misc6', 'Extra button 6'),
                ('none', 'Not assigned')]
+PAD_PROFILE_LABELS = {
+    'gamecube': {'a': 'A', 'b': 'X', 'x': 'B', 'y': 'Y', 'rightshoulder': 'Z',
+                 'leftshoulder': 'L1 (variant)',
+                 'lefttrigger': 'L', 'righttrigger': 'R', 'start': 'Start / Pause',
+                 'misc3': 'L trigger click', 'misc4': 'R trigger click'},
+    'playstation': {'a': 'Cross ✕', 'b': 'Circle ○', 'x': 'Square ▢', 'y': 'Triangle △',
+                    'leftshoulder': 'L1', 'rightshoulder': 'R1', 'lefttrigger': 'L2',
+                    'righttrigger': 'R2', 'leftstick': 'L3', 'rightstick': 'R3',
+                    'start': 'Options', 'back': 'Share', 'touchpad': 'Touchpad click'},
+    'xbox': {'a': 'A', 'b': 'B', 'x': 'X', 'y': 'Y', 'leftshoulder': 'LB',
+             'rightshoulder': 'RB', 'lefttrigger': 'LT', 'righttrigger': 'RT',
+             'leftstick': 'Left stick click', 'rightstick': 'Right stick click',
+             'start': 'Menu', 'back': 'View', 'touchpad': 'Touchpad click'},
+    'nintendo': {'a': 'B', 'b': 'A', 'x': 'Y', 'y': 'X', 'leftshoulder': 'L',
+                 'rightshoulder': 'R', 'lefttrigger': 'ZL', 'righttrigger': 'ZR',
+                 'leftstick': 'Left stick click', 'rightstick': 'Right stick click',
+                 'start': '+', 'back': '−', 'misc1': 'Capture'},
+    'steam': {'a': 'A', 'b': 'B', 'x': 'X', 'y': 'Y', 'leftshoulder': 'L1',
+              'rightshoulder': 'R1', 'lefttrigger': 'L2', 'righttrigger': 'R2',
+              'leftstick': 'Left stick click', 'rightstick': 'Right stick click',
+              'start': 'Menu', 'back': 'View', 'misc1': 'Quick access',
+              'paddle1': 'R4', 'paddle2': 'L4', 'paddle3': 'R5', 'paddle4': 'L5'},
+    'generic': {'a': 'South button', 'b': 'East button', 'x': 'West button', 'y': 'North button'},
+}
 MOUSE_SENSITIVITY = [('0.25', '0.25'), ('0.5', '0.5'), ('0.75', '0.75'), ('1.0', '1.0 (default)'),
                      ('1.25', '1.25'), ('1.5', '1.5'), ('2.0', '2.0'), ('2.5', '2.5'), ('3.0', '3.0'),
                      ('4.0', '4.0')]
@@ -208,12 +238,71 @@ APP_DEFAULTS = {'game_dir': '', 'game_dir_u1': '', 'game_dir_u2': '', 'game_dir_
                 'anti_aliasing': 'off', 'aa_sharpness': '0.2', 'frame_generation': 'off',
                 'frame_gen_multiplier': '2', 'extra_env': '', 'close_on_play': False,
                 'mouse_look': True, 'mouse_sensitivity': '1.0', 'mouse_invert_y': False,
-                'pad_invert_y': False, 'art_banner': '', 'art_u1': '', 'art_u2': '', 'art_u3': '', 'steam_art': '', 'art_crops': {}, 'shortcut_name': 'Uncharted: The Nathan Drake Collection', 'shortcut_icon': '', 'trophy_game': 'u1', 'pad_vibration': True, 'pad_vibration_strength': '100', 'button_prompts': 'auto', 'key_bindings': {}, 'pad_bindings': {}, 'check_updates': True,
+                'pad_invert_y': False, 'art_banner': '', 'art_u1': '', 'art_u2': '', 'art_u3': '', 'steam_art': '', 'art_crops': {}, 'shortcut_name': 'Uncharted: The Nathan Drake Collection', 'shortcut_icon': '', 'trophy_game': 'u1', 'pad_vibration': True, 'pad_vibration_strength': '100', 'button_prompts': 'auto', 'controller_id': 'auto', 'controller_profile': 'auto', 'controller_model': 'auto', 'pad_mapping_mode': 'recommended', 'key_bindings': {}, 'pad_bindings': {}, 'check_updates': True,
                 **{key: 'auto' for key in FIXES},
                 **{f'{game}_infinite_{cheat}': False for game, _t, _s, _e in GAMES for cheat in ('health', 'ammo')}}
 
 
 UI_LANGUAGE = 'en'
+
+CONTROLLER_PRESET_KEYS = ('controller_profile', 'controller_model', 'pad_mapping_mode',
+                         'button_prompts', 'pad_invert_y', 'pad_vibration', 'pad_vibration_strength')
+
+
+def controller_preset(settings):
+    """Snapshot preferences, never device identity, capabilities or game paths."""
+    from uncharted_controller_art import MODELS
+    if not isinstance(settings, dict):
+        raise ValueError('Invalid controller profile')
+    result = {key: settings.get(key, APP_DEFAULTS[key]) for key in CONTROLLER_PRESET_KEYS}
+    for key, options in (('controller_profile', CONTROLLER_PROFILES), ('controller_model', MODELS),
+                         ('pad_mapping_mode', MAPPING_MODES), ('button_prompts', BUTTON_PROMPTS)):
+        if not isinstance(result[key], str) or result[key] not in dict(options):
+            raise ValueError(f'Invalid {key}')
+    for key in ('pad_invert_y', 'pad_vibration'):
+        if not isinstance(result[key], bool):
+            raise ValueError(f'Invalid {key}')
+    result['pad_vibration_strength'] = str(vibration_strength(settings))
+    bindings = settings.get('pad_bindings', {})
+    if not isinstance(bindings, dict):
+        raise ValueError('Invalid controller assignments')
+    result['pad_bindings'] = {}
+    allowed = {value for value, _title in PAD_BUTTONS}
+    for action, default in DEFAULT_PAD.items():
+        value = bindings.get(action, default)
+        if not isinstance(value, str) or not 1 <= len(value.split('|')) <= 2 or any(
+                button not in allowed for button in value.split('|')):
+            raise ValueError(f'Invalid assignment: {action}')
+        result['pad_bindings'][action] = value
+    return result
+
+
+def read_controller_presets():
+    path = CONFIG_DIR / 'controller_profiles.json'
+    try:
+        profiles = json.loads(path.read_text(encoding='utf-8-sig'))
+    except FileNotFoundError:
+        return {}
+    if not isinstance(profiles, dict) or any(not name.strip() or not isinstance(value, dict)
+                                            for name, value in profiles.items()):
+        raise ValueError('Invalid controller profiles file')
+    return profiles
+
+
+def write_controller_presets(profiles):
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', dir=CONFIG_DIR,
+                                         prefix='controller_profiles-', suffix='.tmp', delete=False) as stream:
+            temporary = Path(stream.name)
+            stream.write(json.dumps(profiles, ensure_ascii=False, indent=2) + '\n')
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, CONFIG_DIR / 'controller_profiles.json')
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
 
 
 def _(text):
@@ -293,6 +382,15 @@ def load_json(path, default):
         return default
 
 
+def load_settings():
+    """Use the same legacy binding migration for the window and --play shortcuts."""
+    saved = load_json(CONFIG_FILE, {})
+    settings = {**APP_DEFAULTS, **saved}
+    if 'pad_mapping_mode' not in saved and saved.get('pad_bindings'):
+        settings['pad_mapping_mode'] = 'custom'
+    return settings
+
+
 def ini_path():
     return Path(os.environ.get('BB_CONFIG', DATA_DIR / 'bbport.ini'))
 
@@ -360,7 +458,7 @@ def vibration_strength(s):
     """Saved vibration percentage, clamped at the launcher/runtime boundary."""
     try:
         return min(100, max(0, int(float(s.get('pad_vibration_strength', 100)))))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return 100
 
 
@@ -383,16 +481,86 @@ def controller_probe_environment(probe):
 
 
 def parse_controller_probe(text):
-    """Parse bb-probe's deliberately small key=value controller response."""
+    """Parse bb-probe's key=value response, including every connected controller."""
     values = {}
     for line in text.splitlines():
         if '=' in line:
             key, value = line.split('=', 1)
             values[key.strip()] = value.strip()
-    return {'connected': values.get('connected') == '1',
-            'name': values.get('name', ''),
-            'rumble': values.get('rumble') == '1',
-            'tested': values.get('tested') == '1'}
+    controllers = []
+    try:
+        count = max(0, int(values.get('count', '0')))
+    except ValueError:
+        count = 0
+    for index in range(count):
+        prefix = f'controller.{index}.'
+        if prefix + 'id' not in values:
+            continue
+        controllers.append({
+            'id': values[prefix + 'id'], 'name': values.get(prefix + 'name', ''),
+            'type': values.get(prefix + 'type', 'unknown'),
+            'profile': values.get(prefix + 'profile', 'generic'),
+            'labels': {key: values.get(prefix + key, 'Unknown')
+                       for key in ('south', 'east', 'west', 'north')},
+            'rumble': values.get(prefix + 'rumble') == '1',
+            'touchpad': values.get(prefix + 'touchpad') == '1',
+        })
+        if prefix + 'buttons' in values:
+            controllers[-1]['buttons'] = [v for v in values[prefix + 'buttons'].split(',') if v]
+            controllers[-1]['axes'] = [v for v in values.get(prefix + 'axes', '').split(',') if v]
+            controllers[-1]['touchpads'] = values.get(prefix + 'touchpads', '0')
+    # Older probes reported one controller without an indexed list.
+    if not controllers and values.get('connected') == '1' and values.get('name'):
+        controllers.append({'id': 'auto', 'name': values['name'], 'type': 'unknown',
+                            'profile': 'generic', 'labels': {},
+                            'rumble': values.get('rumble') == '1', 'touchpad': False})
+    return {'connected': bool(controllers), 'controllers': controllers,
+            'rumble': values.get('rumble') == '1', 'tested': values.get('tested') == '1'}
+
+
+def effective_controller_profile(settings, controller=None):
+    """The profile shown and sent to the runtime: a manual override or SDL detection."""
+    forced = str(settings.get('controller_profile') or 'auto')
+    if forced != 'auto':
+        return forced
+    return (controller or {}).get('profile', 'generic')
+
+
+def pad_button_options(profile):
+    """Physical SDL button names labelled for the selected controller family."""
+    names = {value: label for value, label in PAD_BUTTONS}
+    names.update(PAD_PROFILE_LABELS.get(profile, PAD_PROFILE_LABELS['generic']))
+    return [(value, names[value]) for value, _label in PAD_BUTTONS]
+
+
+def split_pad_binding(value):
+    valid = {key for key, _label in PAD_BUTTONS}
+    return tuple(part if part in valid else 'none'
+                 for part in (str(value).split('|') + ['none', 'none'])[:2])
+
+
+def effective_pad_bindings(settings):
+    mode = settings.get('pad_mapping_mode') or ('custom' if settings.get('pad_bindings') else 'recommended')
+    return {**DEFAULT_PAD, **((settings.get('pad_bindings') or {})
+                             if mode == 'custom' else {})}
+
+
+def available_pad_buttons(controller):
+    if not controller or 'buttons' not in controller:
+        return None  # Offline or older probe: capabilities have not been checked.
+    return set(controller['buttons']) | ({'lefttrigger', 'righttrigger'} & set(controller['axes']))
+
+
+def effective_controller_model(settings, controller):
+    from uncharted_controller_art import MODELS
+    manual = settings.get('controller_model', 'auto')
+    if manual != 'auto' and manual in dict(MODELS):
+        return manual
+    # A family or a Steam virtual controller does not establish a physical model.
+    return {'ps3': 'ps3', 'ps4': 'playstation', 'ps5': 'ps5',
+            'xbox360': 'xbox', 'xboxone': 'xbox', 'switchpro': 'nintendo',
+            'gamecube': 'gamecube'}.get(
+                (controller or {}).get('type'), 'generic')
 
 
 def side_buttons():
@@ -444,7 +612,7 @@ def input_ini_path():
 def write_input_ini(s):
     """input.ini: the keyboard, mouse and controller bindings the game reads at start."""
     keys = {**DEFAULT_KEYS, **(s.get('key_bindings') or {})}
-    pad = {**DEFAULT_PAD, **(s.get('pad_bindings') or {})}
+    pad = effective_pad_bindings(s)
     lines = ['# Uncharted controls (written by the launcher, Controls page)',
              f"mouse_look={1 if s.get('mouse_look', True) else 0}",
              f"mouse_sensitivity={mouse_sensitivity(s)}",
@@ -453,7 +621,9 @@ def write_input_ini(s):
              f"pad_vibration={1 if s.get('pad_vibration', True) else 0}",
              f"pad_vibration_strength={vibration_strength(s)}"]
     lines += [f'key.{action}={keys.get(action, "")}' for action in DEFAULT_KEYS]
-    lines += [f'pad.{action}={pad.get(action, "none")}' for action in DEFAULT_PAD]
+    for action in DEFAULT_PAD:
+        first, second = split_pad_binding(pad.get(action, 'none'))
+        lines.append(f'pad.{action}={first}' + (f'|{second}' if second != 'none' else ''))
     path = input_ini_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text('\n'.join(lines) + '\n', encoding='utf-8')
@@ -540,6 +710,8 @@ def game_environment(s, start=None):
     for key, (_title, _hint, choices) in FIXES.items():
         env.update(choices.get(str(s.get(key) or 'auto'), {}))
     env['BB_BUTTON_PROMPTS'] = str(s.get('button_prompts') or 'auto')
+    env['BB_PAD_DEVICE'] = str(s.get('controller_id') or 'auto')
+    env['BB_PAD_PROFILE'] = str(s.get('controller_profile') or 'auto')
     env['BB_CHEATS'] = ','.join(f'{game}:{cheat}' for game, _t, _s, _e in GAMES for cheat in ('health', 'ammo')
                                 if s.get(f'{game}_infinite_{cheat}'))
     for item in str(s['extra_env']).split():
@@ -563,6 +735,7 @@ COLORS = {'surface': SURFACE, 'card': CARD, 'card_hi': CARD_HI, 'line': LINE, 't
           'button': '#2a2117', 'button_hi': '#36291c'}
 # Sidebar icons (Segoe Fluent Icons on Windows 11, Segoe MDL2 Assets on Windows 10).
 NAV_ICONS = {'play': '\ue768', 'game': '\ue7fc', 'display': '\ue7f4', 'controls': '\ue765',
+             'controllers': '\ue7fc',
              'cheats': '\ue945', 'fixes': '\ue90f', 'trophies': '\ue734', 'advanced': '\ue713', 'log': '\ue8a5'}
 # Trophy grades as the console colours them (the platinum cool white-blue, the rest metal).
 TROPHY_COLORS = {'P': '#9fd0f5', 'G': GOLD, 'S': '#cfd3da', 'B': '#cf8548'}
@@ -574,7 +747,7 @@ class Launcher:
         global UI_LANGUAGE
         self.tk, self.ttk, self.filedialog, self.messagebox = tk, ttk, filedialog, messagebox
         self.root = root
-        self.app = {**APP_DEFAULTS, **load_json(CONFIG_FILE, {})}
+        self.app = load_settings()
         UI_LANGUAGE = uncharted_i18n.language_code(self.app.get('ui_language', ''))
         self.configure_art()
         self.vars = {}
@@ -1030,7 +1203,8 @@ class Launcher:
         tk.Frame(side, bg=LINE, height=1).pack(fill='x', padx=18, pady=(16, 14))
         self.nav, self.nav_pills, self.nav_icons, self.nav_marks, self.current_page = {}, {}, {}, {}, None
         for name, title in (('play', _('Play')), ('game', _('Game')), ('cheats', _('Cheats')), ('display', _('Display')),
-                            ('controls', _('Controls')), ('fixes', _('Fixes')), ('trophies', _('Trophies')), ('advanced', _('Advanced')),
+                            ('controls', _('Controls')), ('controllers', _('Controllers')),
+                            ('fixes', _('Fixes')), ('trophies', _('Trophies')), ('advanced', _('Advanced')),
                             ('log', _('Log'))):
             row = tk.Frame(side, bg=BG, cursor='hand2')
             row.pack(fill='x', padx=(0, 12), pady=2)
@@ -1089,6 +1263,7 @@ class Launcher:
         self.build_game()
         self.build_display()
         self.build_controls()
+        self.build_controllers()
         self.build_fixes()
         self.build_trophies()
         self.build_cheats()
@@ -1420,7 +1595,7 @@ class Launcher:
 
     def build_controls(self):
         f = self.page('controls', _('Controls'),
-                      _('Keyboard, mouse and controller. They work together; changes apply when the game starts.'))
+                      _('Keyboard and mouse. They work together with the controller; changes apply when the game starts.'))
         self.key_buttons = {}
         self.capturing = None
         self.section(f, _('Mouse'), top=6)
@@ -1435,12 +1610,6 @@ class Launcher:
                    'type a number (0.1 to 10) for a faster turn.'))
         self.check(f, 'mouse_invert_y', _('Invert the mouse vertically'))
 
-        self.section(f, _('Button pictures'))
-        self.row(f, _('Show in the game'), self.choice(f, 'button_prompts', BUTTON_PROMPTS, 40),
-                 _('The pictures of buttons in menus and hints. Automatic shows your keys while you use '
-                   'the keyboard or mouse, Xbox buttons after an Xbox (or other) controller, and the '
-                   'PlayStation buttons after a PlayStation controller.'))
-
         self.section(f, _('Keyboard and mouse buttons'))
         self.note(f, _('Click a box, then press a key or a mouse button (the wheel counts too). '
                        '✕ removes a binding. Each action can have two.'), top=2)
@@ -1449,7 +1618,8 @@ class Launcher:
         table.grid(row=self.next_row(card), column=0, columnspan=2, sticky='w', pady=(10, 0))
         rows = [(a, t) for a, t, _k, _p in BUTTON_ACTIONS] + [(a, t) for a, t, _k in STICK_ACTIONS]
         for r, (action, title) in enumerate(rows):
-            self.ttk.Label(table, text=_(title)).grid(row=r, column=0, sticky='w', padx=(0, 24), pady=3)
+            self.ttk.Label(table, text=_(title),font=('Segoe UI Symbol',11)).grid(
+                row=r, column=0, sticky='w', padx=(0,24), pady=3)
             for slot in (0, 1):
                 button = self.tk.Button(table, width=16, relief='flat', bg=CARD_HI, fg=TEXT,
                                         activebackground='#30251a', activeforeground=TEXT,
@@ -1468,30 +1638,70 @@ class Launcher:
         holder.grid(row=self.next_row(card), column=0, columnspan=2, sticky='w', pady=(12, 0))
         self.pill(holder, _('Default keys'), self.reset_keys).pack(side='left')
 
-        self.section(f, _('Controller'))
-        self.note(f, _('Which controller button gives each PS4 button (Xbox / PlayStation names).'), top=2)
-        self.pad_vars = {}
-        for action, title, _k, _p in BUTTON_ACTIONS:
-            var = self.tk.StringVar(value=(self.app.get('pad_bindings') or {}).get(action, DEFAULT_PAD[action]))
-            self.pad_vars[action] = var
-            values = [v for v, _t in PAD_BUTTONS]
-            box = self.ttk.Combobox(f, values=[_(t) for _v, t in PAD_BUTTONS], state='readonly', width=26)
-            box.current(values.index(var.get()) if var.get() in values else values.index('none'))
-            box.bind('<<ComboboxSelected>>', lambda _e, b=box, v=var: v.set(values[b.current()]))
-            var.trace_add('write', lambda *_a, b=box, v=var: b.current(values.index(v.get())))
-            self.row(f, _(title), box)
-        self.check(f, 'pad_invert_y', _('Invert the right stick vertically'))
+
+    def build_controllers(self):
+        f = self.page('controllers', _('Controllers'),
+                      _('Choose the active controller, its button style and how its buttons are mapped.'))
+        from uncharted_widgets import ControllerDiagram, Slider
+        from uncharted_controller_art import MODELS
+        self.controllers = []
+        self.controller_ids = ['auto']
+
+        self.section(f, _('Saved profiles'), top=6)
+        self.controller_preset_name = self.tk.StringVar()
+        self.controller_preset_box = self.ttk.Combobox(self.target(f), width=38, state='readonly',
+                                                     textvariable=self.controller_preset_name)
+        self.row(f, _('Saved profile'), self.controller_preset_box,
+                 _('Create a new profile from your current settings. Select an existing profile to load or update it.'))
+        holder = self.tk.Frame(self.target(f), bg=CARD)
+        holder.grid(row=self.next_row(self.target(f)), column=0, columnspan=2, sticky='w', pady=(8, 0))
+        self.controller_preset_actions = []
+        for index,(title, command) in enumerate((('Create new profile', lambda: self.save_controller_preset(create=True)),
+                               ('Load profile', self.load_controller_preset),
+                               ('Save changes', self.save_controller_preset),
+                               ('Rename profile', self.rename_controller_preset),
+                               ('Delete profile', self.delete_controller_preset))):
+            button = self.pill(holder, _(title), command)
+            button.grid(row=index//3,column=index%3,sticky='w',padx=(0,self.px(8)),pady=(0,self.px(8)))
+            if title != 'Create new profile':
+                button.configure(state='disabled')
+                self.controller_preset_actions.append(button)
+        self.controller_preset_name.trace_add('write', self.update_controller_preset_actions)
+        self.controller_preset_status = self.ttk.Label(self.target(f), style='Muted.TLabel',
+                                                      wraplength=self.px(580))
+        self.controller_preset_status.grid(row=self.next_row(self.target(f)), column=0, columnspan=2,
+                                           sticky='w', pady=(8, 0))
+        try:
+            self.controller_preset_box.configure(values=sorted(read_controller_presets(), key=str.casefold))
+            self.controller_preset_status.configure(text=_('New profiles are named Profile 1, Profile 2, Profile 3…'))
+        except (OSError, ValueError) as error:
+            self.controller_preset_status.configure(text=_('Could not read profiles: {}').format(error))
+
+        self.section(f, _('Active controller'))
+        self.controller_select_box = self.ttk.Combobox(self.target(f), state='readonly', width=48,
+                                                        values=[_('Automatic')])
+        self.controller_select_box.current(0)
+        self.controller_select_box.bind('<<ComboboxSelected>>', self.select_controller)
+        self.row(f, _('Use for the game'), self.controller_select_box,
+                 _('Automatic uses the first connected controller. Choose one here when several are connected.'))
+        self.controller_profile_label = self.ttk.Label(self.target(f), text=_('Detecting…'))
+        self.row(f, _('Detected profile'), self.controller_profile_label)
+        self.row(f, _('Use profile'),
+                 self.choice(f, 'controller_profile', CONTROLLER_PROFILES, 32,
+                             on_change=self.update_controller_ui),
+                 _('Automatic follows SDL detection. Override it only when a controller reports the wrong family.'))
+        self.controller_applied_label = self.ttk.Label(self.target(f), text='')
+        self.row(f, _('Applied profile'), self.controller_applied_label)
+        self.controller_status = self.ttk.Label(self.target(f), text=_('Checking controller features…'),
+                                                style='Muted.TLabel')
+        self.row(f, _('Status'), self.controller_status)
         card = self.target(f)
         holder = self.tk.Frame(card, bg=CARD)
         holder.grid(row=self.next_row(card), column=0, columnspan=2, sticky='w', pady=(12, 0))
-        self.pill(holder, _('Default controller buttons'), self.reset_pad).pack(side='left')
+        self.controller_refresh_button = self.pill(holder, _('Detect controllers'), self.detect_controller)
+        self.controller_refresh_button.pack(side='left')
 
         self.section(f, _('Vibration'))
-        self.controller_name = self.ttk.Label(self.target(f), text=_('Detecting…'))
-        self.row(f, _('Controller'), self.controller_name)
-        self.controller_status = self.ttk.Label(self.target(f), text=_('Checking vibration support…'),
-                                                style='Muted.TLabel')
-        self.row(f, _('Status'), self.controller_status)
         self.check(f, 'pad_vibration', _('Controller vibration'),
                    _('The setting applies the next time the game starts.'))
         self.row(f, _('Vibration intensity'),
@@ -1500,12 +1710,476 @@ class Launcher:
         card = self.target(f)
         holder = self.tk.Frame(card, bg=CARD)
         holder.grid(row=self.next_row(card), column=0, columnspan=2, sticky='w', pady=(12, 0))
-        self.controller_refresh_button = self.pill(holder, _('Detect controller'), self.detect_controller)
-        self.controller_refresh_button.pack(side='left')
         self.controller_test_button = self.pill(holder, _('Test vibration'),
                                                 lambda: self.detect_controller(test=True))
-        self.controller_test_button.pack(side='left', padx=(8, 0))
+        self.controller_test_button.pack(side='left')
         self.controller_test_button.configure(state='disabled')
+        self.section(f, _('Layout and assignments'))
+        self.row(f, _('Visual model'), self.choice(f, 'controller_model', MODELS, 38,
+                 on_change=self.update_controller_ui),
+                 _('A manual model changes the illustration, not the available buttons.'))
+        self.row(f, _('Mapping mode'),
+                 self.choice(f, 'pad_mapping_mode', MAPPING_MODES, 28,
+                             on_change=self.update_mapping_controls),
+                 _('Default: original buttons. Custom: edit your buttons.'))
+        self.mapping_note = self.ttk.Label(self.target(f), text='', style='Muted.TLabel', wraplength=self.px(580))
+        self.row(f, _('Assignment status'), self.mapping_note)
+        self.controller_watch = None
+        self.mapping_drafts = {}
+        self.editor_action = None
+        self.controller_watch_button = self.pill(self.target(f), _('Test buttons'), self.test_controller_buttons)
+        self.controller_watch_button.grid(row=self.next_row(self.target(f)),column=0,columnspan=2,sticky='w',pady=(0,8))
+        self.controller_watch_status = self.ttk.Label(self.target(f),text='',style='Muted.TLabel',wraplength=self.px(580))
+        self.controller_watch_status.grid(row=self.next_row(self.target(f)),column=0,columnspan=2,sticky='w')
+        if not getattr(self,'controller_watch_destroy_bound',False):
+            self.root.bind('<Destroy>',lambda e:self.stop_controller_buttons() if e.widget==self.root else None,add='+')
+            self.controller_watch_destroy_bound=True
+        self.pad_vars = {a: self.tk.StringVar(value=(self.app.get('pad_bindings') or {}).get(a, DEFAULT_PAD[a]))
+                         for a in DEFAULT_PAD}
+        self.mapping_workspace = self.tk.Frame(self.target(f), bg=CARD)
+        self.mapping_workspace.grid(row=self.next_row(self.target(f)),column=0,columnspan=2,sticky='ew')
+        self.mapping_workspace.columnconfigure(0,weight=1)
+        self.mapping_workspace.columnconfigure(1,minsize=self.px(320),weight=0)
+        self.controller_diagram = ControllerDiagram(
+            self.tk, self.mapping_workspace, COLORS, self.px, self.font_ui_md, _, self.edit_physical_button)
+        self.controller_diagram.grid(row=0,column=0,sticky='new')
+        self.mapping_editor = self.tk.Frame(self.mapping_workspace,bg=CARD_HI,padx=self.px(16),pady=self.px(16))
+        self.mapping_editor.columnconfigure(0,weight=1)
+        self.mapping_editor.grid(row=0,column=1,sticky='new',padx=(self.px(18),0))
+        self.selected_control = None
+        self.mapping_selected_label = self.tk.Label(self.mapping_editor,text=_('Select a button'),
+            bg=CARD_HI,fg=GOLD,font=('Segoe UI Symbol',14),anchor='w')
+        self.mapping_selected_label.grid(row=0,column=0,sticky='ew',pady=(0,self.px(8)))
+        self.mapping_selected_status = self.tk.Label(self.mapping_editor,text='',bg=CARD_HI,fg=TEXT,
+            font=('Segoe UI Symbol',11),wraplength=self.px(260),justify='left',anchor='nw')
+        self.mapping_selected_status.grid(row=1,column=0,sticky='ew',pady=(0,self.px(8)))
+        self.tk.Label(self.mapping_editor,text=_('Game button (PS4)'),bg=CARD_HI,fg=MUTED,
+                      font=self.font_ui,anchor='w').grid(row=2,column=0,sticky='w')
+        self.mapping_action = self.ttk.Combobox(self.mapping_editor,state='readonly',width=22,
+            font=('Segoe UI Symbol',11),values=[_(t) for _a,t,_k,_p in BUTTON_ACTIONS])
+        self.mapping_action.current(0)
+        self.mapping_action.bind('<<ComboboxSelected>>',self.select_game_button)
+        self.mapping_action.grid(row=3,column=0,sticky='ew',pady=(self.px(4),self.px(12)))
+        self.binding_boxes = []
+        for slot,title in enumerate(('Your controller button','Alternate button (optional)')):
+            self.tk.Label(self.mapping_editor,text=_(title),bg=CARD_HI,fg=MUTED,font=self.font_ui,
+                          anchor='w').grid(row=4+slot*2,column=0,sticky='w')
+            box=self.ttk.Combobox(self.mapping_editor,state='readonly',width=22,font=('Segoe UI Symbol',11))
+            box.grid(row=5+slot*2,column=0,sticky='ew',pady=(self.px(4),self.px(12)))
+            self.binding_boxes.append(box)
+            box.bind('<<ComboboxSelected>>',self.stage_mapping_change)
+        self.mapping_use_selected = self.ttk.Button(self.mapping_editor,text=_('Use as alternate'),
+                                                   command=self.stage_selected_control)
+        self.mapping_use_selected.grid(row=8,column=0,sticky='ew',pady=(0,self.px(8)))
+        self.mapping_apply = self.ttk.Button(self.mapping_editor,text=_('Apply change'),command=self.apply_mapping)
+        self.mapping_apply.grid(row=9,column=0,sticky='ew')
+        self.mapping_hint = self.tk.Label(self.mapping_editor,text='',bg=CARD_HI,fg=MUTED,
+            font=self.font_ui_sm,wraplength=self.px(260),justify='left',anchor='nw')
+        self.mapping_hint.grid(row=10,column=0,sticky='ew',pady=(self.px(10),0))
+        self.check(f, 'pad_invert_y', _('Invert the right stick vertically'))
+        card = self.target(f)
+        holder = self.tk.Frame(card, bg=CARD)
+        holder.grid(row=self.next_row(card), column=0, columnspan=2, sticky='w', pady=(12, 0))
+        self.mapping_reset_button=self.pill(holder, _('Default controller buttons'), self.reset_pad)
+        self.mapping_reset_button.pack(side='left')
+
+        self.section(f, _('In-game icons'))
+        self.row(f, _('Show in the game'), self.choice(f,'button_prompts',BUTTON_PROMPTS,40,
+                 on_change=self.update_prompt_preview),
+                 _('This changes the icons in the game, not your controller assignments.'))
+        self.prompt_preview = self.tk.Label(self.target(f),text='',bg=CARD,fg=TEXT,
+                                           font=('Segoe UI Symbol',18),anchor='w',justify='left')
+        self.row(f, _('Preview'),self.prompt_preview)
+        self.prompt_preview_note = self.ttk.Label(self.target(f),text='',style='Muted.TLabel',wraplength=self.px(560))
+        self.row(f, _('Behavior'),self.prompt_preview_note)
+        self.update_prompt_preview()
+
+        self.update_controller_ui()
+
+    def update_controller_preset_actions(self, *_args):
+        name = self.controller_preset_name.get()
+        selected = bool(name) and name in self.controller_preset_box['values']
+        for button in self.controller_preset_actions:
+            button.configure(state='normal' if selected else 'disabled')
+
+    def controller_dialog(self, title, message, action, initial=None):
+        """Profile dialogs use the launcher's palette and explicit, localized actions."""
+        tk=self.tk
+        window=tk.Toplevel(self.root)
+        window.withdraw()
+        window.title(title)
+        window.transient(self.root)
+        window.configure(bg=CARD)
+        window.resizable(False,False)
+        previous_focus=self.root.focus_get()
+        previous_grab=self.root.grab_current()
+        result=None
+        tk.Frame(window,bg=GOLD,height=self.px(3)).pack(fill='x')
+        body=tk.Frame(window,bg=CARD,padx=self.px(24),pady=self.px(22))
+        body.pack(fill='both',expand=True)
+        tk.Label(body,text=title,bg=CARD,fg=GOLD,font=('Segoe UI Semibold',15),
+                 anchor='w').pack(fill='x')
+        tk.Label(body,text=message,bg=CARD,fg=TEXT,font=self.font_ui,
+                 justify='left',wraplength=self.px(420),anchor='w').pack(fill='x',pady=(self.px(10),self.px(18)))
+        entry=None
+        if initial is not None:
+            entry=tk.Entry(body,name='profile_name',bg=BG,fg=TEXT,insertbackground=GOLD,
+                selectbackground=GOLD,selectforeground=BG,font=self.font_ui_md,relief='flat',
+                highlightthickness=1,highlightbackground=LINE,highlightcolor=GOLD)
+            entry.insert(0,initial)
+            entry.selection_range(0,'end')
+            entry.pack(fill='x',ipady=self.px(9))
+        error=tk.Label(body,text='',bg=CARD,fg='#efb078',font=self.font_ui_sm,
+                       wraplength=self.px(420),justify='left',anchor='w')
+        buttons=tk.Frame(body,bg=CARD)
+        buttons.pack(fill='x',pady=(self.px(22),0))
+        def finish(accepted):
+            nonlocal result
+            value=entry.get().strip() if entry is not None else True
+            if accepted and entry is not None and (not value or len(value)>80 or any(ord(c)<32 for c in value)):
+                error.configure(text=_('Use a name between 1 and 80 characters.'))
+                error.pack(fill='x',pady=(self.px(8),0),before=buttons)
+                window.update_idletasks()
+                window.geometry(f'{width}x{window.winfo_reqheight()}')
+                entry.focus_set()
+                return 'break'
+            result=value if accepted else None
+            window.destroy()
+            return 'break'
+        cancel=self.pill(buttons,_('Cancel'),lambda:finish(False))
+        accept=self.pill(buttons,action,lambda:finish(True),kind='primary')
+        accept.pack(side='right')
+        cancel.pack(side='right',padx=(0,self.px(10)))
+        for button,accepted in ((cancel,False),(accept,True)):
+            button.canvas.configure(takefocus=True,highlightthickness=1,
+                                    highlightbackground=CARD,highlightcolor=GOLD)
+            button.canvas.bind('<Return>',lambda _e,yes=accepted:finish(yes))
+            button.canvas.bind('<space>',lambda _e,yes=accepted:finish(yes))
+        window.bind('<Escape>',lambda _e:finish(False))
+        window.bind('<Return>',lambda _e:finish(True))
+        window.protocol('WM_DELETE_WINDOW',lambda:finish(False))
+        window.update_idletasks()
+        width=max(self.px(480),window.winfo_reqwidth())
+        height=window.winfo_reqheight()
+        x=self.root.winfo_rootx()+(self.root.winfo_width()-width)//2
+        y=self.root.winfo_rooty()+(self.root.winfo_height()-height)//2
+        x=max(0,min(x,window.winfo_screenwidth()-width))
+        y=max(0,min(y,window.winfo_screenheight()-height))
+        window.geometry(f'{width}x{height}+{x}+{y}')
+        try:
+            if self.root.winfo_viewable():
+                window.deiconify()
+                window.wait_visibility()
+                window.grab_set()
+                (entry if entry is not None else cancel.canvas).focus_set()
+            self.root.wait_window(window)
+        finally:
+            if window.winfo_exists():
+                window.destroy()
+            if previous_grab is not None and previous_grab.winfo_exists():
+                previous_grab.grab_set()
+            if previous_focus is not None and previous_focus.winfo_exists():
+                previous_focus.focus_set()
+        return result
+
+    def save_controller_preset(self, create=False):
+        if not self.discard_mapping_drafts():
+            return
+        name = self.controller_preset_name.get().strip()
+        try:
+            profiles = read_controller_presets()
+            if create:
+                number = 1
+                existing = {saved.casefold() for saved in profiles}
+                while _('Profile {}').format(number).casefold() in existing:
+                    number += 1
+                name = _('Profile {}').format(number)
+            else:
+                name = next((saved for saved in profiles if saved.casefold() == name.casefold()), name)
+                if name not in profiles:
+                    self.controller_preset_status.configure(text=_('Select a saved profile first.'))
+                    return
+                if not self.controller_dialog(_('Save changes'),_('Replace profile "{}"?').format(name),_('Save changes')):
+                    return
+            profiles[name] = controller_preset({**self.current(),
+                'pad_bindings': {a: v.get() for a, v in self.pad_vars.items()}})
+            write_controller_presets(profiles)
+        except (OSError, ValueError) as error:
+            self.controller_preset_status.configure(text=_('Could not save profile: {}').format(error))
+            return
+        self.controller_preset_box.configure(values=sorted(profiles, key=str.casefold))
+        self.controller_preset_name.set(name)
+        self.controller_preset_status.configure(text=_(
+            'Profile created: {}' if create else 'Profile saved: {}').format(name))
+
+    def load_controller_preset(self):
+        if not self.discard_mapping_drafts():
+            return
+        name = self.controller_preset_name.get().strip()
+        try:
+            profiles = read_controller_presets()
+            if name not in profiles:
+                self.controller_preset_status.configure(text=_('Select a saved profile first.'))
+                return
+            settings = controller_preset(profiles[name])
+        except (OSError, ValueError) as error:
+            self.controller_preset_status.configure(text=_('Could not load profile: {}').format(error))
+            return
+        for key in CONTROLLER_PRESET_KEYS:
+            self.var(key).set(settings[key])
+        for action, value in settings['pad_bindings'].items():
+            self.pad_vars[action].set(value)
+        self.update_controller_ui()
+        self.update_prompt_preview()
+        self.controller_preset_status.configure(text=_('Profile loaded: {}. Changes apply on the next game start.').format(name))
+
+    def delete_controller_preset(self):
+        name = self.controller_preset_name.get().strip()
+        try:
+            profiles = read_controller_presets()
+            if name not in profiles:
+                self.controller_preset_status.configure(text=_('Select a saved profile first.'))
+                return
+            if not self.controller_dialog(_('Delete profile'),
+                    _('Delete profile "{}"? Current settings will be kept.').format(name),_('Delete profile')):
+                return
+            del profiles[name]
+            write_controller_presets(profiles)
+        except (OSError, ValueError) as error:
+            self.controller_preset_status.configure(text=_('Could not delete profile: {}').format(error))
+            return
+        self.controller_preset_box.configure(values=sorted(profiles, key=str.casefold))
+        self.controller_preset_name.set('')
+        self.controller_preset_status.configure(text=_('Profile deleted: {}').format(name))
+
+    def rename_controller_preset(self):
+        old=self.controller_preset_name.get()
+        name=self.controller_dialog(_('Rename profile'),_('New profile name:'),_('Save name'),initial=old)
+        if name is None:
+            return
+        name=name.strip()
+        try:
+            profiles=read_controller_presets()
+            if old not in profiles:
+                raise ValueError(_('Select a saved profile first.'))
+            if not name or len(name)>80 or any(ord(c)<32 for c in name):
+                raise ValueError(_('Use a name between 1 and 80 characters.'))
+            if any(key!=old and key.casefold()==name.casefold() for key in profiles):
+                raise ValueError(_('A profile with that name already exists.'))
+            profiles[name]=profiles.pop(old)
+            write_controller_presets(profiles)
+        except (OSError,ValueError) as error:
+            self.controller_preset_status.configure(text=_('Could not save profile: {}').format(error))
+            return
+        self.controller_preset_box.configure(values=sorted(profiles,key=str.casefold))
+        self.controller_preset_name.set(name)
+        self.controller_preset_status.configure(text=_('Profile saved: {}').format(name))
+
+    def stage_mapping_change(self, _event=None):
+        if self.var('pad_mapping_mode').get()!='custom':
+            return
+        action=self.editor_action
+        parts=tuple(box._pad_values[box.current()] for box in self.binding_boxes)
+        if parts==split_pad_binding(self.pad_vars[action].get()):
+            self.mapping_drafts.pop(action,None)
+        else:
+            self.mapping_drafts[action]=parts
+        self.show_mapping_drafts()
+
+    def show_mapping_drafts(self):
+        if self.mapping_drafts:
+            names=', '.join(_(title) for action,title,_k,_p in BUTTON_ACTIONS if action in self.mapping_drafts)
+            self.mapping_hint.configure(text=_('Unapplied changes: {}. Select each game button to apply.').format(names),fg=GOLD)
+        else:
+            self.mapping_hint.configure(text=_('Choose Custom to edit assignments.') if self.var('pad_mapping_mode').get()!='custom' else
+                _('Either controller button sends the game button. Apply, then restart the game.'),fg=MUTED)
+
+    def discard_mapping_drafts(self):
+        if not getattr(self,'mapping_drafts',None):
+            return True
+        if not self.controller_dialog(_('Unapplied changes'),
+                _('Discard unapplied button changes and continue?'),_('Discard changes')):
+            return False
+        self.mapping_drafts.clear()
+        self.update_mapping_editor()
+        return True
+
+    def selected_controller(self):
+        selected = self.var('controller_id').get()
+        if selected == 'auto':
+            return self.controllers[0] if self.controllers else None
+        return next((controller for controller in self.controllers if controller['id'] == selected), None)
+
+    def select_controller(self, _event=None):
+        self.stop_controller_buttons()
+        index = self.controller_select_box.current()
+        if 0 <= index < len(self.controller_ids):
+            self.var('controller_id').set(self.controller_ids[index])
+        self.update_controller_ui()
+        self.show_controller_features(self.selected_controller())
+
+    def show_controller_features(self, controller, tested=None):
+        rumble = bool(controller and controller['rumble'])
+        self.controller_test_button.configure(state='normal' if rumble and not self.process else 'disabled')
+        if not controller:
+            self.controller_status.configure(text=_('Connect a controller, then detect again.'))
+            return
+        if tested is not None:
+            status = _('Connected · Vibration test completed') if tested \
+                else _('Connected · Vibration test failed')
+        elif rumble:
+            status = _('Connected · Vibration supported')
+        else:
+            status = _('Connected · Vibration not supported')
+        if controller['touchpad']:
+            status += ' · ' + _('Touchpad')
+        self.controller_status.configure(text=status)
+
+    def select_game_button(self, _event=None):
+        action=BUTTON_ACTIONS[max(0,self.mapping_action.current())][0]
+        bindings=effective_pad_bindings({**self.current(),
+            'pad_bindings':{a:v.get() for a,v in self.pad_vars.items()}})
+        diagram=self.controller_diagram
+        control=next((button for button in split_pad_binding(bindings[action])
+                      if button in diagram.hit_regions),None)
+        # Do not invoke the diagram's click callback: shared bindings could change the action.
+        self.selected_control=diagram.selected=control
+        diagram.highlight(control,'selected')
+        diagram.highlight(None,'hover')
+        self.update_mapping_editor()
+
+    def edit_physical_button(self,control):
+        self.selected_control=control
+        bindings=effective_pad_bindings({**self.current(),'pad_bindings':{a:v.get() for a,v in self.pad_vars.items()}})
+        actions=[a for a,value in bindings.items() if control in split_pad_binding(value)]
+        if actions:
+            self.mapping_action.current(next(i for i,item in enumerate(BUTTON_ACTIONS) if item[0]==actions[0]))
+        self.update_mapping_editor()
+
+    def update_mapping_editor(self):
+        options=self.mapping_options()
+        available=available_pad_buttons(self.selected_controller())
+        custom=self.var('pad_mapping_mode').get()=='custom'
+        action=BUTTON_ACTIONS[max(0,self.mapping_action.current())][0]
+        parts=split_pad_binding(self.pad_vars[action].get() if custom else DEFAULT_PAD[action])
+        self.editor_action=action
+        if custom:
+            parts=self.mapping_drafts.get(action,parts)
+        for slot,box in enumerate(self.binding_boxes):
+            allowed=[(value,label) for value,label in options
+                     if available is None or value in available or value in ('none',parts[slot])]
+            box._pad_values=[value for value,_label in allowed]
+            box.configure(values=[_(label) for _value,label in allowed],state='readonly' if custom else 'disabled')
+            box.current(box._pad_values.index(parts[slot]))
+        control=self.selected_control
+        self.mapping_selected_label.configure(text=dict(options).get(control,_('Select a button')))
+        bindings=effective_pad_bindings({**self.current(),'pad_bindings':{a:v.get() for a,v in self.pad_vars.items()}})
+        assigned=[_(t) for a,t,_k,_p in BUTTON_ACTIONS if control and control in split_pad_binding(bindings[a])]
+        exposed=control is not None and (available is None or control in available)
+        summary=' / '.join(assigned[:2])+(' +'+str(len(assigned)-2) if len(assigned)>2 else '')
+        status=_('Currently assigned: {}').format(summary or _('Not assigned')) if control else _('Choose the game button and the controller button that will activate it.')
+        if control and not exposed:
+            status+='\n'+_('This button is not exposed by the connected controller.')
+        self.mapping_selected_status.configure(text=status)
+        self.mapping_apply.configure(state='normal' if custom else 'disabled')
+        self.mapping_reset_button.configure(state='normal' if custom else 'disabled')
+        self.mapping_use_selected.configure(state='normal' if custom and exposed else 'disabled')
+        self.show_mapping_drafts()
+
+    def stage_selected_control(self):
+        control=self.selected_control
+        box=self.binding_boxes[1]
+        if self.var('pad_mapping_mode').get()=='custom' and control in box._pad_values:
+            box.current(box._pad_values.index(control))
+            self.stage_mapping_change()
+
+    def apply_mapping(self):
+        if self.var('pad_mapping_mode').get()!='custom':
+            return
+        action=BUTTON_ACTIONS[max(0,self.mapping_action.current())][0]
+        parts=[box._pad_values[box.current()] for box in self.binding_boxes]
+        previous=split_pad_binding(self.pad_vars[action].get())
+        available=available_pad_buttons(self.selected_controller())
+        if any(value!='none' and available is not None and value not in available and value!=previous[i]
+               for i,value in enumerate(parts)):
+            self.mapping_hint.configure(text=_('This button is not exposed by the connected controller.'))
+            return
+        if parts[0]==parts[1]:
+            parts[1]='none'
+        self.pad_vars[action].set(parts[0]+('|' + parts[1] if parts[1]!='none' else ''))
+        self.mapping_drafts.pop(action,None)
+        self.update_mapping_controls()
+
+    def update_prompt_preview(self):
+        style=self.var('button_prompts').get()
+        samples={'0':'✕   ○   △   ▢','xbox':'A   B   Y   X',
+                 'keyboard':'  '.join(self.key_list(a)[0] or '—' for a in ('cross','circle','triangle','square'))}
+        self.prompt_preview.configure(text=samples.get(style,'✕  ○  △  ▢     /     A  B  Y  X'))
+        self.prompt_preview_note.configure(text=_('Automatic follows the device used last. Manual choices keep one button style.')
+            if style=='auto' else _('The chosen icon style stays fixed; assignments stay unchanged.'))
+
+    def diagram_profile(self):
+        model = effective_controller_model(self.current(),self.selected_controller())
+        return {'ps3':'playstation','ps5':'playstation','steam_deck':'steam',
+                'steam_controller':'steam'}.get(model,model) if self.var('controller_model').get() != 'auto' \
+            else effective_controller_profile(self.current(),self.selected_controller())
+
+    def mapping_options(self):
+        options = dict(pad_button_options(self.diagram_profile()))
+        model = effective_controller_model(self.current(),self.selected_controller())
+        if model == 'ps3':
+            options.update(back='Select',start='Start')
+        elif model == 'ps5':
+            options.update(back='Create')
+        return list(options.items())
+
+    def update_mapping_controls(self):
+        if not getattr(self,'binding_boxes',None):
+            return
+        controller = self.selected_controller()
+        options = self.mapping_options()
+        available = available_pad_buttons(controller)
+        custom = self.var('pad_mapping_mode').get() == 'custom'
+        bindings = {a:v.get() for a,v in self.pad_vars.items()} if custom else DEFAULT_PAD
+        uses = {}
+        for a,value in bindings.items():
+            for button in set(split_pad_binding(value))-{'none'}:
+                uses.setdefault(button,[]).append(a)
+        shared = [dict(options).get(button,button) for button,actions in uses.items() if len(actions)>1]
+        missing = [dict(options).get(b,b) for b in uses if available is not None and b not in available]
+        status = _('Changes apply the next time the game starts.')
+        if effective_controller_model(self.current(),controller) == 'gamecube':
+            status += ' ' + _('The original GameCube controller has fewer buttons. Use Custom or the keyboard for missing game actions.')
+        if available is None:
+            status += ' ' + _('Capabilities not checked; offline editing is available.')
+        if missing:
+            status += ' ' + _('Not exposed: {}').format(', '.join(missing))
+        if shared:
+            status += ' ' + _('Multiple actions: {}').format(', '.join(shared))
+        self.mapping_note.configure(text=status)
+        model = effective_controller_model(self.current(),controller)
+        shown_bindings = dict(bindings)
+        if split_pad_binding(bindings['touchpad']) == ('back','none') and \
+                not any('touchpad' in split_pad_binding(v) for v in bindings.values()) and \
+                (available is None or 'touchpad' in available):
+            shown_bindings['touchpad'] = 'back|touchpad'
+        self.controller_diagram.set_controller(model,(controller or {}).get('name',''),bool(controller),
+            shown_bindings,dict(options),available,{a:_(t) for a,t,_k,_p in BUTTON_ACTIONS})
+        if self.selected_control not in self.controller_diagram.visible_controls:
+            self.selected_control=None
+        self.update_mapping_editor()
+
+    def update_controller_ui(self):
+        if not getattr(self, 'controller_diagram', None):
+            return
+        controller = self.selected_controller()
+        detected = (controller or {}).get('profile', 'generic')
+        self.controller_profile_label.configure(text=_(dict(CONTROLLER_PROFILES).get(detected, 'Generic'))
+                                                if controller else _('No controller connected'))
+        applied=effective_controller_profile(self.current(),controller)
+        self.controller_applied_label.configure(text=_(dict(CONTROLLER_PROFILES).get(applied,'Generic'))
+            if controller or self.var('controller_profile').get()!='auto' else _('Automatic · waiting for a controller'))
+        self.update_mapping_controls()
 
     def key_list(self, action):
         value = (self.app.get('key_bindings') or {}).get(action, DEFAULT_KEYS[action])
@@ -1612,8 +2286,11 @@ class Launcher:
         self.show_keys()
 
     def reset_pad(self):
+        if not self.discard_mapping_drafts():
+            return
         for action, var in self.pad_vars.items():
             var.set(DEFAULT_PAD[action])
+        self.update_mapping_controls()
 
     def build_fixes(self):
         f = self.page('fixes', _('Fixes'), _('Fixes that cost speed. Automatic turns each one on only where it '
@@ -1870,14 +2547,19 @@ class Launcher:
         """Save and rebuild every label as soon as the interface language changes."""
         global UI_LANGUAGE
         page = self.current_page or 'advanced'
+        drafts=dict(self.mapping_drafts)
+        self.stop_controller_buttons()
         self.collect()
         UI_LANGUAGE = uncharted_i18n.language_code(self.app['ui_language'])
         for child in self.root.winfo_children():
             child.destroy()
         self.vars = {}
         self.build()
+        self.mapping_drafts=drafts
+        self.update_mapping_editor()
         self.show(page)
         self.refresh()
+        self.detect_controller()
         if self.process:
             self.play_button.configure(state='disabled')
             self.stop_button.configure(state='normal')
@@ -1929,23 +2611,109 @@ class Launcher:
         except OSError:
             pass
 
+    def stop_controller_buttons(self):
+        token=getattr(self,'controller_watch',None)
+        if not token:
+            return
+        token.set()
+        self.controller_watch=None
+        if self.root.winfo_exists():
+            self.controller_diagram.show_pressed(())
+            self.controller_watch_button.configure(text=_('Test buttons'))
+            self.controller_watch_status.configure(text='')
+
+    def test_controller_buttons(self):
+        if self.controller_watch:
+            self.stop_controller_buttons()
+            self.controller_watch_status.configure(text=_('Button test stopped.'))
+            return
+        if self.process:
+            self.controller_watch_status.configure(text=_('Unavailable while the game is running.'))
+            return
+        probe=controller_probe_path()
+        if not probe:
+            self.controller_watch_status.configure(text=_('bb-probe.exe was not found.'))
+            return
+        token=self.controller_watch=threading.Event()
+        selected=self.var('controller_id').get()
+        self.controller_watch_button.configure(text=_('Stop button test'))
+        self.controller_watch_status.configure(text=_('Press buttons for 10 seconds. Blue: pressed · Gold: selected.'))
+        def deliver(controls=None,error=None):
+            if self.controller_watch is not token:
+                return
+            if controls is not None:
+                self.controller_diagram.show_pressed(controls)
+            else:
+                self.stop_controller_buttons()
+                self.controller_watch_status.configure(text=error or _('Button test completed.'))
+        def work():
+            process=None
+            timer=None
+            error=None
+            sampled=False
+            timed_out=threading.Event()
+            try:
+                process=subprocess.Popen([str(probe),'--controller-watch',selected],stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,text=True,encoding='utf-8',errors='replace',
+                    env=controller_probe_environment(probe),creationflags=NO_WINDOW)
+                def expire():
+                    timed_out.set()
+                    try:
+                        if process.poll() is None:
+                            process.kill()
+                    except OSError:
+                        pass  # The helper can exit between poll and kill.
+                timer=threading.Timer(15,expire)
+                timer.daemon=True
+                timer.start()
+                for line in process.stdout:
+                    if token.is_set():
+                        break
+                    if line.startswith('pressed='):
+                        sampled=True
+                        controls=set(line.strip()[8:].split(',')) & dict(PAD_BUTTONS).keys()
+                        self.ui_calls.put(lambda controls=controls:deliver(controls))
+                    elif line.startswith('watch_error='):
+                        error=_(line.strip().split('=',1)[1])
+                if not token.is_set():
+                    code=process.wait(timeout=2)
+                    if timed_out.is_set():
+                        error=_('Button test timed out.')
+                    elif code or not sampled:
+                        error=error or _('No button data received. Connect a controller and try again.')
+            except (OSError,subprocess.TimeoutExpired) as failure:
+                error=_('Button test failed: {}').format(str(failure)[:120])
+            finally:
+                if timer:
+                    timer.cancel()
+                if process:
+                    if process.poll() is None:
+                        process.kill()
+                    process.wait()
+                    process.stdout.close()
+                self.ui_calls.put(lambda error=error:deliver(error=error))
+        threading.Thread(target=work,daemon=True).start()
+
     def detect_controller(self, test=False):
-        """Detect or briefly rumble the first SDL gamepad without starting the game renderer."""
+        """List SDL gamepads or briefly rumble the selected one without starting the renderer."""
         if self.process:
             self.controller_status.configure(text=_('Unavailable while the game is running.'))
+            self.controller_refresh_button.configure(state='disabled')
+            self.controller_test_button.configure(state='disabled')
             return
         probe = controller_probe_path()
         if not probe:
-            self.controller_name.configure(text=_('Not available'))
             self.controller_status.configure(text=_('bb-probe.exe was not found.'))
+            self.controller_test_button.configure(state='disabled')
             return
         self.controller_refresh_button.configure(state='disabled')
         self.controller_test_button.configure(state='disabled')
         self.controller_status.configure(text=_('Testing…') if test else _('Detecting…'))
         strength = vibration_strength(self.current())
+        selected = self.var('controller_id').get()
 
         def work():
-            command = [str(probe), '--controller-test', str(strength)] if test \
+            command = [str(probe), '--controller-test', selected, str(strength)] if test \
                 else [str(probe), '--controller-info']
             try:
                 result = subprocess.run(command, capture_output=True, text=True, encoding='utf-8',
@@ -1956,7 +2724,8 @@ class Launcher:
                 info, error = parse_controller_probe(result.stdout), ''
             except (OSError, subprocess.TimeoutExpired) as failure:
                 info, error = None, str(failure)
-            self.ui_calls.put(lambda: self.show_controller(info, error, test))
+            self.ui_calls.put(lambda: self.show_controller(
+                info, error, test and selected == self.var('controller_id').get()))
         threading.Thread(target=work, daemon=True).start()
 
     def show_controller(self, info, error, test):
@@ -1967,27 +2736,36 @@ class Launcher:
             return
         self.controller_refresh_button.configure(state='normal')
         if error:
-            self.controller_name.configure(text=_('Not available'))
             self.controller_status.configure(text=_('Could not detect the controller: {}').format(error[:120]))
+            self.controller_test_button.configure(state='disabled')
             return
+        self.controllers = info['controllers']
+        selected = self.var('controller_id').get()
+        self.controller_ids = ['auto'] + [controller['id'] for controller in self.controllers]
+        labels = [_('Automatic')]
+        labels += [f"{controller['name']} · {controller['profile'].capitalize()}"
+                   for controller in self.controllers]
+        if selected not in self.controller_ids and selected != 'auto':
+            self.controller_ids.append(selected)
+            labels.append(_('Selected controller is not connected'))
+        self.controller_select_box.configure(values=labels)
+        self.controller_select_box.current(self.controller_ids.index(selected)
+                                           if selected in self.controller_ids else 0)
         if not info['connected']:
-            self.controller_name.configure(text=_('No controller detected'))
             self.controller_status.configure(text=_('Connect a controller, then detect again.'))
+            self.controller_test_button.configure(state='disabled')
+            self.update_controller_ui()
             return
-        self.controller_name.configure(text=info['name'] or _('Game controller'))
-        self.controller_test_button.configure(state='normal' if info['rumble'] else 'disabled')
-        if not info['rumble']:
-            status = _('Connected · Vibration not supported')
-        elif test:
-            status = _('Connected · Vibration test completed') if info['tested'] \
-                else _('Connected · Vibration test failed')
-        else:
-            status = _('Connected · Vibration supported')
-        self.controller_status.configure(text=status)
+        controller = self.selected_controller()
+        self.show_controller_features(controller, info['tested'] if test else None)
+        self.update_controller_ui()
 
     def play(self):
         if self.process:
             return
+        if not self.discard_mapping_drafts():
+            return
+        self.stop_controller_buttons()
         self.collect()
         folder = game_folder(self.app, self.app['start'])
         if not folder or not Path(folder).is_dir():
@@ -2465,6 +3243,9 @@ class Launcher:
                                          'saved in this launcher.'))
 
     def close(self):
+        if not self.discard_mapping_drafts():
+            return
+        self.stop_controller_buttons()
         try:
             self.collect()
         except Exception:  # never keep the window open over a settings problem
@@ -2602,7 +3383,7 @@ def main():
         sys.exit(install_update(args[1], args[2]))
     if FROZEN and UPDATE_DIR not in PORT_DIR.parents:
         shutil.rmtree(UPDATE_DIR, ignore_errors=True)  # what a finished update left behind
-    settings = {**APP_DEFAULTS, **load_json(CONFIG_FILE, {})}
+    settings = load_settings()
     if '--play' in args and game_available(settings, settings['start']):
         sys.exit(play_without_window(settings))
     try:
