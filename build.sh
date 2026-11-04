@@ -3,7 +3,7 @@ set -euo pipefail
 cd -- "$(dirname -- "$0")"
 mkdir -p out
 # Windows: MSYS2 CLANG64 (packages in packaging/windows/README.md). The GPU library is static
-# there and CMake links bb-probe.exe as well; no PGO (GCC-only flags), LTO off by default.
+# there and CMake links bb-probe.exe as well; clang PGO with pgo/merged.profdata, LTO off by default.
 case $(uname -s) in
 MINGW*|MSYS*)
     # shellcheck source=msys2-env.sh
@@ -21,12 +21,20 @@ MINGW*|MSYS*)
         fi
     done
     # perf7: BB_PGO=generate|use|off (use = pgo/merged.profdata, see gpu/CMakeLists.txt), BB_LTO=ON|OFF.
+    # Default: the committed profile when it is there (release builds are PGO builds).
+    pgo=${BB_PGO:-}
+    if [[ -z $pgo ]]; then
+        if [[ -f pgo/merged.profdata ]]; then pgo=use; else pgo=off; fi
+    fi
+    if [[ $pgo == use && ! -f pgo/merged.profdata ]]; then
+        echo 'BB_PGO=use needs pgo/merged.profdata.' >&2; exit 1
+    fi
     # perf7: BB_OPT=2|3: optimization level of the RelWithDebInfo build (CMake's default is -O2).
     opt="-O${BB_OPT:-2} -g -DNDEBUG"
-    cmake -S gpu -B out/gpu -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DBB_PGO="${BB_PGO:-off}" \
+    cmake -S gpu -B out/gpu -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DBB_PGO="$pgo" \
         -DBB_PGO_DIR="$PWD/pgo" -DBB_LTO="${BB_LTO:-OFF}" -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
         -DCMAKE_C_FLAGS_RELWITHDEBINFO="$opt" -DCMAKE_CXX_FLAGS_RELWITHDEBINFO="$opt" >/dev/null
-    echo "GPU library and loader: LTO ${BB_LTO:-OFF}, PGO ${BB_PGO:-off}, -O${BB_OPT:-2}"
+    echo "GPU library and loader: LTO ${BB_LTO:-OFF}, PGO $pgo, -O${BB_OPT:-2}"
     if ! ninja -C out/gpu bb-probe bb-gpu-capabilities bb-play > out/gpu-build.log 2>&1; then
         grep -v '^\[' out/gpu-build.log | tail -40 >&2
         echo 'Build failed (full log: out/gpu-build.log)' >&2; exit 1
