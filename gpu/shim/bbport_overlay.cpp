@@ -185,6 +185,38 @@ void Quit() {
     }).detach();
 }
 
+// Quit game: the confirmation's labels.
+struct QuitText {
+    const char *button, *title, *body, *quit, *cancel, *quitting;
+};
+const QuitText& Quitting() {
+    static const QuitText en{"Quit game", "Quit the game?",
+                             "Progress since the last save is lost. A save in progress is "
+                             "finished first.",
+                             "Quit", "Cancel", "Quitting..."};
+    return en;
+}
+std::atomic<bool> quitting{false};
+
+// The same exit as closing the window (SDL_EVENT_QUIT ends the window thread's loop), once a save
+// in progress has finished (at most 5 seconds).
+void Quit() {
+    if (quitting.exchange(true)) {
+        return;
+    }
+    std::thread([] {
+        const int waited = runtime_savedata_wait_idle(5000);
+        std::printf("Quit: from the settings menu, %s\n",
+                    waited == 0 ? "no save in progress"
+                    : waited > 0 ? "after waiting for the save in progress to finish"
+                                 : "a save still in progress after 5 s (quitting anyway)");
+        std::fflush(stdout);
+        SDL_Event event{};
+        event.type = SDL_EVENT_QUIT;
+        SDL_PushEvent(&event);
+    }).detach();
+}
+
 void Hint(const char* text) {
     ImGui::SameLine();
     ImGui::TextDisabled("(?)");
