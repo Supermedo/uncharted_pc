@@ -1989,8 +1989,8 @@ namespace {
 /// records: U3 characters sank into the ground, NPCs floated and legs twitched (#727, #745, #751).
 /// With this on, only the dwords such a dispatch writes (i < min(groups * 64, user data 6,
 /// records)) are read back, and only copies of 64 KiB or less (the game reads values in 0.5-1 KiB
-/// blocks; its two large copies a frame are never read): they land on the landing thread and the
-/// next end-of-pipe label waits for them.
+/// blocks; its two large copies a frame are never read): they land on the landing thread once the
+/// GPU is done (Copy64Gated: the next end-of-pipe label waits for them).
 constexpr u64 Copy64ShaderHash = 0x6a6422a9;
 constexpr u64 Copy64ReadbackMax = 64_KB;
 constexpr size_t Copy64ReadbackRanges = 256; ///< per end-of-pipe event
@@ -2005,6 +2005,17 @@ bool Copy64EopReadback() {
             std::fflush(stdout);
         }
         return enabled;
+    }();
+    return on;
+}
+
+/// BB_COPY64_EOP_GATE=1: the end-of-pipe label waits for these landings (exact timing, but the
+/// game then waits for the GPU every frame: U3 market 88 -> 66 FPS). Default: they land as soon
+/// as the GPU is done, without holding the label.
+bool Copy64Gated() {
+    static const bool on = [] {
+        const char* env = std::getenv("BB_COPY64_EOP_GATE");
+        return env && env[0] == '1';
     }();
     return on;
 }
@@ -2043,7 +2054,7 @@ bool Rasterizer::NoteCopy64Readback(const Shader::Info& stage) {
         return false;
     }
     copy64_readbacks.emplace_back(dst.base_address, static_cast<u32>(size));
-    return true;
+    return Copy64Gated();
 }
 
 void Rasterizer::ReadBackSmallWrittenBuffers() {
@@ -2082,12 +2093,13 @@ void Rasterizer::ReadBackSmallWrittenBuffers() {
         }
         buffer_cache.ReadMemory(address, size, false, true);
     }
-    // BB_COPY64_EOP_READBACK (NoteCopy64Readback): always gated, the label waits for them.
+    // BB_COPY64_EOP_READBACK (NoteCopy64Readback): gated with BB_COPY64_EOP_GATE=1.
+    static const bool copy64_gated = Copy64Gated();
     for (const auto& [address, size] : copy64) {
         if (!buffer_cache.IsRangeGpuWritten(address, size)) {
             continue; // nothing GPU-written there: the guest copy is current
         }
-        if (defer && buffer_cache.DeferGuestCopy(address, address, size, false, true)) {
+        if (defer && buffer_cache.DeferGuestCopy(address, address, size, false, copy64_gated)) {
             continue;
         }
         buffer_cache.ReadMemory(address, size, false, true);
@@ -2181,7 +2193,7 @@ void Rasterizer::DispatchRecord(const ComputePipeline* pipeline) {
         return;
     }
     NoteSmallWrittenBuffers(cs);
-    // The landing of a noted copy waits for this dispatch alone: it is submitted at once below.
+    // Gated (BB_COPY64_EOP_GATE=1): submitted at once below, so the landing waits for this dispatch alone.
     const bool copy64_readback = NoteCopy64Readback(cs);
     if (StaleCheckEnabled()) {
         VAddr slot = ~VAddr{0};
