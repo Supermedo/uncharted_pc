@@ -132,3 +132,25 @@ The two tools are for development and off by default.
 | `src/runtime_pad.c` | last device, layout-aware bindings |
 | `texture_cache/button_prompts_xbox.inc`, `tools/make_xbox_prompts.py` | the Xbox pictures and the script that packs them |
 | `tools/dds_view.py` | collected pictures to PNG |
+
+## Controller discovery and selection
+
+`bb-probe --controller-info` enumerates SDL gamepads without starting Vulkan or guest code.
+Each `controller.N.*` record includes a connection key, name, SDL type, family, face-button
+labels, available buttons/axes, touchpad count and rumble capability. Legacy `connected`,
+`name` and `rumble` fields remain available to the current launcher.
+
+Set `BB_PAD_DEVICE` to a reported key to select that device; `auto` uses the first available
+controller. An unavailable explicit selection does not silently switch to another controller.
+Keys hash SDL's device path, falling back to its GUID. Another port/driver may change the key;
+identical devices without distinct paths cannot be distinguished by the GUID fallback.
+
+`--controller-test <key> <percent>` tests the selected controller's vibration for 500 ms.
+The existing `--controller-test <percent>` command still works. `--controller-watch <key>`
+reports held buttons and triggers for ten seconds and stops if the controller disconnects.
+These commands only report capabilities actually exposed by SDL, including virtual devices.
+
+The runtime and probe share a family classifier for PlayStation, Xbox, Nintendo, Steam and
+GameCube, with a generic fallback. `BB_PAD_PROFILE=playstation` forces the game's original
+icons; other explicit families currently use Xbox icons. Automatic uses the shared classifier.
+Dedicated Nintendo/GameCube rendering and launcher controls are follow-up changes.
