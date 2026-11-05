@@ -1795,6 +1795,40 @@ bool BufferCache::SynchronizeMemoryFromImage(const Buffer* arena, VAddr device_a
     if (buffer_copies.empty()) {
         return false;
     }
+    // bbport: the whole image is written back (TileImage: guest_size bytes from its start), but
+    // the caller made only the bound range [device_addr, device_addr + size) resident. A larger
+    // image's tail could still be unbacked in the sparse arena: the tiling shader wrote there and
+    // the device was lost ("write to an invalid address", the rare U3 start-up crash: checkpoints
+    // put the last dispatch at a 3440x1440 tiling, 2026-11-05). The written range is made resident
+    // first; its bind goes with the next submit, which waits for it. BB_TILE_RESIDENT=0: off.
+    static const bool tile_resident = [] {
+        const char* env = std::getenv("BB_TILE_RESIDENT");
+        return !(env && env[0] == '0');
+    }();
+    if (tile_resident) {
+        const u64 room = arena->size_bytes - arena_offset;
+        const u64 written = std::min<u64>(image.info.guest_size, room);
+        if (written > size) {
+            const u64 first_block = device_addr >> block_shift;
+            const u64 last_block = (device_addr + written - 1) >> block_shift;
+            u64 missing = 0;
+            resident_ranges.ForEachGap(first_block, last_block + 1,
+                                       [&](u64 start, u64 end) { missing += end - start; });
+            if (missing) {
+                static std::atomic<u32> reported{0};
+                const u32 n = reported.fetch_add(1, std::memory_order_relaxed);
+                if (n < 20 || (n % 100) == 0) {
+                    std::printf("Tiling: image 0x%llx (%llu KiB) written back over a %u KiB "
+                                "binding: %llu blocks of it made resident first (%u so far)\n",
+                                static_cast<unsigned long long>(device_addr),
+                                static_cast<unsigned long long>(written >> 10), size >> 10,
+                                static_cast<unsigned long long>(missing), n + 1);
+                    std::fflush(stdout);
+                }
+                EnsureResident(arena, first_block, last_block);
+            }
+        }
+    }
     auto& tile_manager = texture_cache.GetTileManager();
     tile_manager.TileImage(image, buffer_copies, arena, arena_offset);
     return true;
