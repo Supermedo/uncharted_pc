@@ -527,11 +527,27 @@ Frame* Presenter::PrepareFrame(const Libraries::VideoOut::BufferAttributeGroup& 
     frame->generated_count = 0;
     // Above about 165 FPS (6 ms) the game is faster than displays show generated frames:
     // generating would only take GPU time from it.
-    const bool fast_game = game_frame_ms.load(std::memory_order_relaxed) < 6.0;
-    static bool reported_fast = false;
-    if (fast_game && frame_generator->Wanted() && !reported_fast) {
-        reported_fast = true;
-        std::printf("Frame generation: paused while the game runs above 165 FPS\n");
+    // With a margin (paused above ~175 FPS, back below ~158): one threshold flipped generation on
+    // and off around 165 FPS, which halved and doubled the frames shown (DLSS players near it
+    // reported stutter, 2026-11-05).
+    static bool fast_game = false;
+    static u32 fast_switches = 0;
+    {
+        const double ms = game_frame_ms.load(std::memory_order_relaxed);
+        const bool was = fast_game;
+        if (!fast_game && ms < 5.7) {
+            fast_game = true;
+        } else if (fast_game && ms > 6.3) {
+            fast_game = false;
+        }
+        if (was != fast_game && frame_generator->Wanted()) {
+            ++fast_switches;
+            if (fast_switches <= 20 || (fast_switches % 100) == 0) {
+                std::printf("Frame generation: %s (game %.1f FPS, switch %u)\n",
+                            fast_game ? "paused, the game runs above 175 FPS" : "back on",
+                            1000.0 / ms, fast_switches);
+            }
+        }
     }
     if (frame_generator->Wanted() && !frame->is_hdr && !upscaled && !fast_game) {
         EnsureGenerated(frame);
