@@ -3703,9 +3703,29 @@ void Rasterizer::BindTextures(const Shader::Info& stage, const PreparedStage* pr
                     const auto new_layout = image.info.props.is_depth
                                                 ? vk::ImageLayout::eDepthStencilReadOnlyOptimal
                                                 : vk::ImageLayout::eShaderReadOnlyOptimal;
-                    barrier |= runtime.Transit(
-                        &image, new_layout, vk::PipelineStageFlagBits2::eAllCommands,
-                        vk::AccessFlagBits2::eShaderRead, desc.view_info.range);
+                    // bbport: a depth image sampled while it is this draw's depth target keeps the
+                    // attachment's stages and accesses in its state: recorded as a shader read only,
+                    // the render pass's depth/stencil store was lost to the next barrier, which then
+                    // waited for shader reads alone (sync validation: WRITE_AFTER_WRITE on the layout
+                    // transition after vkCmdEndRendering, READ_AFTER_WRITE on the next pass's depth
+                    // load; U3's 1720x720 half-resolution depth at 3440x1440, every frame).
+                    // BB_DEPTH_TARGET_STATE=0: as before (A/B).
+                    static const bool depth_target_state = [] {
+                        const char* env = std::getenv("BB_DEPTH_TARGET_STATE");
+                        return !(env && env[0] == '0');
+                    }();
+                    const bool depth_target = depth_target_state && image.info.props.is_depth && binding.is_target;
+                    const auto stage = depth_target
+                                           ? vk::PipelineStageFlagBits2::eAllCommands |
+                                                 vk::PipelineStageFlagBits2::eEarlyFragmentTests |
+                                                 vk::PipelineStageFlagBits2::eLateFragmentTests
+                                           : vk::PipelineStageFlags2(vk::PipelineStageFlagBits2::eAllCommands);
+                    const auto access = depth_target
+                                            ? vk::AccessFlagBits2::eShaderRead |
+                                                  vk::AccessFlagBits2::eDepthStencilAttachmentRead |
+                                                  vk::AccessFlagBits2::eDepthStencilAttachmentWrite
+                                            : vk::AccessFlags2(vk::AccessFlagBits2::eShaderRead);
+                    barrier |= runtime.Transit(&image, new_layout, stage, access, desc.view_info.range);
                 }
             }
             image.usage.storage |= is_storage;
