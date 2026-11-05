@@ -74,12 +74,13 @@ def write_patch_file(out, writes):
             f.write(struct.pack('<QQ', address, len(data)) + data)
 
 
-def build(path, out_dir, cheats):
-    """Path of out_dir/cheats.bin for the enabled cheats, or None when nothing applies."""
+def build(path, out_dir, cheats, extra_writes=()):
+    """Path of out_dir/cheats.bin for the enabled cheats (and extra_writes: [(address, bytes)] of other patches that
+    share the one patch file), or None when nothing applies."""
     out = Path(out_dir) / 'cheats.bin'
     try:
         out.unlink(missing_ok=True)
-        writes = compile_cheats(path, cheats) if cheats else []
+        writes = (compile_cheats(path, cheats) if cheats else []) + list(extra_writes)
         if writes:
             write_patch_file(out, writes)
             return out
