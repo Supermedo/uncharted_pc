@@ -330,7 +330,9 @@ vk::SamplerAddressMode ClampMode(AmdGpu::ClampMode mode) {
     case AmdGpu::ClampMode::ClampBorder:
         return vk::SamplerAddressMode::eClampToBorder;
     default:
-        UNREACHABLE();
+        // bbport: a sampler read while the game rewrites it (checkpoint jump) can hold any bits: a
+        // usable setting instead of ending the game.
+        return vk::SamplerAddressMode::eRepeat;
     }
 }
 
@@ -353,7 +355,9 @@ vk::CompareOp DepthCompare(AmdGpu::DepthCompare comp) {
     case AmdGpu::DepthCompare::Always:
         return vk::CompareOp::eAlways;
     default:
-        UNREACHABLE();
+        // bbport: a sampler read while the game rewrites it (checkpoint jump) can hold any bits: a
+        // usable setting instead of ending the game.
+        return vk::CompareOp::eNever;
     }
 }
 
@@ -366,7 +370,9 @@ vk::Filter Filter(AmdGpu::Filter filter) {
     case AmdGpu::Filter::AnisoLinear:
         return vk::Filter::eLinear;
     default:
-        UNREACHABLE();
+        // bbport: a sampler read while the game rewrites it (checkpoint jump) can hold any bits: a
+        // usable setting instead of ending the game.
+        return vk::Filter::eLinear;
     }
 }
 
@@ -379,7 +385,9 @@ vk::SamplerReductionMode FilterMode(AmdGpu::FilterMode mode) {
     case AmdGpu::FilterMode::Max:
         return vk::SamplerReductionMode::eMax;
     default:
-        UNREACHABLE();
+        // bbport: a sampler read while the game rewrites it (checkpoint jump) can hold any bits: a
+        // usable setting instead of ending the game.
+        return vk::SamplerReductionMode::eWeightedAverage;
     }
 }
 
@@ -392,7 +400,9 @@ vk::SamplerMipmapMode MipFilter(AmdGpu::MipFilter filter) {
     case AmdGpu::MipFilter::None:
         return vk::SamplerMipmapMode::eNearest;
     default:
-        UNREACHABLE();
+        // bbport: a sampler read while the game rewrites it (checkpoint jump) can hold any bits: a
+        // usable setting instead of ending the game.
+        return vk::SamplerMipmapMode::eLinear;
     }
 }
 
@@ -407,7 +417,9 @@ vk::BorderColor BorderColor(AmdGpu::BorderColor color) {
     case AmdGpu::BorderColor::Custom:
         return vk::BorderColor::eFloatCustomEXT;
     default:
-        UNREACHABLE();
+        // bbport: a sampler read while the game rewrites it (checkpoint jump) can hold any bits: a
+        // usable setting instead of ending the game.
+        return vk::BorderColor::eFloatTransparentBlack;
     }
 }
 

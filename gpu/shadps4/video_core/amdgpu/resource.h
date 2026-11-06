@@ -508,7 +508,10 @@ struct Sampler {
         case AnisoRatio::Sixteen:
             return 16.0f;
         default:
-            UNREACHABLE();
+            // bbport: a sampler read while the game rewrites its tables (a checkpoint jump in
+            // Uncharted 2, with invalid T#s rejected next to it) can hold 5-7 here: the game ended on
+            // this assertion (player log, 0.3.6.45). No anisotropy for it instead.
+            return 1.0f;
         }
     }
 };
