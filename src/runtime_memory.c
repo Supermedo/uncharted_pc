@@ -818,18 +818,27 @@ void *runtime_image_map(size_t size, int prot) {
  * 1073741824 the lock-free UpdateImage path for clean, tracked images. */
 /* Bits 32 and up: the draw pipeline and related GPU thread work (gpu/shim/bbport_toggles.h). */
 uint64_t runtime_disabled_optimizations;
+/* A second number in the file: more toggles (gpu/shim/bbport_toggles.h, BbToggle::Disabled2). */
+uint64_t runtime_disabled_optimizations2;
 /* Speculative readers of guest memory (GPU draw-preparation workers) register a recovery
  * point: a fault on that thread jumps back to it instead of terminating (probe.c). */
 __thread sigjmp_buf *runtime_fault_recover;
 static void *toggle_watcher(void *path) {
-    for (unsigned long long last=ULLONG_MAX;;) {
+    for (unsigned long long last=ULLONG_MAX,last2=ULLONG_MAX;;) {
         FILE *f=fopen(path,"r");
-        unsigned long long value=0;
-        if (f) { if (fscanf(f,"%llu",&value)!=1) value=0; fclose(f); }
-        if (value!=last) {
+        unsigned long long value=0,value2=0;
+        if (f) {
+            const int n=fscanf(f,"%llu %llu",&value,&value2);
+            if (n<1) value=0;
+            if (n<2) value2=0;
+            fclose(f);
+        }
+        if (value!=last || value2!=last2) {
             __atomic_store_n(&runtime_disabled_optimizations,(uint64_t)value,__ATOMIC_RELEASE);
-            printf("Runtime: disabled optimizations mask=%llu\n",value);
+            __atomic_store_n(&runtime_disabled_optimizations2,(uint64_t)value2,__ATOMIC_RELEASE);
+            printf("Runtime: disabled optimizations mask=%llu %llu\n",value,value2);
             last=value;
+            last2=value2;
         }
 #ifdef _WIN32
         compat_sleep_ns(250000000);

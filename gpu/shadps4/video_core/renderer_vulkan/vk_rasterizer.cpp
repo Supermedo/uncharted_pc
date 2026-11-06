@@ -3693,8 +3693,12 @@ void Rasterizer::BindTextures(const Shader::Info& stage, const PreparedStage* pr
             }
             image_infos.emplace_back(VK_NULL_HANDLE, view, layout);
             if (set_ok && binding_index < resolved.size()) {
+                const bool exact = image.info.guest_address == desc.info.guest_address &&
+                                   image.info.guest_size == desc.info.guest_size &&
+                                   image.info.size == desc.info.size &&
+                                   image.info.pixel_format == desc.info.pixel_format;
                 resolved[binding_index] = {image_id, *image_view.image_view, image.backing,
-                                           desc.view_info.range};
+                                           desc.view_info.range, false, exact, image.image_uid};
                 set_ok = !is_storage && !binding.force_general && !binding.is_target;
             }
         }
@@ -3797,8 +3801,28 @@ bool Rasterizer::BindTexturesFromSet(const Shader::Info& stage, const PreparedSt
     auto& set = texture_sets[key % texture_sets.size()];
     slot = &set;
     const u64 generation = texture_cache.RegistryGeneration();
+    // bbport: any image (un)registration changes the generation (U2: ~37 % of the lookups
+    // missed, nearly all for this). A set whose images are all exact matches of their T#s and
+    // still registered resolves the same way (FindImage keeps such matches too).
+    bool generation_ok = set.generation == generation;
+    if (!generation_ok && set.key == key && set.stage == &stage && set.count == count &&
+        set.generation != ~0ull && !BbToggle::Disabled2(BbToggle::TextureSetExact)) {
+        generation_ok = true;
+        for (u32 i = 0; i < count && generation_ok; ++i) {
+            const auto& entry = set.entries[i];
+            if (!entry.id) {
+                continue;
+            }
+            const auto* image = entry.exact ? texture_cache.TryGetImage(entry.id, entry.uid) : nullptr;
+            generation_ok = image && True(image->flags & VideoCore::ImageFlagBits::Registered);
+        }
+        if (generation_ok) {
+            set.generation = generation;
+            ++texture_set_revalidated;
+        }
+    }
     const bool match = set.key == key && set.stage == &stage && set.count == count &&
-                       set.generation == generation &&
+                       generation_ok &&
                        set.scene_generation == scene_targets->Generation() &&
                        std::equal(set.hashes.begin(), set.hashes.begin() + count,
                                   prepared->image_hashes);
@@ -3876,9 +3900,10 @@ RenderState Rasterizer::BeginRendering(const GraphicsPipeline* pipeline) {
                     static_cast<unsigned long long>(texture_set_hits),
                     static_cast<unsigned long long>(texture_set_misses));
         std::printf("  texture set misses: other key %llu, generation %llu, image check %llu, "
-                    "other %llu\n",
+                    "other %llu; reused after a generation change %llu\n",
                     (unsigned long long)texture_set_why[0], (unsigned long long)texture_set_why[1],
-                    (unsigned long long)texture_set_why[2], (unsigned long long)texture_set_why[3]);
+                    (unsigned long long)texture_set_why[2], (unsigned long long)texture_set_why[3],
+                    (unsigned long long)texture_set_revalidated);
         std::printf("  scene proxies sampled directly: %llu bindings\n",
                     static_cast<unsigned long long>(proxy_samples));
         proxy_samples = 0;
