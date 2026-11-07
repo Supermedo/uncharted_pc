@@ -12,6 +12,7 @@ needs no Python installation.
 """
 import ctypes
 import json
+import math
 import os
 from pathlib import Path
 import queue
@@ -153,6 +154,9 @@ TK_KEYS = {'space': 'Space', 'Return': 'Return', 'Escape': 'Escape', 'Tab': 'Tab
 WIN_NUMPAD = {**{0x60 + n: f'Keypad {n}' for n in range(10)},
               0x6A: 'Keypad *', 0x6B: 'Keypad +', 0x6D: 'Keypad -', 0x6E: 'Keypad .', 0x6F: 'Keypad /'}
 MOUSE_SENS_MIN, MOUSE_SENS_MAX = 0.1, 10.0  # the Controls page slider (the game's default pace is 1)
+MOUSE_SENS_KEYS = ('mouse_look_sensitivity_x', 'mouse_look_sensitivity_y',
+                   'mouse_aim_sensitivity_x', 'mouse_aim_sensitivity_y')
+LIVE_MOUSE_KEYS = ('mouse_look', 'mouse_invert_y', *MOUSE_SENS_KEYS)
 # Fixes page: fixes that cost speed, so they run only where they help unless the player picks.
 # key -> (title, hint, {choice: {variable: value}}); 'auto' sets nothing (the game's own default).
 FIXES = {
@@ -209,6 +213,7 @@ APP_DEFAULTS = {'game_dir': '', 'game_dir_u1': '', 'game_dir_u2': '', 'game_dir_
                 'anti_aliasing': 'off', 'aa_sharpness': '0.2', 'frame_generation': 'off', 'low_latency': '0',
                 'frame_gen_multiplier': '2', 'extra_env': '', 'close_on_play': False,
                 'mouse_look': True, 'mouse_sensitivity': '1.0', 'mouse_invert_y': False,
+                **{key: '1.0' for key in MOUSE_SENS_KEYS},
                 'pad_invert_y': False, 'art_banner': '', 'art_u1': '', 'art_u2': '', 'art_u3': '', 'steam_art': '', 'art_crops': {}, 'shortcut_name': 'Uncharted: The Nathan Drake Collection', 'shortcut_icon': '', 'trophy_game': 'u1', 'pad_vibration': True, 'pad_vibration_strength': '100', 'button_prompts': 'auto', 'key_bindings': {}, 'pad_bindings': {}, 'check_updates': True,
                 **{key: 'auto' for key in FIXES},
                 **{f'{game}_infinite_{cheat}': False for game, _t, _s, _e in GAMES for cheat in ('health', 'ammo')}}
@@ -294,6 +299,17 @@ def load_json(path, default):
         return default
 
 
+def load_settings():
+    """Older settings have one mouse speed; inherit it for all four new axes."""
+    saved = load_json(CONFIG_FILE, {})
+    if not isinstance(saved, dict):
+        saved = {}
+    settings = {**APP_DEFAULTS, **saved}
+    for key in MOUSE_SENS_KEYS:
+        settings[key] = mouse_sensitivity(saved, key)
+    return settings
+
+
 def ini_path():
     return Path(os.environ.get('BB_CONFIG', DATA_DIR / 'bbport.ini'))
 
@@ -353,12 +369,21 @@ def game_available(s, key):
     return bool(own and (Path(folder) / 'eboot.bin').is_file() and not collection_folder(folder))
 
 
-def mouse_sensitivity(s):
+def mouse_sensitivity(s, key='mouse_sensitivity'):
     """The saved sensitivity as the game reads it: a number in the slider's range."""
     try:
-        return f"{min(MOUSE_SENS_MAX, max(MOUSE_SENS_MIN, float(s.get('mouse_sensitivity')))):.2f}"
+        fallback = float(s.get('mouse_sensitivity', 1.0))
     except (TypeError, ValueError):
-        return '1.00'
+        fallback = 1.0
+    if not math.isfinite(fallback) or fallback <= 0:
+        fallback = 1.0
+    try:
+        value = float(s.get(key, fallback))
+    except (TypeError, ValueError):
+        value = fallback
+    if not math.isfinite(value) or value <= 0:
+        value = fallback
+    return f'{min(MOUSE_SENS_MAX, max(MOUSE_SENS_MIN, value)):.2f}'
 
 
 def vibration_strength(s):
@@ -446,8 +471,25 @@ def input_ini_path():
     return Path(os.environ.get('BB_INPUT_CONFIG', DATA_DIR / 'input.ini'))
 
 
+def atomic_write_text(path, text):
+    """The running game sees either the previous complete controls or the new ones."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', newline='\n',
+                                         prefix=f'.{path.name}.', suffix='.tmp',
+                                         dir=path.parent, delete=False) as stream:
+            temporary = Path(stream.name)
+            stream.write(text)
+        os.replace(temporary, path)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
+
+
 def write_input_ini(s):
-    """input.ini: the keyboard, mouse and controller bindings the game reads at start."""
+    """input.ini: startup bindings and mouse settings the game also reads live."""
     keys = {**DEFAULT_KEYS, **(s.get('key_bindings') or {})}
     pad = {**DEFAULT_PAD, **(s.get('pad_bindings') or {})}
     lines = ['# Uncharted controls (written by the launcher, Controls page)',
@@ -457,11 +499,11 @@ def write_input_ini(s):
              f"pad_invert_y={1 if s.get('pad_invert_y') else 0}",
              f"pad_vibration={1 if s.get('pad_vibration', True) else 0}",
              f"pad_vibration_strength={vibration_strength(s)}"]
+    lines += [f'{key}={mouse_sensitivity(s, key)}' for key in MOUSE_SENS_KEYS]
     lines += [f'key.{action}={keys.get(action, "")}' for action in DEFAULT_KEYS]
     lines += [f'pad.{action}={pad.get(action, "none")}' for action in DEFAULT_PAD]
     path = input_ini_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text('\n'.join(lines) + '\n', encoding='utf-8')
+    atomic_write_text(path, '\n'.join(lines) + '\n')
     return path
 
 
@@ -582,10 +624,11 @@ class Launcher:
         global UI_LANGUAGE
         self.tk, self.ttk, self.filedialog, self.messagebox = tk, ttk, filedialog, messagebox
         self.root = root
-        self.app = {**APP_DEFAULTS, **load_json(CONFIG_FILE, {})}
+        self.app = load_settings()
         UI_LANGUAGE = uncharted_i18n.language_code(self.app.get('ui_language', ''))
         self.configure_art()
         self.vars = {}
+        self.mouse_apply_job = None
         self.process = self.job = None
         self.entered, self.last_problem, self.stopping = False, '', False
         self.output = queue.Queue()
@@ -724,7 +767,37 @@ class Launcher:
             v = self.tk.BooleanVar(value=bool(value)) if isinstance(APP_DEFAULTS[key], bool) \
                 else self.tk.StringVar(value=str(value))
             self.vars[key] = v
+            if key in LIVE_MOUSE_KEYS:
+                v.trace_add('write', lambda *_a: self.schedule_mouse_settings())
         return self.vars[key]
+
+    def schedule_mouse_settings(self):
+        """Throttle writes during a drag, rather than waiting until the drag ends."""
+        if self.mouse_apply_job is None:
+            self.mouse_apply_job = self.root.after(40, self.apply_mouse_settings)
+
+    def apply_mouse_settings(self, retries=2):
+        self.mouse_apply_job = None
+        settings = self.current()
+        try:
+            values = [float(settings[key]) for key in MOUSE_SENS_KEYS]
+        except (KeyError, TypeError, ValueError):
+            return  # a numeric entry can be temporarily empty while it is being edited
+        if any(not math.isfinite(value) or value <= 0 for value in values):
+            return
+        mouse = {key: settings[key] for key in LIVE_MOUSE_KEYS}
+        mouse.update({key: mouse_sensitivity(settings, key) for key in MOUSE_SENS_KEYS})
+        try:
+            write_input_ini({**settings, **mouse})
+            atomic_write_text(CONFIG_FILE, json.dumps({**self.app, **mouse}, indent=2) + '\n')
+        except OSError as error:
+            self.mouse_status.configure(text=_('Could not save mouse settings: {}').format(error))
+            # A Windows reader/antivirus may briefly hold the replaced file open.
+            if retries:
+                self.mouse_apply_job = self.root.after(50, lambda: self.apply_mouse_settings(retries - 1))
+            return
+        self.app.update(mouse)
+        self.mouse_status.configure(text=_('Mouse settings apply immediately, including while the game is running.'))
 
     def choice(self, parent, key, options, width=36, on_change=None):
         var = self.var(key)
@@ -1437,7 +1510,7 @@ class Launcher:
 
     def build_controls(self):
         f = self.page('controls', _('Controls'),
-                      _('Keyboard, mouse and controller. They work together; changes apply when the game starts.'))
+                      _('Mouse settings apply immediately. Other controls apply when the game starts.'))
         self.key_buttons = {}
         self.capturing = None
         self.section(f, _('Mouse'), top=6)
@@ -1445,11 +1518,16 @@ class Launcher:
                    _('The cursor stays in the game window; hold Left Alt (or switch windows) to free it. '
                      'Insert opens the in-game settings menu.'))
         from uncharted_widgets import Slider
-        self.row(f, _('Mouse sensitivity'),
-                 Slider(self.tk, self.target(f), self.var('mouse_sensitivity'), MOUSE_SENS_MIN, MOUSE_SENS_MAX, 0.05,
-                        COLORS, self.px, self.font_ui_md, width=300, log=True, entry=True),
-                 _('How far the camera turns for a mouse movement; 1.00 is the default. Drag the slider or '
-                   'type a number (0.1 to 10) for a faster turn.'))
+        for key, label in zip(MOUSE_SENS_KEYS, (_('Look horizontal'), _('Look vertical'),
+                                               _('Aim horizontal'), _('Aim vertical'))):
+            self.row(f, label,
+                     Slider(self.tk, self.target(f), self.var(key), MOUSE_SENS_MIN, MOUSE_SENS_MAX, 0.05,
+                            COLORS, self.px, self.font_ui_md, width=300, log=True, entry=True))
+        self.mouse_status = self.ttk.Label(
+            self.target(f), text=_('Mouse settings apply immediately, including while the game is running.'),
+            style='Muted.TLabel', wraplength=self.px(640), justify='left')
+        self.mouse_status.grid(row=self.next_row(self.target(f)), column=0, columnspan=2,
+                               sticky='w', pady=(8, 4))
         self.check(f, 'mouse_invert_y', _('Invert the mouse vertically'))
 
         self.section(f, _('Button pictures'))
@@ -2483,6 +2561,9 @@ class Launcher:
 
     def close(self):
         try:
+            if getattr(self, 'mouse_apply_job', None) is not None:
+                self.root.after_cancel(self.mouse_apply_job)
+                self.apply_mouse_settings(retries=0)
             self.collect()
         except Exception:  # never keep the window open over a settings problem
             pass
@@ -2619,7 +2700,7 @@ def main():
         sys.exit(install_update(args[1], args[2]))
     if FROZEN and UPDATE_DIR not in PORT_DIR.parents:
         shutil.rmtree(UPDATE_DIR, ignore_errors=True)  # what a finished update left behind
-    settings = {**APP_DEFAULTS, **load_json(CONFIG_FILE, {})}
+    settings = load_settings()
     if '--play' in args and game_available(settings, settings['start']):
         sys.exit(play_without_window(settings))
     try:

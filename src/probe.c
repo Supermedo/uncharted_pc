@@ -857,6 +857,11 @@ static void install_game_callbacks(Segment *segments, uint64_t ns, uint64_t imag
         if (matches>1) { printf("Callbacks: %s: %zu matches, not installed\n",c->name,matches); continue; }
         if (!matches) continue;
         const uint64_t offset=found+c->skip;
+        if (c->required_offset && offset!=c->required_offset) {
+            printf("Callbacks: %s: match at %#" PRIx64 ", expected %#" PRIx64 ", not installed\n",
+                   c->name,offset,c->required_offset);
+            continue;
+        }
         int hooked=0;
         for (size_t j=0;j<hooks_done;++j) if (hook_offsets[j]==offset) hooked=1;
         if (hooked) continue;                                          /* an earlier entry took this site */
