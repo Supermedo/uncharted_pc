@@ -410,6 +410,59 @@ extern "C" void bbgpu_trophy_notify(int grade, const char* game, const char* nam
                                               : std::vector<unsigned char>());
 }
 
+extern "C" int bbgpu_gyro_aim(void) {
+    return BbSettings::Get().gyro_aim.load(std::memory_order_relaxed) ? 1 : 0;
+}
+
+extern "C" void bbgpu_gyro_settings(float* sensitivity, int* invert_x, int* invert_y, float* speed_deadzone,
+                                    float* precision_speed, int* builtin, int* button, int* mode, int* space,
+                                    float* local_angle, float* local_complement, float* rotate) {
+    const auto& s = BbSettings::Get();
+    *sensitivity = s.gyro_sensitivity.load(std::memory_order_relaxed);
+    *invert_x = s.gyro_invert_x.load(std::memory_order_relaxed) ? 1 : 0;
+    *invert_y = s.gyro_invert_y.load(std::memory_order_relaxed) ? 1 : 0;
+    *speed_deadzone = s.gyro_speed_deadzone.load(std::memory_order_relaxed);
+    *precision_speed = s.gyro_precision_speed.load(std::memory_order_relaxed);
+    *builtin = s.gyro_builtin.load(std::memory_order_relaxed) ? 1 : 0;
+    *button = s.gyro_button.load(std::memory_order_relaxed);
+    *mode = s.gyro_button_mode.load(std::memory_order_relaxed);
+    *space = s.gyro_space.load(std::memory_order_relaxed);
+    *local_angle = s.gyro_local_angle.load(std::memory_order_relaxed);
+    *local_complement = s.gyro_complement.load(std::memory_order_relaxed) / 100.0f;
+    *rotate = s.gyro_rotate.load(std::memory_order_relaxed);
+}
+
+extern "C" void bbgpu_gyro_status(int source, const char* controller) {
+    auto& s = BbSettings::Get();
+    // A copy per controller the menu has seen, never freed (the menu may be reading the last one).
+    const char* shown = s.gyro_controller.load();
+    if (controller && (!shown || std::strcmp(shown, controller) != 0)) {
+        s.gyro_controller = strdup(controller);
+    }
+    s.gyro_source = source;
+}
+
+extern "C" int bbgpu_gyro_calibrate_requested(void) {
+    return BbSettings::Get().gyro_calibrate.exchange(false) ? 1 : 0;
+}
+
+extern "C" void bbgpu_gyro_bias(const float bias[3], int save) {
+    auto& s = BbSettings::Get();
+    for (int a = 0; a < 3; ++a) {
+        s.gyro_bias[a] = bias[a];
+    }
+    if (save) {
+        BbSettings::Save();
+    }
+}
+
+extern "C" void bbgpu_gyro_saved_bias(float bias[3]) {
+    const auto& s = BbSettings::Get();
+    for (int a = 0; a < 3; ++a) {
+        bias[a] = s.gyro_bias[a].load();
+    }
+}
+
 extern "C" int bbgpu_overlay_captures_input(void) {
     return BbOverlay::CapturesInput() ? 1 : 0;
 }

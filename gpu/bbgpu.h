@@ -48,7 +48,29 @@ void bbgpu_mouse_configure(int look);
 /* Heading (degrees, about the vertical axis) of the camera the game last rendered with and how old
  * it is; 0 before the first frame with a known camera. */
 int bbgpu_camera_yaw(float *yaw_degrees, double *age_seconds);
+/* 1 while the menu's Gyro aiming setting is on (bbport.ini gyro_aim). */
+int bbgpu_gyro_aim(void);
 int bbgpu_mouse_sample(float *dx, float *dy, uint32_t *buttons, int *wheel);
+/* Built-in gyro (runtime_pad.c, runtime_gyro.c). Queued gyro samples, oldest first: 3 rates per
+ * sample (rad/s, SDL's axes), the accelerometer's latest reading with it (m/s^2, 0 before the first) and the
+ * sensor's time (ns); returns how many (window.cpp). */
+int bbgpu_gyro_take(float *rates, float *accels, uint64_t *ns, int max);
+/* 1 while the game's window has the focus. */
+int bbgpu_window_focused(void);
+/* The launcher's gyro settings (bbport.ini gyro_*): speed deadzone and precision speed in deg/s, builtin
+ * on/off, button (SDL button, -2/-3 the triggers, -1 none: always on), mode (0 hold to enable, 1 hold to
+ * suppress, 2 toggle), space (3DOF to 2D Conversion Style, GYRO_SPACE_*), Local Space's Primary Axis
+ * Offset (degrees) and Complementary Axis Contribution (-1..1), Rotate Output (degrees clockwise). */
+void bbgpu_gyro_settings(float *sensitivity, int *invert_x, int *invert_y, float *speed_deadzone,
+                         float *precision_speed, int *builtin, int *button, int *mode, int *space,
+                         float *local_angle, float *local_complement, float *rotate);
+/* What the menu shows: 0 no controller, 1 Steam or no gyro on this controller, 2 built in. */
+void bbgpu_gyro_status(int source, const char *controller);
+/* 1 once after the menu's Calibrate was pressed. */
+int bbgpu_gyro_calibrate_requested(void);
+/* The learned gyro offset (rad/s): stored, and written to bbport.ini when save is 1; and read back. */
+void bbgpu_gyro_bias(const float bias[3], int save);
+void bbgpu_gyro_saved_bias(float bias[3]);
 /* In-game trophy notice (the overlay draws it for a few seconds, one at a time): grade 1 platinum,
  * 2 gold, 3 silver, 4 bronze; png is the trophy's icon (a PNG file) or empty. */
 void bbgpu_trophy_notify(int grade, const char *game, const char *name, const void *png, uint64_t png_size);

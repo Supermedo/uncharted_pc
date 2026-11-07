@@ -69,6 +69,30 @@ struct Values {
     std::atomic<float> reactive_max{0.9f};
     std::atomic<int> debug_view{DebugNone};
     std::atomic<bool> show_fps{false};
+    /// Gyro aiming (runtime_pad.c through bbgpu_gyro_aim): popping out keeps the aim, the mouse (Steam's
+    /// gyro as a mouse) turns the aiming and cover cameras directly. Off: the mouse as before.
+    std::atomic<bool> gyro_aim{false};
+    /// Built-in gyro (runtime_pad.c, runtime_gyro.c): the controller's own gyro when Steam is not
+    /// translating it. Steam's names: Choose Gyro Button(s) (SDL button, -2/-3 the triggers, -1 none),
+    /// Gyro Enable/Suppress/Toggle (0/1/2), Gyro ° Sensitivity (1 = 1 degree per degree), Invert X/Y.
+    std::atomic<bool> gyro_builtin{true};
+    std::atomic<int> gyro_button{-2};
+    std::atomic<int> gyro_button_mode{0};
+    std::atomic<float> gyro_sensitivity{2.7f}; ///< default: the camera turns 2.7 degrees per degree
+    std::atomic<bool> gyro_invert_x{false}, gyro_invert_y{false};
+    /// Gyro Speed Deadzone and Gyro Precision Speed, deg/s (defaults: the values in Steam's own menu).
+    std::atomic<float> gyro_speed_deadzone{0.36f}, gyro_precision_speed{0.75f};
+    /// 3DOF to 2D Conversion Style (runtime_gyro.h GYRO_SPACE_*: 0 Yaw .. 5 World Space; default 4, Player
+    /// Space, its inventor's default for a separate controller); Local Space's
+    /// Primary Axis Offset (degrees) and Complementary Axis Contribution (percent), Steam's defaults.
+    std::atomic<int> gyro_space{4};
+    std::atomic<float> gyro_local_angle{0.0f}, gyro_complement{100.0f};
+    std::atomic<float> gyro_rotate{0.0f}; ///< Rotate Output, degrees clockwise
+    std::atomic<float> gyro_bias[3]{}; ///< learned offset at rest, rad/s
+    /// Set by runtime_pad.c: 0 no controller, 1 Steam or no gyro, 2 built in; the controller's name.
+    std::atomic<int> gyro_source{0};
+    std::atomic<const char*> gyro_controller{nullptr};
+    std::atomic<bool> gyro_calibrate{false}; ///< the menu's Calibrate, taken by runtime_pad.c
     // FSR 4 checks (menu): the provider's auto exposure, the jitter sign it is given.
     std::atomic<bool> fsr4_auto_exposure{true};
     std::atomic<bool> fsr4_invert_jitter{false};
