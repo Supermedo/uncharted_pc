@@ -15,6 +15,7 @@
 #include "bbport_overlay.h"
 #include "video_core/renderer_vulkan/vk_temporal_upscaler.h"
 #include "video_core/renderer_vulkan/vk_presenter.h"
+#include "video_core/renderer_vulkan/vk_low_latency.h"
 #include "video_core/renderer_vulkan/vk_rasterizer.h"
 #include "video_core/texture_cache/image.h"
 
@@ -785,18 +786,25 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame)
     if (shown && !behind()) {
         wait_until(start + step * shown);
     }
-    if (!PresentImage(frame, frame->image, true)) {
+    // bbport: low latency mode: the game's own frame carries its frame id (vk_low_latency.h).
+    const bool game_frame = !is_reusing_frame && is_game_frame;
+    const u64 latency_id = game_frame ? LowLatency::TakeGameFrame() : 0;
+    const bool presented = PresentImage(frame, frame->image, true, latency_id);
+    if (game_frame) {
+        LowLatency::GameFramePresented();
+    }
+    if (!presented) {
         free_frame();
         return;
     }
 
     free_frame();
-    if (!is_reusing_frame && is_game_frame) {
+    if (game_frame) {
         DebugState.IncFlipFrameNum();
     }
 }
 
-bool Presenter::PresentImage(Frame* frame, vk::Image image, bool last) {
+bool Presenter::PresentImage(Frame* frame, vk::Image image, bool last, u64 latency_id) {
     if (!swapchain.AcquireNextImage()) {
         swapchain.Recreate(window.GetWidth(), window.GetHeight());
         if (!swapchain.AcquireNextImage()) {
@@ -942,7 +950,7 @@ bool Presenter::PresentImage(Frame* frame, vk::Image image, bool last) {
     // Present to swapchain.
     {
         std::scoped_lock submit_lock{Scheduler::submit_mutex};
-        if (!swapchain.Present() && window.GetWidth() != 0 && window.GetHeight() != 0) {
+        if (!swapchain.Present(latency_id) && window.GetWidth() != 0 && window.GetHeight() != 0) {
             swapchain.Recreate(window.GetWidth(), window.GetHeight());
         }
     }

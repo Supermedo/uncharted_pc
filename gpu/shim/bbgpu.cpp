@@ -34,6 +34,7 @@
 #include "sdl_window.h"
 #include "video_core/renderer_vulkan/vk_rasterizer.h"
 #include "video_core/texture_cache/button_prompts.h"
+#include "video_core/renderer_vulkan/vk_low_latency.h"
 
 extern "C" {
 // runtime_memory.c
@@ -411,6 +412,10 @@ extern "C" void bbgpu_trophy_notify(int grade, const char* game, const char* nam
 
 extern "C" int bbgpu_overlay_captures_input(void) {
     return BbOverlay::CapturesInput() ? 1 : 0;
+}
+
+extern "C" void bbgpu_input_sample(void) {
+    Vulkan::LowLatency::InputSample();
 }
 
 extern "C" void bbgpu_prepare_exit(void) {

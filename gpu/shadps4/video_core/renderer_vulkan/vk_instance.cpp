@@ -15,6 +15,7 @@
 #include "video_core/renderer_vulkan/vk_dlss.h"
 #include "video_core/renderer_vulkan/vk_xess.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
+#include "video_core/renderer_vulkan/vk_low_latency.h"
 #include "video_core/renderer_vulkan/vk_vram.h"
 #include "video_core/renderer_vulkan/vk_platform.h"
 
@@ -498,6 +499,17 @@ bool Instance::CreateDevice() {
             }
         }
     }
+    // bbport: low latency mode (NVIDIA Reflex / AMD Anti-Lag 2, BB_LOW_LATENCY).
+    std::vector<const char*> latency_extensions;
+    void* latency_features =
+        LowLatency::PrepareDevice(physical_device, available_extensions, latency_extensions);
+    for (const char* name : latency_extensions) {
+        if (std::none_of(enabled_extensions.begin(), enabled_extensions.end(),
+                         [&](const char* e) { return std::string_view{e} == name; }) &&
+            enabled_extensions.size() < enabled_extensions.capacity()) {
+            enabled_extensions.push_back(name);
+        }
+    }
     vk::StructureChain device_chain = {
         vk::DeviceCreateInfo{
             .queueCreateInfoCount = side_family ? 2u : 1u,
@@ -721,6 +733,14 @@ bool Instance::CreateDevice() {
         device_chain.unlink<vk::PhysicalDeviceShaderMixedFloatDotProductFeaturesVALVE>();
     }
 
+    if (latency_features) {
+        auto* tail = reinterpret_cast<VkBaseOutStructure*>(
+            &device_chain.get<vk::PhysicalDeviceFeatures2>());
+        while (tail->pNext) {
+            tail = tail->pNext;
+        }
+        tail->pNext = static_cast<VkBaseOutStructure*>(latency_features);
+    }
     // bbport: XeSS enables its features in the chain (and may append structures to its end).
     if (Xess* xess = Xess::Get()) {
         xess->PatchDeviceFeatures(*instance, physical_device,
@@ -734,6 +754,7 @@ bool Instance::CreateDevice() {
     device = std::move(dev);
 
     VULKAN_HPP_DEFAULT_DISPATCHER.init(*device);
+    LowLatency::OnDevice(*device);
     if (Dlss* dlss = Dlss::Get()) {
         dlss->Initialize(*instance, physical_device, *device);
     }
