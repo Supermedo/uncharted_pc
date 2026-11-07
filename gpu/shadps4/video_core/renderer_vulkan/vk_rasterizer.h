@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <chrono>
 #include <mutex>
 #include <vector>
 
@@ -165,6 +166,9 @@ public:
 
     u64 Flush();
     void Finish();
+    /// bbport: BB_EARLY_SUBMIT=1: the frame's work goes to the GPU in parts while it is
+    /// recorded, so the GPU starts drawing before the frame is complete.
+    void MaybeSubmitEarly();
     void OnSubmit();
 
     PipelineCache& GetPipelineCache() {
@@ -545,6 +549,8 @@ private:
     /// Submissions (prepared draws) kept alive until stage B reaches the position.
     std::deque<std::pair<u64, std::shared_ptr<const void>>> pipe_keepalive;
     std::unique_ptr<DrawPipe> draw_pipe;
+    u32 draws_since_submit = 0;
+    std::chrono::steady_clock::time_point last_submit{};
 };
 
 } // namespace Vulkan
