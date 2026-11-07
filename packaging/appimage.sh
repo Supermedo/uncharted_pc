@@ -21,5 +21,6 @@ trap 'rm -rf "$work"' EXIT
 (cd "$work" && nix bundle --impure --bundler github:ralismark/nix-appimage \
     --expr "import $root/packaging {}")
 mkdir -p dist
-install -m755 "$work/bbport.AppImage" dist/Bloodborne-bbport-x86_64.AppImage
+# Named after the package's main program: bbport.AppImage, or bbport-game.AppImage with BB_APPIMAGE_GAME=1.
+install -m755 "$work"/*.AppImage dist/Bloodborne-bbport-x86_64.AppImage
 ls -lh dist/Bloodborne-bbport-x86_64.AppImage
