@@ -20,6 +20,7 @@
 #include "gpu/bbgpu.h"
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdatomic.h>
 #include <string.h>
 #include <pthread.h>
 #include <time.h>
@@ -647,6 +648,89 @@ static void __attribute__((ms_abi)) ndgi_end(uint64_t rdi, uint64_t rsi, uint64_
 /* The camera code, the pad code and the assertion are found by their instructions, so a build of the
  * game that has them works (version 1.00 and 1.02 are known; "build" below). RIP-relative
  * displacements and call targets are wildcards. Entries with one name are variants for the builds. */
+/* U2 Chapter Select weapons (issue #16, 2026-11-06): the menu's Chapter Select plays the chapter's
+ * task group (PlayTask, mode 1). PlayTask first resets the player's settings to the default set
+ * (459d0e4e: only the .45 Defender, 40 rounds) and then applies the weapon set of the task it played
+ * or its parents; a group has none. The chapter's first checkpoint applies its own set when it
+ * activates only if its tasks.bin flags carry 0x20, and the first checkpoints of chapters 8 and 13
+ * (war-temple-1-inside-temple, valley-start) do not: Nate starts with the Defender, whose model
+ * those levels never load, so it is invisible and silent (the overlay's checkpoint jump plays the
+ * checkpoint itself and gets its Beretta, rifle and grenade). Here, after PlayTask(mode 1) of a task
+ * without data (a group), the first playable task that activates gets its set as flag 0x20 would
+ * give it (when the set has a gun); once. Continue (mode 2), checkpoint restarts and jumps to a
+ * checkpoint do not arm it. Chapters it changes: 6-10, 13, 14, 18, 20, 23, 24, 26.
+ * BB_CHAPTER_WEAPONS=0: off. */
+typedef void (__attribute__((sysv_abi)) *U2ApplySettings)(uint32_t set);
+static _Atomic int u2_chapter_start; /* armed by a group's PlayTask(mode 1) */
+static int u2_chapter_weapons_on(void) {
+    static int on=-1;
+    if (on<0) { const char *e=getenv("BB_CHAPTER_WEAPONS"); on=!(e && e[0]=='0'); }
+    return on;
+}
+static void u2_chapter_play(uint64_t task, uint64_t mode) {
+    if (!u2_chapter_weapons_on() || task<0x10000) return;
+    const int group=*(const uint64_t *)(uintptr_t)(task+0x50)==0;
+    atomic_store(&u2_chapter_start,(uint32_t)mode==1 && group);
+}
+static const unsigned char u2_apply_settings_eu[]={0x55,0x48,0x89,0xe5,0x31,0xf6,0xe8,0x25,0x2c,0xfd,0xff,0x48,0x85,
+                                                   0xc0,0x74,0x12,0x48,0x8d,0x3d,0xf1,0xd9,0xb9,0x00,0xb9};
+static const unsigned char u2_apply_settings_us[]={0x55,0x48,0x89,0xe5,0xe8,0x97,0x4e,0xfb,0xff,0x48,0x85,0xc0,0x74,
+                                                   0x17,0x48,0x8b,0x30,0x48,0x85,0xf6,0x74,0x0f,0x48,0x8d};
+static void u2_chapter_activate(uint64_t task, uint64_t image, uint64_t apply, const unsigned char *code, size_t size) {
+    if (!atomic_load(&u2_chapter_start) || task<0x10000) return;
+    if (memcmp((const void *)(uintptr_t)(image+apply),code,size)) {
+        atomic_store(&u2_chapter_start,0);
+        printf("Chapter weapons: the settings function is not where expected; nothing applied\n");
+        return;
+    }
+    const unsigned char *t=(const unsigned char *)(uintptr_t)task;
+    const unsigned char *data=*(const unsigned char *const *)(t+0x50);
+    if (!data || !(*(const uint32_t *)(data+0xd0)&6)) return; /* not playable (a group): wait */
+    atomic_store(&u2_chapter_start,0);
+    const uint32_t flags=*(const uint32_t *)(t+0x48), set=*(const uint32_t *)(data+0xc8);
+    if (flags&0x20 || !set) return; /* the game applies it itself */
+    /* Only a set with a gun: some first checkpoints name the empty set (65759d0e, the unarmed openings'),
+     * where the Defender is better than nothing (chapter 12, war-escape-watertower-fight). The set: five
+     * slots {name, weapon id +8, ammo +0x10} of 0x18 bytes; guns in the first three, f114b39d = none.
+     * The lookup is the one the settings function calls (EU: (id, 0) -> set; 1.02: (id) -> &set). */
+    const unsigned char *found=NULL;
+    if (apply==0x43b7e0) {
+        found=((const unsigned char *(__attribute__((sysv_abi)) *)(uint32_t, int))(uintptr_t)(image+0x40e410))(set,0);
+    } else {
+        const unsigned char *const *p=
+            ((const unsigned char *const *(__attribute__((sysv_abi)) *)(uint32_t))(uintptr_t)(image+0xa15300))(set);
+        found=p ? *p : NULL;
+    }
+    int gun=0;
+    for (int i=0;found && i<3;++i) {
+        const uint32_t weapon=*(const uint32_t *)(found+8+0x18*i);
+        if (weapon && weapon!=0xf114b39du) gun=1;
+    }
+    if (!gun) {
+        printf("Chapter weapons: Chapter Select start at task %08x: its set %08x has no gun; the game's "
+               "default kept\n",*(const uint32_t *)(t+8),set);
+        return;
+    }
+    printf("Chapter weapons: Chapter Select start at task %08x: its weapon set %08x applied (the game "
+           "leaves the default .45 Defender there)\n",*(const uint32_t *)(t+8),set);
+    fflush(stdout);
+    ((U2ApplySettings)(uintptr_t)(image+apply))(set);
+}
+static void __attribute__((ms_abi)) u2_chapter_play_hook(uint64_t rdi, uint64_t rsi, uint64_t image, uint64_t r14,
+                                                       const RuntimeGuestRegs *regs) {
+    (void)image; (void)r14; (void)regs;
+    u2_chapter_play(rdi,rsi);
+}
+static void __attribute__((ms_abi)) u2_chapter_activate_eu(uint64_t rdi, uint64_t rsi, uint64_t image, uint64_t r14,
+                                                           const RuntimeGuestRegs *regs) {
+    (void)rsi; (void)r14; (void)regs;
+    u2_chapter_activate(rdi,image,0x43b7e0,u2_apply_settings_eu,sizeof(u2_apply_settings_eu));
+}
+static void __attribute__((ms_abi)) u2_chapter_activate_us(uint64_t rdi, uint64_t rsi, uint64_t image, uint64_t r14,
+                                                           const RuntimeGuestRegs *regs) {
+    (void)rsi; (void)r14; (void)regs;
+    u2_chapter_activate(rdi,image,0xa60460,u2_apply_settings_us,sizeof(u2_apply_settings_us));
+}
 static const RuntimeGuestCallback guest_callbacks[]={
     /* U1 follow camera, build 100 */
     {"U1 follow camera (mouse)",
@@ -827,6 +911,20 @@ static const RuntimeGuestCallback guest_callbacks[]={
     {"Job render context end", "41 80 bf dc e7 00 00 00 0f 84 ?? ?? ?? ?? 4d 8b a7 10 e8 00 00",
       14, 7, ndgi_end, NULL},
 
+    /* U2 Chapter Select weapons (issue #16, Mevlock): PlayTask and TaskActivate by their first 40
+     * bytes (EU 1.00, 1.02); the settings function is checked before it is called. */
+    {"U2 Chapter Select weapons: PlayTask",
+      "55 48 89 e5 41 57 41 56 41 55 41 54 53 48 81 e4 e0 ff ff ff 48 81 ec 60 01 00 00 89 f3 49 89 fd 4c 8b 3d 11 c0 a2 00 49",
+      0x0, 6, u2_chapter_play_hook, NULL},
+    {"U2 Chapter Select weapons: TaskActivate",
+      "55 48 89 e5 41 57 41 56 41 55 41 54 53 48 81 e4 e0 ff ff ff 48 81 ec a0 02 00 00 49 89 fd 48 8b 05 73 81 a2 00 48 8b 00",
+      0x0, 6, u2_chapter_activate_eu, NULL},
+    {"U2 Chapter Select weapons: PlayTask",
+      "55 48 89 e5 41 57 41 56 41 55 41 54 53 48 81 e4 e0 ff ff ff 48 81 ec 80 01 00 00 41 89 f6 48 89 fb 4c 8b 3d 18 2e 5f 00",
+      0x0, 6, u2_chapter_play_hook, NULL},
+    {"U2 Chapter Select weapons: TaskActivate",
+      "55 48 89 e5 41 57 41 56 41 55 41 54 53 48 81 e4 e0 ff ff ff 48 81 ec a0 02 00 00 48 89 fb 48 8b 05 bb e8 5e 00 48 8b 00",
+      0x0, 6, u2_chapter_activate_us, NULL},
 };
 const RuntimeGuestCallback *runtime_guest_callbacks(size_t *count) {
     *count=sizeof(guest_callbacks)/sizeof(*guest_callbacks);
