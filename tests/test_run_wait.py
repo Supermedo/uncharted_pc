@@ -1,5 +1,6 @@
-"""Tests for waiting on the previous Windows game process."""
+"""Windows restart tests for run.py --after."""
 from contextlib import redirect_stderr
+import ctypes
 import importlib.util
 import io
 import subprocess
@@ -15,94 +16,59 @@ bb_run = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(bb_run)
 
 
-class FakeKernel32:
-    def __init__(self, handle=123, wait_result=0, error=0):
-        self.handle = handle
-        self.wait_result = wait_result
-        self.error = error
-        self.open_calls = []
-        self.wait_calls = []
-        self.close_calls = []
-
-    def OpenProcess(self, access, inherit, pid):
-        self.open_calls.append((access, inherit, pid))
-        return self.handle
-
-    def WaitForSingleObject(self, handle, timeout):
-        self.wait_calls.append((handle, timeout))
-        return self.wait_result
-
-    def CloseHandle(self, handle):
-        self.close_calls.append(handle)
-        return True
-
-    def GetLastError(self):
-        return self.error
-
-
+@unittest.skipUnless(sys.platform == 'win32', 'Windows process handles only')
 class PreviousProcessWaitTests(unittest.TestCase):
-    def run_wait(self, kernel32, pid=4321):
-        with mock.patch.object(bb_run.ctypes, 'windll', create=True) as windll:
-            windll.kernel32 = kernel32
-            bb_run.wait_for(pid)
+    def test_waits_for_a_real_child_to_exit(self):
+        with subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(0.2)']) as child:
+            bb_run.wait_for(child.pid)
+            self.assertEqual(child.poll(), 0)
 
-    def assert_wait_fails(self, kernel32, message):
+    def test_missing_process_allows_restart(self):
+        with mock.patch('_winapi.OpenProcess', side_effect=ctypes.WinError(87)), \
+                mock.patch('_winapi.WaitForSingleObject') as wait:
+            bb_run.wait_for(4321)
+            wait.assert_not_called()
+
+    def test_invalid_pid_is_rejected_before_opening(self):
+        for pid in (0, -1, 2**32):
+            with self.subTest(pid=pid), mock.patch('_winapi.OpenProcess') as open_process:
+                with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                    bb_run.wait_for(pid)
+                open_process.assert_not_called()
+
+    def test_missing_or_malformed_pid_stops_restart(self):
+        for args in (['--after'], ['--after', 'abc']):
+            with self.subTest(args=args), mock.patch.object(sys, 'argv', ['run.py', *args]), \
+                    mock.patch.object(bb_run, 'wait_for') as wait:
+                with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                    bb_run.main()
+                wait.assert_not_called()
+
+    def test_access_denied_stops_restart(self):
         stderr = io.StringIO()
-        with self.assertRaises(SystemExit) as raised, redirect_stderr(stderr):
-            self.run_wait(kernel32)
+        with mock.patch('_winapi.OpenProcess', side_effect=ctypes.WinError(5)), \
+                redirect_stderr(stderr), self.assertRaises(SystemExit) as raised:
+            bb_run.wait_for(4321)
         self.assertEqual(raised.exception.code, 1)
-        self.assertIn(message, stderr.getvalue())
+        self.assertIn('WinError 5', stderr.getvalue())
 
-    def test_waits_for_the_previous_process_and_closes_its_handle(self):
-        kernel32 = FakeKernel32()
-
-        self.run_wait(kernel32)
-
-        self.assertEqual(kernel32.open_calls, [(0x00100000, False, 4321)])
-        self.assertEqual(kernel32.wait_calls, [(123, 30000)])
-        self.assertEqual(kernel32.close_calls, [123])
-
-    def test_process_that_already_exited_needs_no_wait(self):
-        kernel32 = FakeKernel32(handle=0, error=87)
-
-        self.run_wait(kernel32)
-
-        self.assertEqual(kernel32.wait_calls, [])
-        self.assertEqual(kernel32.close_calls, [])
-
-    def test_open_failure_is_reported(self):
-        kernel32 = FakeKernel32(handle=0, error=5)
-
-        self.assert_wait_fails(kernel32, 'OpenProcess failed (Windows error 5)')
-
-    def test_timeout_prevents_a_second_instance(self):
-        kernel32 = FakeKernel32(wait_result=258)
-
-        self.assert_wait_fails(kernel32, 'did not exit within 30 seconds')
-        self.assertEqual(kernel32.close_calls, [123])
-
-    def test_wait_failure_is_reported_and_the_handle_is_closed(self):
-        kernel32 = FakeKernel32(wait_result=0xffffffff, error=6)
-
-        self.assert_wait_fails(kernel32, 'WaitForSingleObject failed (Windows error 6)')
-        self.assertEqual(kernel32.close_calls, [123])
-
-    def test_unexpected_wait_status_is_reported(self):
-        kernel32 = FakeKernel32(wait_result=128)
-
-        self.assert_wait_fails(kernel32, 'unexpected status 128')
-        self.assertEqual(kernel32.close_calls, [123])
-
-    @unittest.skipUnless(sys.platform == 'win32', 'Windows process handles only')
-    def test_waits_for_a_real_process(self):
-        process = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(0.1)'])
-        try:
-            bb_run.wait_for(process.pid)
-            self.assertEqual(process.wait(timeout=1), 0)
-        finally:
-            if process.poll() is None:
-                process.kill()
-                process.wait()
+    def test_unsuccessful_wait_closes_handle_and_stops_before_preparation(self):
+        for outcome, diagnostic in [(258, '30 seconds'), (ctypes.WinError(6), 'WinError 6'),
+                                    (128, '128')]:
+            with self.subTest(outcome=outcome):
+                stderr = io.StringIO()
+                with mock.patch.object(sys, 'argv', ['run.py', '--after', '4321']), \
+                        mock.patch('_winapi.OpenProcess', return_value=123), \
+                        mock.patch('_winapi.WaitForSingleObject', side_effect=[outcome]) as wait, \
+                        mock.patch('_winapi.CloseHandle') as close, \
+                        mock.patch.object(bb_run, 'prepare') as prepare, \
+                        redirect_stderr(stderr), self.assertRaises(SystemExit) as raised:
+                    bb_run.main()
+                self.assertEqual(raised.exception.code, 1)
+                self.assertIn(diagnostic, stderr.getvalue())
+                wait.assert_called_once_with(123, 30000)
+                close.assert_called_once_with(123)
+                prepare.assert_not_called()
 
 
 if __name__ == '__main__':
