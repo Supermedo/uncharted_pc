@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2025-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include "shader_recompiler/ir/passes/ir_passes.h"
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -21,12 +22,24 @@
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_pipeline_cache.h"
 #include "video_core/renderer_vulkan/vk_shader_util.h"
+#include "bbport_focus_fix.h"
 
 namespace Serialization {
 /* You should increment versions below once corresponding serialization scheme is changed. */
-static constexpr u32 ShaderBinaryVersion = 11u; // bbport: motion shaders hold address stand-ins (10); scalar instructions split EXEC scopes (11)
-static constexpr u32 ShaderMetaVersion = 7u; // bbport: ImageResource::needs_native
-static constexpr u32 PipelineKeyVersion = 5u; // bbport: Info layout (ImageResource::needs_native)
+static constexpr u32 ShaderBinaryVersion = 12u; // bbport: motion shaders hold address stand-ins (10); scalar instructions split EXEC scopes (11); WorkgroupSplit (12)
+static constexpr u32 ShaderMetaVersion = 8u; // bbport: InfoPersistent::cs_split_eligible
+static constexpr u32 PipelineKeyVersion = 6u; // bbport: Info layout (cs_split_eligible)
+/// bbport (BilalReloaded): the cache name of a shader's SPIR-V. Shaders that gained multi-wave
+/// LDS barriers get a new name, so their binaries cached before the fix are not found and only
+/// those shaders recompile.
+/// Shaders with a clamped loop bound (BB_EFFECT_LOOP_CLAMP) get their own names too.
+static std::string ShaderBinaryName(u64 pgm_hash, size_t perm_idx) {
+    const char* clamp = !Shader::Optimization::EffectLoopClamp(pgm_hash) ? ""
+                        : pgm_hash == 0x689d1af9                       ? "_lc2"
+                                                                       : "_lc1";
+    return fmt::format("{:#018x}_{}{}{}", pgm_hash, perm_idx,
+                       Shader::Optimization::MultiwaveLdsBarriers(pgm_hash) ? "_lds4" : "", clamp);
+}
 } // namespace Serialization
 
 namespace Vulkan {
@@ -99,7 +112,7 @@ void RegisterShaderBinary(std::vector<u32>&& spv, u64 pgm_hash, size_t perm_idx)
     }
 
     Storage::DataBase::Instance().Save(Storage::BlobType::ShaderBinary,
-                                       fmt::format("{:#018x}_{}", pgm_hash, perm_idx),
+                                       Serialization::ShaderBinaryName(pgm_hash, perm_idx),
                                        std::move(spv));
 }
 
@@ -399,7 +412,8 @@ void PipelineCache::WarmUpThread() {
         stage.spec.info = &stage.program->info;
         std::optional<Shader::Gcn::FetchShaderData> unused;
         if (!LoadShaderMeta(meta_ar, stage.program->info, unused, stage.spec, stage.perm_idx) ||
-            Shader::Backend::SPIRV::IsForcedShader(stage.program->info.pgm_hash)) {
+            Shader::Backend::SPIRV::IsForcedShader(stage.program->info.pgm_hash) ||
+            BbFocusFix::FocusCentreShader(stage.program->info.pgm_hash)) {
             stage.program.reset();
             return;
         }
@@ -414,7 +428,7 @@ void PipelineCache::WarmUpThread() {
         }
         std::vector<u32> spv{};
         db.Load(Storage::BlobType::ShaderBinary,
-                fmt::format("{:#018x}_{}", info.pgm_hash, stage.perm_idx), spv);
+                Serialization::ShaderBinaryName(info.pgm_hash, stage.perm_idx), spv);
         if (spv.empty()) {
             return;
         }

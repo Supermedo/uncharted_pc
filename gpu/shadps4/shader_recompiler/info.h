@@ -75,6 +75,9 @@ struct InfoPersistent {
     bool has_fetch_shader{};
     bool has_bitwise_xor{};
     bool uses_dma{};
+    /// bbport: a compute shader whose workgroups may run as smaller ones (no shared memory, no
+    /// workgroup barriers, no workgroup index); see WorkgroupSplit in runtime_info.h.
+    bool cs_split_eligible{};
 
     InfoPersistent() = default;
     InfoPersistent(HwStage hw_stage_, SwStage sw_stage_, u64 pgm_hash_)
@@ -171,8 +174,10 @@ struct Info : InfoPersistent {
         VAddr pgm_base;
     };
     static constexpr u32 MaxUdSnapshots = 6;
-    static inline thread_local UdSnapshot ud_snapshots[MaxUdSnapshots];
-    static inline thread_local u32 num_ud_snapshots = 0;
+    // constinit (perf7): constant-initialized, so no thread-local init routine is needed; with
+    // LTO on MinGW, the one referenced from other units was dropped (undefined symbol at link).
+    static inline constinit thread_local UdSnapshot ud_snapshots[MaxUdSnapshots]{};
+    static inline constinit thread_local u32 num_ud_snapshots = 0;
 
     const UdSnapshot* Snapshot() const noexcept {
         for (u32 i = 0; i < num_ud_snapshots; ++i) {

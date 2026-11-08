@@ -988,8 +988,15 @@ s32 PS4_SYSV_ABI sceNpTusPollAsync(int reqId, int* result) {
     }
 
     if (!req->task.valid()) {
-        LOG_ERROR(Lib_NpTus, "request not started");
-        return 1;
+        // bbport: a request no implemented call started (a stubbed ...Async, e.g. the friends' stats query the games
+        // make after Continue once they have an NP ID) finishes with no data (0 items: no friends). Reported as still
+        // running, the game waited on its loading screen forever; finished as "not signed in", it showed the
+        // "friends' stats are not available" notice again.
+        LOG_ERROR(Lib_NpTus, "request not started: finished with no data");
+        if (result) {
+            *result = 0;
+        }
+        return 0;
     }
     if (req->task.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
         LOG_DEBUG(Lib_NpTus, "request finished");
@@ -1134,8 +1141,12 @@ s32 PS4_SYSV_ABI sceNpTusWaitAsync(int reqId, int* result) {
     }
 
     if (!req->task.valid()) {
-        LOG_ERROR(Lib_NpTus, "request not started");
-        return 1;
+        // bbport: as in sceNpTusPollAsync: never started = finished with no data (waiting would never end).
+        LOG_ERROR(Lib_NpTus, "request not started: finished with no data");
+        if (result) {
+            *result = 0;
+        }
+        return ORBIS_OK;
     }
 
     req->task.wait();

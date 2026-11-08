@@ -32,6 +32,11 @@ int bbgpu_text_input_begin(const char *initial_utf8, const char *prompt_utf8);
 int bbgpu_text_input_poll(char *out_utf8, uint64_t size);
 /* 1 while the in-game settings menu is open: the game's pad input is held neutral. */
 int bbgpu_overlay_captures_input(void);
+/* The game reads the controller: the frame start of the low latency mode (NVIDIA Reflex / AMD
+ * Anti-Lag 2, BB_LOW_LATENCY), which may sleep there until the GPU is ready for the next frame. */
+void bbgpu_input_sample(void);
+/* The shader cache's last writes, before the process ends without destructors (runtime_quit). */
+void bbgpu_prepare_exit(void);
 /* Button prompts (button_prompts.cpp), the device used last: 0 keyboard or mouse (pictures of the
  * bound keys), 1 a PlayStation controller (the game's own buttons), 2 an Xbox or other controller
  * (Xbox buttons). */

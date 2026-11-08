@@ -394,7 +394,8 @@ void DefineEntryPoint(const Info& info, EmitContext& ctx, Id main) {
     case SwStage::Compute: {
         const std::array<u32, 3> workgroup_size{ctx.runtime_info.hw.cs.workgroup_size};
         execution_model = spv::ExecutionModel::GLCompute;
-        ctx.AddExecutionMode(main, spv::ExecutionMode::LocalSize, workgroup_size[0],
+        ctx.AddExecutionMode(main, spv::ExecutionMode::LocalSize,
+                             workgroup_size[0] / ctx.workgroup_split,
                              workgroup_size[1], workgroup_size[2]);
         break;
     }

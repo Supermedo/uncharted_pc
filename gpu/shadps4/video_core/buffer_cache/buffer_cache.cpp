@@ -334,12 +334,15 @@ struct BufferCache::Landing {
     boost::container::small_vector<VAddr, 4> targets;         ///< guest address of each copy
 };
 
-bool BufferCache::DeferGuestCopy(VAddr src, VAddr dst, u64 size) {
+bool BufferCache::DeferGuestCopy(VAddr src, VAddr dst, u64 size, bool guest_part, bool gated) {
     static const bool enabled = [] {
         const char* env = std::getenv("BB_SCALAR_COPY64_DEFER");
         return env && env[0] == '1'; // run.py: on for Uncharted 2
     }();
-    if (!enabled || !side_queue || land_stopping.load(std::memory_order_acquire) || size == 0 ||
+    // The raycaster copies (guest_part) are opt-in; the small GPU results the guest reads in place
+    // (ReadBackSmallWrittenBuffers, guest_part false) always land on the landing thread:
+    // waiting for them stopped the GPU thread (U3 Cartagena square 60 -> 36 FPS).
+    if ((guest_part && !enabled) || !side_queue || land_stopping.load(std::memory_order_acquire) || size == 0 ||
         size > SideQueue::StagingSize / 2 || !memory->IsValidGpuMapping(src, size) ||
         !memory->IsValidGpuMapping(dst, size)) {
         return false;
@@ -382,14 +385,20 @@ bool BufferCache::DeferGuestCopy(VAddr src, VAddr dst, u64 size) {
     }
     landing->tick = tick;
     // The guest part of the copy now; the GPU-written bytes follow when they have landed.
-    memory->TryWriteBacking(reinterpret_cast<void*>(dst), reinterpret_cast<const void*>(src), size);
+    if (guest_part) {
+        memory->TryWriteBacking(reinterpret_cast<void*>(dst), reinterpret_cast<const void*>(src), size);
+    }
     {
         std::scoped_lock lk{landing_mutex};
         if (landing_stop) {
             return false;
         }
-        landing->seq = ++landing_registered_seq;
-        landing_registered.store(landing->seq, std::memory_order_release);
+        if (gated) {
+            landing->seq = ++landing_registered_seq;
+            landing_registered.store(landing->seq, std::memory_order_release);
+        } else {
+            landing->seq = landing_registered_seq; // no label waits for it
+        }
         landing_queue.push_back(std::move(landing));
         if (!landing_thread.joinable()) {
             landing_thread = std::thread([this] { LandingWorker(); });
@@ -622,13 +631,26 @@ void BufferCache::WaitLanding(u64 seq) {
     }
 }
 
-void BufferCache::RunAfterLanding(u64 seq, std::function<void()> fn) {
+void BufferCache::RunAfterLanding(u64 seq, std::function<void()> fn, bool off_caller) {
     {
         std::unique_lock lk{landing_mutex};
-        if (landing_stop || (seq <= landing_done_seq && gated_labels.empty() && !gate_running)) {
+        const bool ready = seq <= landing_done_seq && gated_labels.empty() && !gate_running;
+        if (landing_stop || (ready && !off_caller)) {
             lk.unlock();
             fn();
             return;
+        }
+        if (ready) {
+            // Inline here it would have run on the Vulkan recording (or a copy) thread: an EOP
+            // flip there waits in Scheduler::SyncRecording() for the recording thread itself,
+            // and the game hangs (image frozen, sound going on) at the start of a cutscene.
+            static std::atomic<u64> moved{0};
+            const u64 count = moved.fetch_add(1, std::memory_order_relaxed) + 1;
+            if (count <= 3 || count % 1000 == 0) {
+                std::printf("Landing: a flip ready on the recording or a copy thread runs on the "
+                            "landing thread instead (%llu so far)\n",
+                            static_cast<unsigned long long>(count));
+            }
         }
         gated_labels.push_back({seq, std::move(fn)});
         gate_outstanding.fetch_add(1, std::memory_order_release);
@@ -655,6 +677,13 @@ void Run(u64 seq, std::function<void()> fn) {
         cache->RunAfterLanding(seq, std::move(fn));
     } else {
         fn();
+    }
+}
+void Post(u64 seq, std::function<void()> fn) {
+    if (auto* cache = land_instance.load(std::memory_order_acquire)) {
+        cache->RunAfterLanding(seq, std::move(fn), true);
+    } else {
+        fn(); // shutting down: no landing thread any more (as Run)
     }
 }
 bool Stopped() {
@@ -1765,6 +1794,40 @@ bool BufferCache::SynchronizeMemoryFromImage(const Buffer* arena, VAddr device_a
     }
     if (buffer_copies.empty()) {
         return false;
+    }
+    // bbport: the whole image is written back (TileImage: guest_size bytes from its start), but
+    // the caller made only the bound range [device_addr, device_addr + size) resident. A larger
+    // image's tail could still be unbacked in the sparse arena: the tiling shader wrote there and
+    // the device was lost ("write to an invalid address", the rare U3 start-up crash: checkpoints
+    // put the last dispatch at a 3440x1440 tiling, 2026-11-05). The written range is made resident
+    // first; its bind goes with the next submit, which waits for it. BB_TILE_RESIDENT=0: off.
+    static const bool tile_resident = [] {
+        const char* env = std::getenv("BB_TILE_RESIDENT");
+        return !(env && env[0] == '0');
+    }();
+    if (tile_resident) {
+        const u64 room = arena->size_bytes - arena_offset;
+        const u64 written = std::min<u64>(image.info.guest_size, room);
+        if (written > size) {
+            const u64 first_block = device_addr >> block_shift;
+            const u64 last_block = (device_addr + written - 1) >> block_shift;
+            u64 missing = 0;
+            resident_ranges.ForEachGap(first_block, last_block + 1,
+                                       [&](u64 start, u64 end) { missing += end - start; });
+            if (missing) {
+                static std::atomic<u32> reported{0};
+                const u32 n = reported.fetch_add(1, std::memory_order_relaxed);
+                if (n < 20 || (n % 100) == 0) {
+                    std::printf("Tiling: image 0x%llx (%llu KiB) written back over a %u KiB "
+                                "binding: %llu blocks of it made resident first (%u so far)\n",
+                                static_cast<unsigned long long>(device_addr),
+                                static_cast<unsigned long long>(written >> 10), size >> 10,
+                                static_cast<unsigned long long>(missing), n + 1);
+                    std::fflush(stdout);
+                }
+                EnsureResident(arena, first_block, last_block);
+            }
+        }
     }
     auto& tile_manager = texture_cache.GetTileManager();
     tile_manager.TileImage(image, buffer_copies, arena, arena_offset);

@@ -15,6 +15,7 @@
 #include "bbport_overlay.h"
 #include "video_core/renderer_vulkan/vk_temporal_upscaler.h"
 #include "video_core/renderer_vulkan/vk_presenter.h"
+#include "video_core/renderer_vulkan/vk_low_latency.h"
 #include "video_core/renderer_vulkan/vk_rasterizer.h"
 #include "video_core/texture_cache/image.h"
 
@@ -503,8 +504,12 @@ Frame* Presenter::PrepareFrame(const Libraries::VideoOut::BufferAttributeGroup& 
         }
         image_view = *image.FindView(view_info).image_view;
         image_size = vk::Extent2D{image.info.size.width, image.info.size.height};
+        // The FSR pass reads the picture in compute shaders (EASU when upscaling, RCAS), the post
+        // process pass in a fragment shader: the barrier covers both (from BilalReloaded's port
+        // 0.8.0: AMD menu flicker and black blocks).
         runtime.Transit(&image, vk::ImageLayout::eShaderReadOnlyOptimal,
-                        vk::PipelineStageFlagBits2::eFragmentShader,
+                        vk::PipelineStageFlagBits2::eFragmentShader |
+                            vk::PipelineStageFlagBits2::eComputeShader,
                         vk::AccessFlagBits2::eShaderRead);
         runtime.FlushBarriers();
     }
@@ -523,11 +528,27 @@ Frame* Presenter::PrepareFrame(const Libraries::VideoOut::BufferAttributeGroup& 
     frame->generated_count = 0;
     // Above about 165 FPS (6 ms) the game is faster than displays show generated frames:
     // generating would only take GPU time from it.
-    const bool fast_game = game_frame_ms.load(std::memory_order_relaxed) < 6.0;
-    static bool reported_fast = false;
-    if (fast_game && frame_generator->Wanted() && !reported_fast) {
-        reported_fast = true;
-        std::printf("Frame generation: paused while the game runs above 165 FPS\n");
+    // With a margin (paused above ~175 FPS, back below ~158): one threshold flipped generation on
+    // and off around 165 FPS, which halved and doubled the frames shown (DLSS players near it
+    // reported stutter, 2026-11-05).
+    static bool fast_game = false;
+    static u32 fast_switches = 0;
+    {
+        const double ms = game_frame_ms.load(std::memory_order_relaxed);
+        const bool was = fast_game;
+        if (!fast_game && ms < 5.7) {
+            fast_game = true;
+        } else if (fast_game && ms > 6.3) {
+            fast_game = false;
+        }
+        if (was != fast_game && frame_generator->Wanted()) {
+            ++fast_switches;
+            if (fast_switches <= 20 || (fast_switches % 100) == 0) {
+                std::printf("Frame generation: %s (game %.1f FPS, switch %u)\n",
+                            fast_game ? "paused, the game runs above 175 FPS" : "back on",
+                            1000.0 / ms, fast_switches);
+            }
+        }
     }
     if (frame_generator->Wanted() && !frame->is_hdr && !upscaled && !fast_game) {
         EnsureGenerated(frame);
@@ -765,18 +786,25 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame)
     if (shown && !behind()) {
         wait_until(start + step * shown);
     }
-    if (!PresentImage(frame, frame->image, true)) {
+    // bbport: low latency mode: the game's own frame carries its frame id (vk_low_latency.h).
+    const bool game_frame = !is_reusing_frame && is_game_frame;
+    const u64 latency_id = game_frame ? LowLatency::TakeGameFrame() : 0;
+    const bool presented = PresentImage(frame, frame->image, true, latency_id);
+    if (game_frame) {
+        LowLatency::GameFramePresented();
+    }
+    if (!presented) {
         free_frame();
         return;
     }
 
     free_frame();
-    if (!is_reusing_frame && is_game_frame) {
+    if (game_frame) {
         DebugState.IncFlipFrameNum();
     }
 }
 
-bool Presenter::PresentImage(Frame* frame, vk::Image image, bool last) {
+bool Presenter::PresentImage(Frame* frame, vk::Image image, bool last, u64 latency_id) {
     if (!swapchain.AcquireNextImage()) {
         swapchain.Recreate(window.GetWidth(), window.GetHeight());
         if (!swapchain.AcquireNextImage()) {
@@ -922,7 +950,7 @@ bool Presenter::PresentImage(Frame* frame, vk::Image image, bool last) {
     // Present to swapchain.
     {
         std::scoped_lock submit_lock{Scheduler::submit_mutex};
-        if (!swapchain.Present() && window.GetWidth() != 0 && window.GetHeight() != 0) {
+        if (!swapchain.Present(latency_id) && window.GetWidth() != 0 && window.GetHeight() != 0) {
             swapchain.Recreate(window.GetWidth(), window.GetHeight());
         }
     }

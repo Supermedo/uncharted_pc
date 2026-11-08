@@ -823,6 +823,10 @@ public:
     /// Waits until every recorded command is in the command buffer.
     void SyncRecording();
 
+    /// bbport: true on the Vulkan recording thread, which runs deferred label signals (and so
+    /// the guest interrupts behind them) but must never wait for itself in SyncRecording.
+    static bool OnRecorderThread();
+
     /// bbport: guest memory copies on the recording thread (small ones, RecordHostCopy) or the
     /// copy threads (BbCopy::Async) must be done before the guest learns the GPU is past them
     /// (it may then rewrite the memory, e.g. UI vertices: flickering) and before the
@@ -845,7 +849,10 @@ public:
     /// it to the copy threads' completion (BbCopy::AfterCopies).
     /// `landing_seq`: the deferred raycaster copies up to it (landing_gate.h) land before the
     /// signal runs.
-    void SignalAfterHostCopies(std::function<void()> signal, u64 landing_seq = 0);
+    /// `off_recorder`: when deferred, `signal` runs on the landing thread, never on the
+    /// recording thread or a copy thread (LandingGate::Post): for the flip interrupt.
+    void SignalAfterHostCopies(std::function<void()> signal, u64 landing_seq = 0,
+                               bool off_recorder = false);
 
     /// bbport: before a guest-visible write that is not deferred (WriteData, end-of-shader
     /// fences, flip): waits until every signal handed to SignalAfterHostCopies ran, so that

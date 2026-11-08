@@ -1,9 +1,10 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 """Pictures for the Uncharted launcher (Pillow).
 
-- card_scene() / banner_scene(): the three cover posters in launcher/art (u1, u2, u3).
-  card_scene shows the whole poster. banner_scene blurs it into a wide header.
-  If a file is missing, card_scene falls back to a painted scene;
+- card_scene() / banner_scene(): the three game scenes in launcher/covers (u1, u2, u3), original
+  art drawn by packaging/windows/make_uncharted_art.py (no game images). card_scene shows the
+  whole scene, banner_scene blurs it into a wide header. If a file is missing, card_scene falls
+  back to a simpler painted scene;
 - cover(): the collection's box art from the player's own game folder (sce_sys/icon0.png);
 - steam_artwork(): Steam library pictures for the non-Steam shortcut, made from the same files of
   the player's game folder (cover, wide header, hero banner).
@@ -180,13 +181,12 @@ def set_custom_art(paths, crops=None):
 
 
 def art_directories():
-    """Where covers are looked for, first match per file wins: the art folder next to
-    Uncharted.exe (frozen) and launcher/art, the player's own covers that are never distributed;
-    then the covers that come with the port (launcher/covers, bundled as covers)."""
+    """Where the pictures are looked for: only the original art that comes with the port
+    (launcher/covers, bundled as covers). Pictures a player picks with "Change image" are
+    loaded from their own path (set_custom_art)."""
     here = Path(__file__).resolve().parent
     bundle = Path(getattr(sys, '_MEIPASS', here))
-    own = [Path(sys.executable).resolve().parent / 'art'] if getattr(sys, 'frozen', False) else []
-    return own + [here / 'art', bundle / 'covers', here / 'covers']
+    return [bundle / 'covers', here / 'covers']
 
 
 def load_art(name):
@@ -332,8 +332,8 @@ def poster_tile(key, width, height, title, subtitle, *, selected=False, hover=Fa
                                            fill=(page[0], page[1], page[2], 245))
     canvas.alpha_composite(foot, (pad, pad + poster_h))
     draw = ImageDraw.Draw(canvas)
-    title_color = (231, 195, 106) if selected else (246, 241, 230)
-    sub_color = (231, 195, 106) if selected else (154, 145, 127)
+    title_color = (226, 166, 74) if selected else (248, 238, 219)
+    sub_color = (226, 166, 74) if selected else (156, 142, 118)
     title_x = pad + max(8, (width - title_font.getlength(title)) / 2)
     sub_x = pad + max(8, (width - sub_font.getlength(subtitle)) / 2)
     title_y = pad + poster_h + 8
@@ -346,7 +346,7 @@ def poster_tile(key, width, height, title, subtitle, *, selected=False, hover=Fa
 
 
 def collection_banner(width, height, page=(5, 5, 5)):
-    """Legacy of Thieves-style header art, cropped to width×height with a soft bottom fade."""
+    """The collection banner (an old map), cropped to width×height with a soft bottom fade."""
     global _BANNER
     if _BANNER is None:
         _BANNER = load_art(COLLECTION_BANNER) or False
@@ -381,7 +381,7 @@ def hero_backdrop(key, width, height, page=(10, 10, 10)):
     vignette = vignette.filter(ImageFilter.GaussianBlur(max(20, width // 30)))
     dark = Image.new('RGB', image.size, (4, 3, 2))
     image = Image.composite(dark, image, vignette.point(lambda v: int((255 - v) * 0.55)))
-    gold = Image.new('RGB', (width, 1), (231, 195, 106))
+    gold = Image.new('RGB', (width, 1), (226, 166, 74))
     gold = gold.resize((width, height))
     gold_mask = Image.linear_gradient('L').resize((width, height)).point(lambda v: int(v * 0.08))
     image = Image.composite(gold, image, gold_mask)
@@ -481,3 +481,16 @@ if __name__ == '__main__':  # preview: python uncharted_art.py out.png [game fol
         sheet.paste(_framed(cover(sys.argv[2]), (200, 300)), (0, 225))
         sheet.paste(_framed(cover(sys.argv[2]), (640, 300)), (210, 225))
     sheet.save(sys.argv[1])
+
+
+def emblem(side):
+    """The brass compass emblem (covers/emblem.png) at side×side, or None."""
+    for directory in art_directories():
+        path = directory / 'emblem.png'
+        if path.is_file():
+            try:
+                with Image.open(path) as image:
+                    return image.convert('RGBA').resize((side, side), Image.LANCZOS)
+            except OSError:
+                return None
+    return None

@@ -1,0 +1,2 @@
+# Keep patch files byte-exact (LF) so they apply on any checkout.
+*.patch -text

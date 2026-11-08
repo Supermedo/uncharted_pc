@@ -1,0 +1,24 @@
+diff --git a/src/ffx_vk_fsr3_3_1_6_framegen.cpp b/src/ffx_vk_fsr3_3_1_6_framegen.cpp
+index 9636cec..a28321d 100644
+--- a/src/ffx_vk_fsr3_3_1_6_framegen.cpp
++++ b/src/ffx_vk_fsr3_3_1_6_framegen.cpp
+@@ -474,6 +474,10 @@ ffxVkFsr3_3_1_6FrameGenerationContextRecordPrepare(
+             return result_from_ffx(initResult);
+         context->initialized = true;
+     }
++    /* The bridge tags the constant buffers and descriptor sets it allocates per dispatch with
++     * the active frame and frees them in ffxVkFsr3_3_1_5BridgeRetireFrame (as the upscaler
++     * does): without this they stayed tagged 0 and were never freed (~2-3 MB a frame). */
++    ffxVkFsr3_3_1_5BridgeBeginFrame(context->bridge, info->frameId);
+     const FfxVkFsr3_3_1_5Resource color = import_frame_image(context->bridge, info->color, false);
+     const FfxVkFsr3_3_1_5Resource depth = import_frame_image(context->bridge, info->depth, false);
+     const FfxVkFsr3_3_1_5Resource motion = import_frame_image(context->bridge, info->motionVectors, false);
+@@ -676,6 +680,8 @@ ffxVkFsr3_3_1_6FrameGenerationContextRetireFrame(
+             ++retained;
+         }
+     }
++    /* The per-dispatch constant buffers and descriptor sets of the finished frames. */
++    ffxVkFsr3_3_1_5BridgeRetireFrame(context->bridge, completedFrameId);
+     return FFX_VK_FSR3_3_1_6_FRAMEGEN_OK;
+ }
+ 

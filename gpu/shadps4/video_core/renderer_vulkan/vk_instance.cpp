@@ -15,6 +15,7 @@
 #include "video_core/renderer_vulkan/vk_dlss.h"
 #include "video_core/renderer_vulkan/vk_xess.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
+#include "video_core/renderer_vulkan/vk_low_latency.h"
 #include "video_core/renderer_vulkan/vk_vram.h"
 #include "video_core/renderer_vulkan/vk_platform.h"
 
@@ -391,7 +392,16 @@ bool Instance::CreateDevice() {
     const bool calibrated_timestamps =
         TRACY_GPU_ENABLED ? add_extension(VK_EXT_CALIBRATED_TIMESTAMPS_EXTENSION_NAME) : false;
     // bbport: what the GPU touched when the device is lost (reported by vk_semaphore.cpp).
-    g_device_fault_ext = add_extension(VK_EXT_DEVICE_FAULT_EXTENSION_NAME);
+    // GeForce GTX 10-series cards (Pascal) crash at start with it (BilalReloaded's port 0.8.1, #211/#285: a GTX 1070
+    // starts without it), so NVIDIA cards older than Turing (device IDs below 0x1e00) leave it off.
+    // BB_DEVICE_FAULT=1: on anyway, 0: off everywhere.
+    const char* fault_env = std::getenv("BB_DEVICE_FAULT");
+    const bool fault_safe = !(properties.vendorID == 0x10de && properties.deviceID < 0x1e00);
+    if ((fault_env && fault_env[0] == '1') || (fault_safe && !(fault_env && fault_env[0] == '0'))) {
+        g_device_fault_ext = add_extension(VK_EXT_DEVICE_FAULT_EXTENSION_NAME);
+    } else if (!fault_safe) {
+        std::printf("GPU device fault reports: off on NVIDIA cards older than Turing (BB_DEVICE_FAULT=1: on)\n");
+    }
     if (const char* env = std::getenv("BB_GPU_CHECKPOINTS"); env && env[0] == '1') {
         g_gpu_checkpoints = add_extension(VK_NV_DEVICE_DIAGNOSTIC_CHECKPOINTS_EXTENSION_NAME);
     }
@@ -487,6 +497,17 @@ bool Instance::CreateDevice() {
                 enabled_extensions.size() < enabled_extensions.capacity()) {
                 enabled_extensions.push_back(name);
             }
+        }
+    }
+    // bbport: low latency mode (NVIDIA Reflex / AMD Anti-Lag 2, BB_LOW_LATENCY).
+    std::vector<const char*> latency_extensions;
+    void* latency_features =
+        LowLatency::PrepareDevice(physical_device, available_extensions, latency_extensions);
+    for (const char* name : latency_extensions) {
+        if (std::none_of(enabled_extensions.begin(), enabled_extensions.end(),
+                         [&](const char* e) { return std::string_view{e} == name; }) &&
+            enabled_extensions.size() < enabled_extensions.capacity()) {
+            enabled_extensions.push_back(name);
         }
     }
     vk::StructureChain device_chain = {
@@ -712,6 +733,14 @@ bool Instance::CreateDevice() {
         device_chain.unlink<vk::PhysicalDeviceShaderMixedFloatDotProductFeaturesVALVE>();
     }
 
+    if (latency_features) {
+        auto* tail = reinterpret_cast<VkBaseOutStructure*>(
+            &device_chain.get<vk::PhysicalDeviceFeatures2>());
+        while (tail->pNext) {
+            tail = tail->pNext;
+        }
+        tail->pNext = static_cast<VkBaseOutStructure*>(latency_features);
+    }
     // bbport: XeSS enables its features in the chain (and may append structures to its end).
     if (Xess* xess = Xess::Get()) {
         xess->PatchDeviceFeatures(*instance, physical_device,
@@ -725,6 +754,7 @@ bool Instance::CreateDevice() {
     device = std::move(dev);
 
     VULKAN_HPP_DEFAULT_DISPATCHER.init(*device);
+    LowLatency::OnDevice(*device);
     if (Dlss* dlss = Dlss::Get()) {
         dlss->Initialize(*instance, physical_device, *device);
     }

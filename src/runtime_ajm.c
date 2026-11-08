@@ -618,7 +618,7 @@ static ABI int32_t ajm_module_unregister(uint32_t id, uint32_t codec) {
 static ABI int32_t ajm_instance_create(uint32_t id, uint32_t codec, uint64_t flags, uint32_t *out) {
     if (!out || codec>=24) return ERR_INVALID_PARAMETER;
     if (!(flags & 7)) return ERR_WRONG_REVISION;
-    if (codec>1) { fprintf(stderr,"STOP: Ajm codec %u (0=MP3, 2=AAC) is not implemented\n",codec); exit(21); }
+    if (codec>1) { fprintf(stderr,"Ajm codec %u is not implemented; returning an error\n",codec); return ERR_INVALID_PARAMETER; }
     if (ajm_trace()) printf("Audio trace: Ajm instance create codec %u flags %#llx\n",codec,(unsigned long long)flags);
     pthread_mutex_lock(&lock);
     Context *c=context(id);

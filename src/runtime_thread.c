@@ -75,18 +75,18 @@ static DWORD tls_slot=TLS_OUT_OF_INDEXES;
 uint32_t runtime_thread_tcb_offset(void) {
     if (tls_slot==TLS_OUT_OF_INDEXES) {
         tls_slot=TlsAlloc();
-        if (tls_slot>=64) { fprintf(stderr,"STOP: no TEB TLS slot below 64 (got %lu)\n",tls_slot); exit(21); }
+        if (tls_slot>=64) { fprintf(stderr,"STOP: no TEB TLS slot below 64 (got %lu)\n",tls_slot); runtime_quit(21); }
     }
     return 0x1480+8*(uint32_t)tls_slot;
 }
 static void set_gs(void *base) {
     runtime_thread_tcb_offset();
-    if (!TlsSetValue(tls_slot,base)) { fprintf(stderr,"STOP: TlsSetValue failed (%lu)\n",GetLastError()); exit(21); }
+    if (!TlsSetValue(tls_slot,base)) { fprintf(stderr,"STOP: TlsSetValue failed (%lu)\n",GetLastError()); runtime_quit(21); }
 }
 #define tls_block_alloc(size) _aligned_malloc(size,64)
 #else
 static void set_gs(void *base) {
-    if (syscall(SYS_arch_prctl,ARCH_SET_GS,(unsigned long)base)) { perror("STOP: arch_prctl(ARCH_SET_GS)"); exit(21); }
+    if (syscall(SYS_arch_prctl,ARCH_SET_GS,(unsigned long)base)) { perror("STOP: arch_prctl(ARCH_SET_GS)"); runtime_quit(21); }
 }
 #define tls_block_alloc(size) aligned_alloc(64,size)
 #endif
@@ -133,6 +133,7 @@ void runtime_thread_attach_host(const char *name) {
     GuestThread *t=runtime_thread_current();
     snprintf(t->name,sizeof(t->name),"%s",name ? name : "host");
 }
+const char *runtime_thread_name_here(void) { return current ? current->name : NULL; }
 void runtime_thread_attach_main(void) {
     GuestThread *t=runtime_thread_current();
     snprintf(t->name,sizeof(t->name),"main");
@@ -320,7 +321,7 @@ static int32_t create(GuestThread **out,ThreadAttr **attr_slot,GuestEntry entry,
     *out=t;
     int e=pthread_create(&t->host,&host,host_start,t);
     pthread_attr_destroy(&host);
-    if (e) { fprintf(stderr,"STOP: host pthread_create failed: %d\n",e); exit(21); }
+    if (e) { fprintf(stderr,"STOP: host pthread_create failed: %d\n",e); runtime_quit(21); }
     if (t->detached) pthread_detach(t->host);
     pthread_mutex_lock(&lock); ++created; pthread_mutex_unlock(&lock);
     printf("Runtime: guest thread '%s' created (stack=%llu, prio=%d)\n",t->name,(unsigned long long)stack,t->attr.prio);
@@ -336,7 +337,7 @@ static ABI int32_t thread_join(GuestThread *t,void **result) {
     t->joined=1;
     void *value=NULL;
     int e=pthread_join(t->host,&value);
-    if (e) { fprintf(stderr,"STOP: host pthread_join failed: %d\n",e); exit(21); }
+    if (e) { fprintf(stderr,"STOP: host pthread_join failed: %d\n",e); runtime_quit(21); }
     if (result) *result=t->result;
     pthread_mutex_lock(&lock); ++joined_count; pthread_mutex_unlock(&lock);
     return 0;
@@ -350,7 +351,7 @@ static ABI int32_t thread_detach(GuestThread *t) {
 }
 static ABI __attribute__((noreturn)) void thread_exit(void *value) {
     GuestThread *t=runtime_thread_current();
-    if (t->host_owned) { fputs("STOP: pthread_exit on host-owned/main thread\n",stderr); exit(21); }
+    if (t->host_owned) { fputs("STOP: pthread_exit on host-owned/main thread\n",stderr); runtime_quit(21); }
     t->result=value;
     /* No host unwinder: guest frames have no registered FDEs. */
     exit_longjmp(t);
@@ -365,11 +366,13 @@ static ABI int32_t thread_get_prio(GuestThread *t,int *prio) {
  * game thread uses. The Nd job workers are created at 767 and the file I/O threads at 260-272.
  * Windows has fewer levels, so the guest range is cut into bands around NORMAL. Without this the
  * spinning idle workers ran at the same priority as the threads doing real work (and starved
- * the GPU command thread on CPUs with few cores). BB_THREAD_PRIO=0 keeps every thread at normal. */
+ * the GPU command thread on CPUs with few cores). Off by default since 0.3.11: the 4-core
+ * cmdBuf.m_bInUse crash they were for is fixed by the job wait patch (probe.c), and with them on it
+ * was only rarer (Mevlock). BB_THREAD_PRIO=1 turns them on. */
 static int host_priority(int prio) {
 #ifdef _WIN32
     static int enabled=-1;
-    if (enabled<0) { const char *env=getenv("BB_THREAD_PRIO"); enabled=!(env && env[0]=='0'); }
+    if (enabled<0) { const char *env=getenv("BB_THREAD_PRIO"); enabled=env && env[0]=='1'; }
     if (!enabled) return THREAD_PRIORITY_NORMAL;
     if (prio<=300) return THREAD_PRIORITY_ABOVE_NORMAL;
     if (prio<720) return THREAD_PRIORITY_NORMAL;
