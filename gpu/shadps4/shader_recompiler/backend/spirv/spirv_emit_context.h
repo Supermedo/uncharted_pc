@@ -284,6 +284,8 @@ public:
     Id tess_coord;
     std::array<Id, 30> patches{};
 
+    /// bbport: guest workgroups run as this many host workgroups (WorkgroupSplit).
+    u32 workgroup_split{1};
     Id workgroup_id{};
     Id num_workgroups_id{};
     Id workgroup_index_id{};

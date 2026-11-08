@@ -485,8 +485,11 @@ void EmitContext::DefineInputs() {
         break;
     }
     case SwStage::Compute:
+        workgroup_split = WorkgroupSplit(info.cs_split_eligible, runtime_info.hw.cs);
         if (info.loads.GetAny(IR::Attribute::WorkgroupIndex) ||
-            info.loads.GetAny(IR::Attribute::WorkgroupId)) {
+            info.loads.GetAny(IR::Attribute::WorkgroupId) ||
+            (workgroup_split > 1 && (info.loads.GetAny(IR::Attribute::LocalInvocationId) ||
+                                     info.loads.Get(IR::Attribute::LocalInvocationIndex)))) {
             workgroup_id =
                 DefineVariable(U32[3], spv::BuiltIn::WorkgroupId, spv::StorageClass::Input);
         }

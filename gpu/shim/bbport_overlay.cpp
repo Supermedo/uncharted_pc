@@ -12,6 +12,7 @@
 #include <cstdlib>
 #include <mutex>
 #include <vector>
+#include <thread>
 
 #include <SDL3/SDL.h>
 #include "bbport_settings.h"
@@ -20,6 +21,7 @@
 #include "imgui_internal.h"
 #include "imgui_impl_vulkan.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
+#include "video_core/renderer_vulkan/vk_low_latency.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
 
 // DejaVu Sans (Cyrillic), embedded (third_party/fonts, Bitstream Vera license).
@@ -48,6 +50,7 @@ extern "C" const unsigned char bb_font_ttf[];
 extern "C" const unsigned char bb_font_ttf_end[];
 
 extern "C" void runtime_restart(void); // bb-probe (probe.c)
+extern "C" int runtime_savedata_wait_idle(unsigned timeout_ms); // bb-probe (runtime_savedata.c)
 
 namespace BbOverlay {
 
@@ -140,12 +143,47 @@ void Store(std::atomic<T>& target, T value, bool changed) {
 
 void Checkbox(const char* label, std::atomic<bool>& value) {
     bool v = value;
-    Store(value, v, ImGui::Checkbox(label, &v));
+    // The widget runs first: as one argument list, v could be read before it changed.
+    const bool changed = ImGui::Checkbox(label, &v);
+    Store(value, v, changed);
 }
 
 void Slider(const char* label, std::atomic<float>& value, float lo, float hi) {
     float v = value;
-    Store(value, v, ImGui::SliderFloat(label, &v, lo, hi, "%.2f"));
+    const bool changed = ImGui::SliderFloat(label, &v, lo, hi, "%.2f");
+    Store(value, v, changed);
+}
+
+// Quit game: the confirmation's labels.
+struct QuitText {
+    const char *button, *title, *body, *quit, *cancel, *quitting;
+};
+const QuitText& Quitting() {
+    static const QuitText en{"Quit game", "Quit the game?",
+                             "Progress since the last save is lost. A save in progress is "
+                             "finished first.",
+                             "Quit", "Cancel", "Quitting..."};
+    return en;
+}
+std::atomic<bool> quitting{false};
+
+// The same exit as closing the window (SDL_EVENT_QUIT ends the window thread's loop), once a save
+// in progress has finished (at most 5 seconds).
+void Quit() {
+    if (quitting.exchange(true)) {
+        return;
+    }
+    std::thread([] {
+        const int waited = runtime_savedata_wait_idle(5000);
+        std::printf("Quit: from the settings menu, %s\n",
+                    waited == 0 ? "no save in progress"
+                    : waited > 0 ? "after waiting for the save in progress to finish"
+                                 : "a save still in progress after 5 s (quitting anyway)");
+        std::fflush(stdout);
+        SDL_Event event{};
+        event.type = SDL_EVENT_QUIT;
+        SDL_PushEvent(&event);
+    }).detach();
 }
 
 void Hint(const char* text) {
@@ -399,7 +437,37 @@ void Menu() {
         keep_open = false;
     }
     ImGui::SameLine();
+    const QuitText& q = Quitting();
+    ImGui::BeginDisabled(quitting);
+    if (ImGui::Button(quitting ? q.quitting : q.button)) {
+        ImGui::OpenPopup("##quit");
+    }
+    ImGui::EndDisabled();
+    ImGui::SameLine();
     ImGui::TextDisabled("Settings are saved to bbport.ini");
+    // The confirmation: mouse, keyboard or controller (D-pad, Cross); Cancel has the focus.
+    if (ImGui::BeginPopupModal("##quit", nullptr,
+                               ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoTitleBar)) {
+        ImGui::TextUnformatted(q.title);
+        ImGui::PushTextWrapPos(ImGui::GetFontSize() * 24.0f);
+        ImGui::TextDisabled("%s", q.body);
+        ImGui::PopTextWrapPos();
+        ImGui::Spacing();
+        if (ImGui::Button(q.quit)) {
+            if (dirty) {
+                dirty = false;
+                BbSettings::Save();
+            }
+            Quit();
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button(q.cancel)) {
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SetItemDefaultFocus();
+        ImGui::EndPopup();
+    }
     ImGui::End();
     if (!keep_open) {
         SetOpen(false);
@@ -442,7 +510,8 @@ void FpsCounter() {
                      ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoNav |
                      ImGuiWindowFlags_NoFocusOnAppearing);
     const auto& s = BbSettings::Get();
-    ImGui::Text("%.0f FPS  %.1f ms  %s", frame_ms_avg > 0.0f ? 1000.0f / frame_ms_avg : 0.0f,
+    const char* latency = Vulkan::LowLatency::Name();
+    ImGui::Text("%.0f FPS  %.1f ms  %s%s%s", frame_ms_avg > 0.0f ? 1000.0f / frame_ms_avg : 0.0f,
                 frame_ms_avg,
                 s.upscaler == BbSettings::UpscalerFsr3   ? "FSR 3.1"
                 : s.upscaler == BbSettings::UpscalerFsr4 ? "FSR 4"
@@ -450,7 +519,8 @@ void FpsCounter() {
                 : s.upscaler == BbSettings::UpscalerTaa ? "TAA"
                 : s.upscaler == BbSettings::UpscalerDlss ? "DLSS"
                 : s.upscaler == BbSettings::UpscalerXess ? "XeSS"
-                                                         : "");
+                                                         : "",
+                latency ? "  " : "", latency ? latency : "");
     ImGui::End();
 }
 

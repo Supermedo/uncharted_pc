@@ -18,7 +18,7 @@ void runtime_content_configure(const uint32_t values[5]) {
     memcpy(parameters,values,sizeof(parameters)); configured=1;
 }
 static void require_provider(void) {
-    if (!configured) { fputs("STOP: AppContent needs --content-profile\n",stderr); exit(21); }
+    if (!configured) { fputs("STOP: AppContent needs --content-profile\n",stderr); runtime_quit(21); }
 }
 /* System modules: every library this eboot imports is provided by the host
  * runtime, so loading one only tracks a reference count. AppContent (0xb4)
@@ -27,7 +27,7 @@ static unsigned module_refs[0x10000];
 static ABI int32_t module_load(uint16_t id) {
     if (!id) return INVALID_ID;
     if (id==0xb4) require_provider();
-    if (module_refs[id]==UINT32_MAX) { fputs("STOP: module reference overflow\n",stderr); exit(21); }
+    if (module_refs[id]==UINT32_MAX) { fputs("STOP: module reference overflow\n",stderr); runtime_quit(21); }
     ++module_refs[id];
     if (id==0xb4) { refs=module_refs[id]; printf("Runtime: AppContent host provider loaded; references=%u\n",refs); }
     else printf("Runtime: system module 0x%x loaded (host implementation)\n",id);
@@ -46,7 +46,7 @@ static ABI int32_t module_unload(uint16_t id) {
 }
 static void require_loaded(void) {
     require_provider();
-    if (!refs) { fputs("STOP: AppContent called before module load\n",stderr); exit(21); }
+    if (!refs) { fputs("STOP: AppContent called before module load\n",stderr); runtime_quit(21); }
 }
 static ABI int32_t content_init(const unsigned char *init,unsigned char *boot) {
     require_loaded();
@@ -60,7 +60,7 @@ static ABI int32_t content_init(const unsigned char *init,unsigned char *boot) {
 }
 static void require_initialized(void) {
     require_loaded();
-    if (!initialized) { fputs("STOP: AppContent query before initialization\n",stderr); exit(21); }
+    if (!initialized) { fputs("STOP: AppContent query before initialization\n",stderr); runtime_quit(21); }
 }
 static ABI int32_t param_int(uint32_t id,int32_t *out) {
     require_initialized();
@@ -71,7 +71,7 @@ static ABI int32_t param_int(uint32_t id,int32_t *out) {
 }
 static ABI int32_t addon_list(uint32_t service,void *list,uint32_t capacity,uint32_t *hits) {
     require_initialized();
-    if (service) { fputs("STOP: nonzero AppContent service label unsupported\n",stderr); exit(21); }
+    if (service) { fputs("STOP: nonzero AppContent service label unsupported\n",stderr); runtime_quit(21); }
     if ((!capacity || !list) && !hits) return PARAMETER;
     /* No add-ons are mounted by this provider. Never touch unused list slots. */
     if (hits) *hits=0;

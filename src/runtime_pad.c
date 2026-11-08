@@ -20,6 +20,7 @@
 #include "gpu/bbgpu.h"
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdatomic.h>
 #include <string.h>
 #include <pthread.h>
 #include <time.h>
@@ -597,10 +598,139 @@ _Static_assert(sizeof(u2_focus_reset_100)==56 && sizeof(u2_focus_reset_102)==58,
 #define CC8 0xcc,0xcc,0xcc,0xcc,0xcc,0xcc,0xcc,0xcc
 static const unsigned char u2_leg_ik_zero_100[]={U2_LEG_IK_ZERO(0x2d),CC8,CC8,CC8,CC8,CC8};
 static const unsigned char u2_leg_ik_zero_102[]={U2_LEG_IK_ZERO(0x2f),CC8,CC8,CC8,CC8,CC8,0xcc,0xcc};
+/* U1 and U2 "pAction != NULL" (moveactioncontroller.cpp:40), from Mevlock's dev fork: the
+ * player's move actions come from a pool of 64 slots. Two move states swapping every frame
+ * (landing into a fight, often right after a jump) keep one action each swap; at 144 FPS bursts
+ * took 16-30 slots, and a longer one filled the pool and stopped the game. The slot count passed
+ * where the character is set up becomes 256 (+144 KB from the character's heap). One site in U1
+ * and one in U2, in every build; U3 has no such pool. */
+static const unsigned char move_pool_256[]={0xb9,0x00,0x01,0x00,0x00}; /* mov ecx, 256 */
 _Static_assert(sizeof(u2_leg_ik_zero_100)==51 && sizeof(u2_leg_ik_zero_102)==53,"patch sizes");
+/* U3 Player::UpdateFocus (player.cpp:1897, assertion m_lookAt.X() == m_lookAt.X(): the crash
+ * climbing the fort in chapter 8). The point Nate looks at ([player+0xef0], velocity +0xf00)
+ * springs towards a target; once NaN it stays NaN, and the function's own reset (taken when the
+ * point is far off) never runs for it: NaN compares false. The assertion's path now takes that
+ * reset when the target is a number (the velocity register zeroed first, as on the reset's usual
+ * way in); a NaN target still stops the game. BilalReloaded's fix for 1.02 (his Uncharted port,
+ * GPL v2, GitHub #13 there), and the same for 1.00 (reset at 0x390779, target at rbp-0xa0, zero in
+ * xmm4). */
+static const unsigned char u3_focus_reset_100[]={
+    0xc5,0xd8,0x57,0xe4,                          /* vxorps xmm4, xmm4, xmm4 */
+    0xc5,0xf8,0x28,0x85,0x60,0xff,0xff,0xff,      /* vmovaps xmm0, [rbp-0xa0] (the target) */
+    0xc5,0xf8,0xc2,0xc8,0x00,                     /* vcmpeqps xmm1, xmm0, xmm0 */
+    0xc5,0xf8,0x50,0xc1,                          /* vmovmskps eax, xmm1 */
+    0x83,0xf8,0x0f,                               /* cmp eax, 15 */
+    0x0f,0x84,0xa3,0xfe,0xff,0xff,                /* je the reset (0x390779) */
+    0xcd,0x41,                                    /* the target is NaN too: trap as before */
+    CC8,CC8,0xcc,0xcc,0xcc,
+};
+static const unsigned char u3_focus_reset_102[]={
+    0xc5,0xd0,0x57,0xed,0xc5,0xf8,0x28,0x45,0x80,0xc5,0xf8,0xc2,0xc8,0x00,0xc5,0xf8,0x50,0xc1,
+    0x83,0xf8,0x0f,0x0f,0x84,0xa5,0xfe,0xff,0xff,0xcd,0x41,CC8,CC8,CC8,
+};
+_Static_assert(sizeof(u3_focus_reset_100)==51 && sizeof(u3_focus_reset_102)==53,"patch sizes");
+/* Render command contexts (ndgi), from Mevlock's dev fork: Begin and End keep a per-thread flag,
+ * set while a job worker has a context open (runtime_ndgi_open, cleared too when a fiber leaves
+ * the thread, runtime_fiber.c), used by the job wait patch in probe.c. A context records its
+ * worker at Begin (+0xe810) and asserts the same one at End ("m_workerThreadIndex ==
+ * GetCurrentWorkerThreadIndex()"). One site each in all three games. */
+extern _Thread_local int runtime_ndgi_open; /* runtime_fiber.c */
+static void __attribute__((ms_abi)) ndgi_begin(uint64_t rdi, uint64_t rsi, uint64_t image, uint64_t r14,
+                                               const RuntimeGuestRegs *regs) {
+    (void)rdi; (void)rsi; (void)image; (void)r14; (void)regs;
+    runtime_ndgi_open=1;
+}
+static void __attribute__((ms_abi)) ndgi_end(uint64_t rdi, uint64_t rsi, uint64_t image, uint64_t r14,
+                                             const RuntimeGuestRegs *regs) {
+    (void)rdi; (void)rsi; (void)image; (void)r14; (void)regs;
+    runtime_ndgi_open=0;
+}
 /* The camera code, the pad code and the assertion are found by their instructions, so a build of the
  * game that has them works (version 1.00 and 1.02 are known; "build" below). RIP-relative
  * displacements and call targets are wildcards. Entries with one name are variants for the builds. */
+/* U2 Chapter Select weapons (issue #16, 2026-11-06): the menu's Chapter Select plays the chapter's
+ * task group (PlayTask, mode 1). PlayTask first resets the player's settings to the default set
+ * (459d0e4e: only the .45 Defender, 40 rounds) and then applies the weapon set of the task it played
+ * or its parents; a group has none. The chapter's first checkpoint applies its own set when it
+ * activates only if its tasks.bin flags carry 0x20, and the first checkpoints of chapters 8 and 13
+ * (war-temple-1-inside-temple, valley-start) do not: Nate starts with the Defender, whose model
+ * those levels never load, so it is invisible and silent (the overlay's checkpoint jump plays the
+ * checkpoint itself and gets its Beretta, rifle and grenade). Here, after PlayTask(mode 1) of a task
+ * without data (a group), the first playable task that activates gets its set as flag 0x20 would
+ * give it (when the set has a gun); once. Continue (mode 2), checkpoint restarts and jumps to a
+ * checkpoint do not arm it. Chapters it changes: 6-10, 13, 14, 18, 20, 23, 24, 26.
+ * BB_CHAPTER_WEAPONS=0: off. */
+typedef void (__attribute__((sysv_abi)) *U2ApplySettings)(uint32_t set);
+static _Atomic int u2_chapter_start; /* armed by a group's PlayTask(mode 1) */
+static int u2_chapter_weapons_on(void) {
+    static int on=-1;
+    if (on<0) { const char *e=getenv("BB_CHAPTER_WEAPONS"); on=!(e && e[0]=='0'); }
+    return on;
+}
+static void u2_chapter_play(uint64_t task, uint64_t mode) {
+    if (!u2_chapter_weapons_on() || task<0x10000) return;
+    const int group=*(const uint64_t *)(uintptr_t)(task+0x50)==0;
+    atomic_store(&u2_chapter_start,(uint32_t)mode==1 && group);
+}
+static const unsigned char u2_apply_settings_eu[]={0x55,0x48,0x89,0xe5,0x31,0xf6,0xe8,0x25,0x2c,0xfd,0xff,0x48,0x85,
+                                                   0xc0,0x74,0x12,0x48,0x8d,0x3d,0xf1,0xd9,0xb9,0x00,0xb9};
+static const unsigned char u2_apply_settings_us[]={0x55,0x48,0x89,0xe5,0xe8,0x97,0x4e,0xfb,0xff,0x48,0x85,0xc0,0x74,
+                                                   0x17,0x48,0x8b,0x30,0x48,0x85,0xf6,0x74,0x0f,0x48,0x8d};
+static void u2_chapter_activate(uint64_t task, uint64_t image, uint64_t apply, const unsigned char *code, size_t size) {
+    if (!atomic_load(&u2_chapter_start) || task<0x10000) return;
+    if (memcmp((const void *)(uintptr_t)(image+apply),code,size)) {
+        atomic_store(&u2_chapter_start,0);
+        printf("Chapter weapons: the settings function is not where expected; nothing applied\n");
+        return;
+    }
+    const unsigned char *t=(const unsigned char *)(uintptr_t)task;
+    const unsigned char *data=*(const unsigned char *const *)(t+0x50);
+    if (!data || !(*(const uint32_t *)(data+0xd0)&6)) return; /* not playable (a group): wait */
+    atomic_store(&u2_chapter_start,0);
+    const uint32_t flags=*(const uint32_t *)(t+0x48), set=*(const uint32_t *)(data+0xc8);
+    if (flags&0x20 || !set) return; /* the game applies it itself */
+    /* Only a set with a gun: some first checkpoints name the empty set (65759d0e, the unarmed openings'),
+     * where the Defender is better than nothing (chapter 12, war-escape-watertower-fight). The set: five
+     * slots {name, weapon id +8, ammo +0x10} of 0x18 bytes; guns in the first three, f114b39d = none.
+     * The lookup is the one the settings function calls (EU: (id, 0) -> set; 1.02: (id) -> &set). */
+    const unsigned char *found=NULL;
+    if (apply==0x43b7e0) {
+        found=((const unsigned char *(__attribute__((sysv_abi)) *)(uint32_t, int))(uintptr_t)(image+0x40e410))(set,0);
+    } else {
+        const unsigned char *const *p=
+            ((const unsigned char *const *(__attribute__((sysv_abi)) *)(uint32_t))(uintptr_t)(image+0xa15300))(set);
+        found=p ? *p : NULL;
+    }
+    int gun=0;
+    for (int i=0;found && i<3;++i) {
+        const uint32_t weapon=*(const uint32_t *)(found+8+0x18*i);
+        if (weapon && weapon!=0xf114b39du) gun=1;
+    }
+    if (!gun) {
+        printf("Chapter weapons: Chapter Select start at task %08x: its set %08x has no gun; the game's "
+               "default kept\n",*(const uint32_t *)(t+8),set);
+        return;
+    }
+    printf("Chapter weapons: Chapter Select start at task %08x: its weapon set %08x applied (the game "
+           "leaves the default .45 Defender there)\n",*(const uint32_t *)(t+8),set);
+    fflush(stdout);
+    ((U2ApplySettings)(uintptr_t)(image+apply))(set);
+}
+static void __attribute__((ms_abi)) u2_chapter_play_hook(uint64_t rdi, uint64_t rsi, uint64_t image, uint64_t r14,
+                                                       const RuntimeGuestRegs *regs) {
+    (void)image; (void)r14; (void)regs;
+    u2_chapter_play(rdi,rsi);
+}
+static void __attribute__((ms_abi)) u2_chapter_activate_eu(uint64_t rdi, uint64_t rsi, uint64_t image, uint64_t r14,
+                                                           const RuntimeGuestRegs *regs) {
+    (void)rsi; (void)r14; (void)regs;
+    u2_chapter_activate(rdi,image,0x43b7e0,u2_apply_settings_eu,sizeof(u2_apply_settings_eu));
+}
+static void __attribute__((ms_abi)) u2_chapter_activate_us(uint64_t rdi, uint64_t rsi, uint64_t image, uint64_t r14,
+                                                           const RuntimeGuestRegs *regs) {
+    (void)rsi; (void)r14; (void)regs;
+    u2_chapter_activate(rdi,image,0xa60460,u2_apply_settings_us,sizeof(u2_apply_settings_us));
+}
 static const RuntimeGuestCallback guest_callbacks[]={
     /* U1 follow camera, build 100 */
     {"U1 follow camera (mouse)",
@@ -740,6 +870,24 @@ static const RuntimeGuestCallback guest_callbacks[]={
       "8d 35 ?? ?? ?? ?? 48 8d 15 ?? ?? ?? ?? 48 8d 0d ?? ?? ?? ?? "
       "41 b8 87 01 00 00 45 31 c9 ff d0 cd 41 c4 c1 78 28 07 c4 e3 79 04 c0 01",
       0x0, 53, NULL, u2_leg_ik_zero_102},
+    /* U1 and U2 move action pool: mov edx,6; mov ecx,64 (slots); mov r8d,32 */
+    {"U1/U2 move action pool 256 slots",
+      "ba 06 00 00 00 b9 40 00 00 00 41 b8 20 00 00 00",
+      0x5, 5, NULL, move_pool_256},
+    /* U3 player focus NaN reset, build 100 */
+    {"U3 player focus NaN reset",
+      "c4 e3 79 04 cb 00 c5 f0 c2 c9 00 c5 f8 50 c1 83 f8 0f 74 38 "
+      "e8 ?? ?? ?? ?? 48 85 c0 74 27 48 8d 3d ?? ?? ?? ?? 48 8d 35 "
+      "?? ?? ?? ?? 48 8d 15 ?? ?? ?? ?? 48 8d 0d ?? ?? ?? ?? 41 b8 "
+      "69 07 00 00 45 31 c9 ff d0 cd 41 c5 f8 28 45 c0",
+      0x14, 51, NULL, u3_focus_reset_100},
+    /* U3 player focus NaN reset, build 102 (BilalReloaded) */
+    {"U3 player focus NaN reset",
+      "c4 e3 79 04 cb 00 c5 f0 c2 c9 00 c5 f8 50 c1 83 f8 0f 74 3a "
+      "48 8b 05 ?? ?? ?? ?? 48 85 c0 74 27 48 8d 3d ?? ?? ?? ?? 48 "
+      "8d 35 ?? ?? ?? ?? 48 8d 15 ?? ?? ?? ?? 48 8d 0d ?? ?? ?? ?? "
+      "41 b8 6a 07 00 00 45 31 c9 ff d0 cd 41",
+      0x14, 53, NULL, u3_focus_reset_102},
     /* U2 camera focus NaN reset, build 100 */
     {"U2 camera focus NaN reset",
       "e8 ?? ?? ?? ?? 48 85 c0 74 27 48 8d 3d ?? ?? ?? ?? 48 8d 35 "
@@ -752,7 +900,31 @@ static const RuntimeGuestCallback guest_callbacks[]={
       "8d 35 ?? ?? ?? ?? 48 8d 15 ?? ?? ?? ?? 48 8d 0d ?? ?? ?? ?? "
       "41 b8 4d 04 00 00 45 31 c9 ff d0 cd 41 c5 f8 28 45 d0",
       0x0, 58, NULL, u2_focus_reset_102},
+    /* Render context Begin, build 100: mov [r12+0xe810], rax */
+    {"Job render context begin", "49 89 84 24 10 e8 00 00", 0x0, 8, ndgi_begin, NULL},
+    /* build 102: mov [r15+0xe810], r12 */
+    {"Job render context begin", "4d 89 a7 10 e8 00 00", 0x0, 7, ndgi_begin, NULL},
+    /* Render context End, build 100: mov rbx,[r14+0xe810]; call GetCurrentWorkerThreadIndex;
+     * cmp rbx,rax; je */
+    {"Job render context end", "49 8b 9e 10 e8 00 00 e8 ?? ?? ?? ?? 48 39 c3 74", 0x0, 7, ndgi_end, NULL},
+    /* build 102: cmp byte [r15+0xe7dc],0; je; mov r12,[r15+0xe810] (the index call is inlined) */
+    {"Job render context end", "41 80 bf dc e7 00 00 00 0f 84 ?? ?? ?? ?? 4d 8b a7 10 e8 00 00",
+      14, 7, ndgi_end, NULL},
 
+    /* U2 Chapter Select weapons (issue #16, Mevlock): PlayTask and TaskActivate by their first 40
+     * bytes (EU 1.00, 1.02); the settings function is checked before it is called. */
+    {"U2 Chapter Select weapons: PlayTask",
+      "55 48 89 e5 41 57 41 56 41 55 41 54 53 48 81 e4 e0 ff ff ff 48 81 ec 60 01 00 00 89 f3 49 89 fd 4c 8b 3d 11 c0 a2 00 49",
+      0x0, 6, u2_chapter_play_hook, NULL},
+    {"U2 Chapter Select weapons: TaskActivate",
+      "55 48 89 e5 41 57 41 56 41 55 41 54 53 48 81 e4 e0 ff ff ff 48 81 ec a0 02 00 00 49 89 fd 48 8b 05 73 81 a2 00 48 8b 00",
+      0x0, 6, u2_chapter_activate_eu, NULL},
+    {"U2 Chapter Select weapons: PlayTask",
+      "55 48 89 e5 41 57 41 56 41 55 41 54 53 48 81 e4 e0 ff ff ff 48 81 ec 80 01 00 00 41 89 f6 48 89 fb 4c 8b 3d 18 2e 5f 00",
+      0x0, 6, u2_chapter_play_hook, NULL},
+    {"U2 Chapter Select weapons: TaskActivate",
+      "55 48 89 e5 41 57 41 56 41 55 41 54 53 48 81 e4 e0 ff ff ff 48 81 ec a0 02 00 00 48 89 fb 48 8b 05 bb e8 5e 00 48 8b 00",
+      0x0, 6, u2_chapter_activate_us, NULL},
 };
 const RuntimeGuestCallback *runtime_guest_callbacks(size_t *count) {
     *count=sizeof(guest_callbacks)/sizeof(*guest_callbacks);
@@ -1074,6 +1246,7 @@ static ABI int32_t pad_close(int32_t handle) {
 static ABI int32_t pad_read_state(int32_t handle, PadData *data) {
     if (handle!=PAD_HANDLE || !opened) return ERR_INVALID_HANDLE;
     if (!data) return ERR_INVALID_ARG;
+    bbgpu_input_sample(); /* low latency mode: a new frame starts here and may wait (outside the lock) */
     pthread_mutex_lock(&lock);
     sample(data); ++reads;
     pthread_mutex_unlock(&lock);

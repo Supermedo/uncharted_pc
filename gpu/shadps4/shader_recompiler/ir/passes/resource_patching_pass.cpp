@@ -284,9 +284,24 @@ void PatchImageSharp(const ResourceDiscovery& resource, Info& info, Descriptors&
 
     // Patch image instruction if image is FMask.
     if (AmdGpu::IsFmask(image.GetDataFmt())) {
-        ASSERT_MSG(!is_written, "FMask storage instructions are not supported");
-
         IR::IREmitter ir{*inst.GetParent(), IR::Block::InstructionList::s_iterator_to(inst)};
+        if (is_written) {
+            // bbport (from BilalReloaded's Uncharted port, GitHub #21 there: Uncharted 3 in Syria):
+            // a store or atomic through a T# with an FMask format comes from a garbage descriptor
+            // read while a level loads (no game writes FMask). The access is dropped instead of
+            // stopping the game.
+            LOG_WARNING(Render_Recompiler, "Dropped a store to an FMask image (shader {:#x})",
+                        info.pgm_hash);
+            if (is_atomic) {
+                const bool is_float = inst.GetOpcode() == IR::Opcode::ImageAtomicFMax32 ||
+                                      inst.GetOpcode() == IR::Opcode::ImageAtomicFMin32;
+                inst.ReplaceUsesWithAndRemove(is_float ? IR::Value{ir.Imm32(0.0f)}
+                                                       : IR::Value{ir.Imm32(0u)});
+            } else {
+                inst.Invalidate();
+            }
+            return;
+        }
         switch (inst.GetOpcode()) {
         case IR::Opcode::ImageRead:
         case IR::Opcode::ImageSampleRaw: {
@@ -575,10 +590,15 @@ IR::U32 CalculateBufferAddress(IR::IREmitter& ir, const IR::Inst& inst, const In
         index = ir.IAdd(index, vgpr_index);
     }
     if (buffer.add_tid_enable) {
-        ASSERT_MSG(info.sw_stage == SwStage::Compute,
-                   "Thread ID buffer addressing is not supported outside of compute.");
-        const IR::U32 thread_id{ir.LaneId()};
-        index = ir.IAdd(index, thread_id);
+        // Outside compute this is a half-written resource table (the game was still filling it):
+        // it stopped the game here. The thread id is left out and the draw goes on.
+        if (info.sw_stage == SwStage::Compute) {
+            const IR::U32 thread_id{ir.LaneId()};
+            index = ir.IAdd(index, thread_id);
+        } else {
+            LOG_WARNING(Render_Recompiler,
+                        "Thread ID buffer addressing outside of compute (bad resource table): ignored");
+        }
     }
     // offset = (inst_offen ? vgpr_offset : 0) + inst_offset
     IR::U32 offset = ir.Imm32(inst_offset);

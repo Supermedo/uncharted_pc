@@ -3,6 +3,9 @@
 
 #pragma once
 
+#include <algorithm>
+#include <bit>
+#include <cstdlib>
 #include "common/alignment.h"
 #include "common/assert.h"
 #include "common/bit_field.h"
@@ -242,7 +245,21 @@ struct Image {
         if (GetType() == ImageType::Color2DMsaa || GetType() == ImageType::Color2DMsaaArray) {
             return 1;
         }
-        return last_level + 1;
+        // Guests may declare more levels than the extent's full mip chain has (the extra ones
+        // would be 1x1), which Vulkan does not allow and makes uploads run past the image
+        // (shadPS4 #5453; BB_MIP_CHAIN_CLAMP=0: as declared).
+        static const bool clamp = [] {
+            const char* env = std::getenv("BB_MIP_CHAIN_CLAMP");
+            return !(env && env[0] == '0');
+        }();
+        if (!clamp) {
+            return last_level + 1;
+        }
+        const u32 mip_width = width + 1;
+        const u32 mip_height = height + 1;
+        const u32 mip_depth = GetType() == ImageType::Color3D ? depth + 1 : 1;
+        const u32 max_levels = std::bit_width(std::max(std::max(mip_width, mip_height), mip_depth));
+        return std::min<u32>(last_level + 1, max_levels);
     }
 
     u32 NumSamples() const {
@@ -491,7 +508,10 @@ struct Sampler {
         case AnisoRatio::Sixteen:
             return 16.0f;
         default:
-            UNREACHABLE();
+            // bbport: a sampler read while the game rewrites its tables (a checkpoint jump in
+            // Uncharted 2, with invalid T#s rejected next to it) can hold 5-7 here: the game ended on
+            // this assertion (player log, 0.3.6.45). No anisotropy for it instead.
+            return 1.0f;
         }
     }
 };

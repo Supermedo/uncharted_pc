@@ -597,16 +597,27 @@ bool VideoOutDriver::SubmitFlip(VideoOutPort* port, s32 index, s64 flip_arg,
         port->flip_status.submit_tsc = Libraries::Kernel::sceKernelReadTsc();
     }
 
-    if (!is_eop) {
-        // Non EOP flips can arrive from any thread so ask GPU thread to perform them
-        liverpool->SendCommand([=, this]() { SubmitFlipInternal(port, index, flip_arg, is_eop); });
-    } else {
-        SubmitFlipInternal(port, index, flip_arg, is_eop);
+    const auto eop_flip_reached = [] {
         {
             std::scoped_lock lock{eop_flip_mutex};
             eop_flips_reached.fetch_add(1, std::memory_order_relaxed);
         }
         eop_flip_cv.notify_all();
+    };
+    if (!is_eop) {
+        // Non EOP flips can arrive from any thread so ask GPU thread to perform them
+        liverpool->SendCommand([=, this]() { SubmitFlipInternal(port, index, flip_arg, is_eop); });
+    } else if (Vulkan::Scheduler::OnRecorderThread()) {
+        // bbport: the end-of-pipe label of this flip was signalled by the Vulkan recording
+        // thread (RecorderFences). PrepareFrame there waits in SyncRecording for that thread to
+        // go idle, i.e. for itself: the game froze (U1 jeep chase). The GPU thread makes it.
+        liverpool->SendCommand([=, this]() {
+            SubmitFlipInternal(port, index, flip_arg, is_eop);
+            eop_flip_reached();
+        });
+    } else {
+        SubmitFlipInternal(port, index, flip_arg, is_eop);
+        eop_flip_reached();
     }
 
     return true;

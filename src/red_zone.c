@@ -176,14 +176,52 @@ static Function *find_functions(size_t *count) {
     return functions;
 }
 
+/* Thunk memory reserved before the GPU starts (red_zone_reserve): committed chunk by chunk. */
+enum { RESERVE=16<<20 };
+static unsigned char *reserved;
+static size_t reserved_size, reserved_used, chunks_outside;
+/* rel32 reach: every byte of [at, at+size) within 2 GiB (less a margin) of every byte of the image. */
+static int in_reach(uint64_t base, uint64_t size, uint64_t at, uint64_t length) {
+    const uint64_t reach=UINT64_C(0x7ff00000);
+    if (at>=base) return at+length-base<reach;
+    return at>=0x10000 && base+size-at<reach;
+}
+/* First free range of `length` in reach: above the image (from 64 MiB past its end, as before,
+ * then right after it), then below it. MEM_RESERVE only when `commit` is 0. */
+static unsigned char *find_near(uint64_t base, uint64_t size, size_t length, int commit) {
+    const DWORD type=commit ? MEM_RESERVE|MEM_COMMIT : MEM_RESERVE;
+    const DWORD protect=commit ? PAGE_EXECUTE_READWRITE : PAGE_NOACCESS;
+    const uint64_t starts[2]={(base+size+(64u<<20)+0xffff)&~(uint64_t)0xffff,(base+size+0xffff)&~(uint64_t)0xffff};
+    for (int s=0;s<2;++s)
+        for (uint64_t at=starts[s]; in_reach(base,size,at,length); at+=1u<<16) {
+            if (s==1 && at>=starts[0]) break;
+            void *p=VirtualAlloc((void *)(uintptr_t)at,length,type,protect);
+            if (p) return p;
+        }
+    if (base>=length+0x10000)
+        for (uint64_t at=(base-length)&~(uint64_t)0xffff; in_reach(base,size,at,length); at-=1u<<16) {
+            void *p=VirtualAlloc((void *)(uintptr_t)at,length,type,protect);
+            if (p) return p;
+            if (at<(1u<<16)+0x10000) break;
+        }
+    return NULL;
+}
+void red_zone_reserve(unsigned char *base, uint64_t size) {
+    const char *mode=getenv("BB_RED_ZONE");
+    if ((mode && !strcmp(mode,"0")) || reserved || !base) return;
+    reserved=find_near((uint64_t)(uintptr_t)base,size,RESERVE,0);
+    if (reserved) reserved_size=RESERVE;
+    else printf("Red zone: no %d MiB free near the image before the GPU starts; thunk memory is looked for later\n",RESERVE>>20);
+}
 /* Thunk memory: within rel32 reach of the whole image. */
 static unsigned char *near_image(size_t size) {
-    const uint64_t base=(uint64_t)(uintptr_t)image, start=(base+image_size+(64u<<20)+0xffff)&~(uint64_t)0xffff;
-    for (uint64_t at=start; at+size-base<UINT64_C(0x7ff00000); at+=1u<<16) {
-        void *p=VirtualAlloc((void *)(uintptr_t)at,size,MEM_RESERVE|MEM_COMMIT,PAGE_EXECUTE_READWRITE);
-        if (p) return p;
+    if (reserved && reserved_used+size<=reserved_size) {
+        void *p=VirtualAlloc(reserved+reserved_used,size,MEM_COMMIT,PAGE_EXECUTE_READWRITE);
+        if (p) { reserved_used+=size; return p; }
     }
-    return NULL;
+    unsigned char *p=find_near((uint64_t)(uintptr_t)image,image_size,size,1);
+    if (p) ++chunks_outside;
+    return p;
 }
 static unsigned char *thunk_reserve(void) {
     if (chunk_used+REGION_MAX>CHUNK) {
@@ -443,6 +481,11 @@ void red_zone_patch(unsigned char *base, uint64_t size, const RedZoneSegment *se
            "128 bytes lower (%u jumps, %u moved neighbours), %u left as they were; skipped: %u with calls, "
            "%u with indirect jumps, %u with exception tables, %u with data in their code\n",
            st.red,st.functions,st.accesses,st.jumps,st.moved,st.left,st.calls,st.indirect,st.lsda,st.undecodable);
+    if (reserved)
+        printf("Red zone: thunk memory %zu of %zu MiB reserved before the GPU at %p, %zu MiB found later\n",
+               reserved_used>>20,reserved_size>>20,(void *)reserved,chunks_outside*(size_t)(CHUNK>>20));
+    else
+        printf("Red zone: thunk memory found after the GPU started: %zu MiB\n",chunks_outside*(size_t)(CHUNK>>20));
     free(items);
     free(targets);
     free(functions);

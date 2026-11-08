@@ -53,7 +53,13 @@ AH4 FsrEasuBH(AF2 p) { AH4 res = AH4(textureGather(sampler2D(InputTexture, Input
 
 #if SAMPLE_RCAS
 #define FSR_RCAS_H
-AH4 FsrRcasLoadH(ASW2 p) { return AH4(texelFetch(sampler2D(InputTexture, InputSampler), ASU2(p), 0)); }
+// bbport (from BilalReloaded's port 0.8.0): the edge pixels' neighbours outside the picture came
+// from out-of-bounds fetches (driver-defined values: a bright line at the right and bottom edges
+// on AMD); they repeat the edge now.
+AH4 FsrRcasLoadH(ASW2 p) {
+    const ivec2 last = textureSize(sampler2D(InputTexture, InputSampler), 0) - 1;
+    return AH4(texelFetch(sampler2D(InputTexture, InputSampler), clamp(ASU2(p), ivec2(0), last), 0));
+}
 void FsrRcasInputH(inout AH1 r, inout AH1 g, inout AH1 b) { }
 #endif// SAMPLE_RCAS
 

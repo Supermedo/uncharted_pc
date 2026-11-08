@@ -14,6 +14,7 @@
 #include <variant>
 #include <boost/container/static_vector.hpp>
 #include <tsl/robin_map.h>
+#include "common/shared_first_mutex.h"
 #include "shader_recompiler/profile.h"
 #include "shader_recompiler/recompiler.h"
 #include "shader_recompiler/specialization.h"
@@ -104,6 +105,7 @@ struct PipelineSelection {
     /// Compute program state of a worker's dispatch (the GPU thread reads its queue's own).
     const AmdGpu::ComputeProgram* cs{};
     struct PrepWorker* worker{}; ///< set: read-only selection for a draw-preparation worker
+    bool indirect_dispatch{}; ///< bbport: compute: workgroup count in GPU memory (WorkgroupSplit)
 };
 
 /// bbport: a draw-preparation worker's own program state (see vk_draw_prep.h).
@@ -167,7 +169,8 @@ public:
         return used_prepared;
     }
 
-    const ComputePipeline* GetComputePipeline();
+    /// bbport: `indirect`: the workgroup count is in GPU memory (no WorkgroupSplit).
+    const ComputePipeline* GetComputePipeline(bool indirect = false);
 
     /// bbport: worker side of a dispatch: translates the compute program and builds its pipeline
     /// when they do not exist yet, so the GPU thread finds them (sel.cs is the program state).
@@ -250,11 +253,11 @@ private:
     Shader::Pools pools;
     tsl::robin_map<size_t, std::unique_ptr<Program>> program_cache;
     /// bbport: exclusive for program/permutation insertions, shared for worker lookups.
-    std::shared_mutex programs_mutex;
+    Common::SharedFirstMutex programs_mutex;
     u64 prepared_hits = 0, prepared_misses = 0;
     const PreparedDraw* used_prepared = nullptr;
     /// bbport: guards graphics_pipelines (draw-preparation workers insert into it).
-    std::shared_mutex pipelines_mutex;
+    Common::SharedFirstMutex pipelines_mutex;
     static constexpr u64 PipelineClaimTag = 0x9E3779B97F4A7C15ull;
     std::mutex claim_mutex;
     std::condition_variable claim_cv;

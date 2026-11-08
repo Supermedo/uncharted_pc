@@ -258,6 +258,13 @@ public:
         HTile,
     };
 
+    /// bbport (Mevlock): metadata clears so far. A draw that reuses the previous draw's render
+    /// state (Rasterizer::BeginRendering's memo) does not look at the clear masks: a clear made in
+    /// between without recording anything (a DMA fill) was skipped, and the draw went on with the
+    /// old contents. The memo holds only while this is unchanged.
+    [[nodiscard]] u64 MetaClears() const noexcept {
+        return meta_clears.load(std::memory_order_relaxed);
+    }
     /// Returns meta type if the specified address is a metadata surface.
     std::optional<MetaType> IsMeta(VAddr address) const {
         auto it = surface_metas.find(address);
@@ -281,6 +288,7 @@ public:
         auto it = surface_metas.find(address);
         if (it != surface_metas.end()) {
             it.value().clear_mask = u32(-1);
+            meta_clears.fetch_add(1, std::memory_order_relaxed);
             return true;
         }
         return false;
@@ -425,6 +433,8 @@ private:
     u64 trigger_gc_memory = 0;
     u64 pressure_gc_memory = 0;
     u64 critical_gc_memory = 0;
+    /// bbport: the marks computed at startup (cards of 8 GB and up lift them from the live budget).
+    u64 base_trigger_gc_memory = 0, base_pressure_gc_memory = 0, base_critical_gc_memory = 0;
     u64 total_used_samplers = 0;
     u64 trigger_gc_samplers = 0;
     u64 pressure_gc_samplers = 0;
@@ -466,6 +476,7 @@ private:
         s32 clear_mask = -1;
     };
     tsl::robin_map<VAddr, MetaDataInfo> surface_metas;
+    std::atomic<u64> meta_clears{0}; ///< see MetaClears
 };
 
 } // namespace VideoCore

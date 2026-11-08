@@ -4,7 +4,9 @@ user/
 *.mp4
 bbport.ini
 fsr4_shaders/
-pgo/
+# Profiles: only the merged one that release builds use is tracked.
+pgo/*
+!pgo/merged.profdata
 *.png
 last_run.log
 dist/

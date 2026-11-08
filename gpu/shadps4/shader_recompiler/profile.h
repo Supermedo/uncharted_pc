@@ -49,6 +49,9 @@ struct Profile {
     bool needs_manual_interpolation{};
     /// bbport: NVIDIA without fragment shader barycentrics (Pascal and older).
     bool needs_integer_interpolation_fix{};
+    /// bbport: NVIDIA: compute workgroups above 256 threads run as workgroups of 256 (see
+    /// WorkgroupSplit in runtime_info.h).
+    bool split_large_workgroups{};
     bool needs_lds_barriers{};
     bool needs_buffer_offsets{};
     bool needs_unorm_fixup{};

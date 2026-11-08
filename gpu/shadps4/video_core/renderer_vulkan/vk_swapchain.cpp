@@ -10,6 +10,7 @@
 #include "imgui/renderer/imgui_core.h"
 #include "sdl_window.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
+#include "video_core/renderer_vulkan/vk_low_latency.h"
 #include "video_core/renderer_vulkan/vk_swapchain.h"
 
 namespace Vulkan {
@@ -39,6 +40,9 @@ void Swapchain::Create(u32 width_, u32 height_) {
     needs_recreation = false;
 
     Destroy();
+    // RefreshSemaphores sizes the semaphores to the new image count: a smaller count left
+    // frame_index past their end (from BilalReloaded's port 0.8.0).
+    image_index = frame_index = 0;
 
     SetSurfaceProperties();
 
@@ -53,6 +57,7 @@ void Swapchain::Create(u32 width_, u32 height_) {
         exclusive ? vk::SharingMode::eExclusive : vk::SharingMode::eConcurrent;
     const auto format = needs_hdr ? SURFACE_FORMAT_HDR : surface_format;
     const vk::SwapchainCreateInfoKHR swapchain_info = {
+        .pNext = LowLatency::SwapchainNext(),
         .surface = surface,
         .minImageCount = image_count,
         .imageFormat = format.format,
@@ -75,6 +80,7 @@ void Swapchain::Create(u32 width_, u32 height_) {
     ASSERT_MSG(swapchain_result == vk::Result::eSuccess, "Failed to create swapchain: {}",
                vk::to_string(swapchain_result));
     swapchain = chain;
+    LowLatency::OnSwapchain(swapchain);
 
     SetupImages();
     RefreshSemaphores();
@@ -128,8 +134,14 @@ bool Swapchain::AcquireNextImage() {
     return !needs_recreation;
 }
 
-bool Swapchain::Present() {
+bool Swapchain::Present(u64 latency_id) {
+    // bbport: low latency mode (vk_low_latency.h): the game's frame carries its frame id.
+    const vk::PresentIdKHR present_id{
+        .swapchainCount = 1,
+        .pPresentIds = &latency_id,
+    };
     const vk::PresentInfoKHR present_info = {
+        .pNext = LowLatency::UsesPresentId() ? &present_id : nullptr,
         .waitSemaphoreCount = 1,
         .pWaitSemaphores = &present_ready[image_index],
         .swapchainCount = 1,
@@ -137,7 +149,9 @@ bool Swapchain::Present() {
         .pImageIndices = &image_index,
     };
 
+    LowLatency::PresentStart(latency_id);
     auto result = instance.GetPresentQueue().presentKHR(present_info);
+    LowLatency::PresentEnd(latency_id);
     if (result == vk::Result::eErrorOutOfDateKHR || result == vk::Result::eSuboptimalKHR) {
         needs_recreation = true;
     } else {
@@ -257,6 +271,7 @@ void Swapchain::SetSurfaceProperties() {
 }
 
 void Swapchain::Destroy() {
+    LowLatency::OnSwapchainDestroy();
     vk::Device device = instance.GetDevice();
     const auto wait_result = device.waitIdle();
     if (wait_result != vk::Result::eSuccess) {

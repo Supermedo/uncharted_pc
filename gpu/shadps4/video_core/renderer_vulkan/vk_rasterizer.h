@@ -124,18 +124,27 @@ public:
     /// Stage A: guest memory the recording thread will write for work handed to it (storage
     /// buffers, DMA, WriteData, fences); constants overlapping it are bound there, not copied here.
     void NotePendingGpuWrite(VAddr address, u64 size);
+    /// bbport: set while PostDraw prepares a packet (its written resources are noted before the
+    /// packet is committed): such notes last until that packet has run, not the one before it.
+    bool notes_before_commit{false};
     /// bbport: small buffers (up to 64 bytes) a compute shader writes are read by the game's CPU
     /// code (the auto-exposure multiplier of Uncharted, among others). The dispatch notes them and
     /// the next end-of-pipe event copies them to guest memory (BB_READBACK_SMALL_BUFFERS=0: off).
     void NoteSmallWrittenBuffers(const Shader::Info& stage);
+    /// bbport (BB_COPY64_EOP_READBACK=1): the dwords a dispatch of the 64-dword copy shader
+    /// (6a6422a9) writes, when they total 64 KiB or less, are read back at the next end-of-pipe
+    /// event, and that event's label waits for them. True when the dispatch noted such a range
+    /// (it is then submitted at once).
+    bool NoteCopy64Readback(const Shader::Info& stage);
     void ReadBackSmallWrittenBuffers();
     /// Before a guest-visible write: fences deferred earlier are written first.
     void WaitDeferredSignals() {
         scheduler.WaitDeferredSignals();
     }
     /// Runs `signal` after the guest memory copies issued so far, without waiting here.
-    void SignalAfterHostCopies(std::function<void()> signal, u64 landing_seq = 0) {
-        scheduler.SignalAfterHostCopies(std::move(signal), landing_seq);
+    void SignalAfterHostCopies(std::function<void()> signal, u64 landing_seq = 0,
+                               bool off_recorder = false) {
+        scheduler.SignalAfterHostCopies(std::move(signal), landing_seq, off_recorder);
     }
     /// The GPU command thread or the draw recording thread (fault handling runs inline there).
     bool IsGpuSideThread() const;
@@ -209,6 +218,7 @@ private:
         RenderState state;
         u32 scene_size = 0;
         std::array<float, 2> target_scale{};
+        u64 meta_clears = 0; ///< TextureCache::MetaClears when stored
     } begin_memo;
     u64 begin_memo_hits = 0, begin_memo_misses = 0;
     void Resolve();
@@ -339,6 +349,7 @@ private:
     VideoCore::TextureCache texture_cache;
     std::mutex small_written_mutex;
     std::vector<std::pair<VAddr, u32>> small_written_buffers;
+    std::vector<std::pair<VAddr, u32>> copy64_readbacks; ///< NoteCopy64Readback; small_written_mutex
     AmdGpu::Liverpool* liverpool;
     Core::MemoryManager* memory;
     boost::icl::interval_set<VAddr> mapped_ranges;

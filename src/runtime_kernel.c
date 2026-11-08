@@ -187,7 +187,7 @@ static ABI __attribute__((noreturn)) void hard_exit(int status) {
     printf("Runtime: guest requested _exit(%d)\n",status);
     runtime_report();
     fflush(stdout);
-    _exit(status);
+    runtime_quit(status);
 }
 static ABI __attribute__((noreturn)) void raise_exception(uint32_t code,uint64_t argument) {
     fprintf(stderr,"STOP: guest raised debug exception code=0x%x argument=0x%llx\n",code,(unsigned long long)argument);
@@ -258,7 +258,7 @@ static ABI int32_t guest_sysctl(const int32_t *name,uint32_t namelen,void *old,u
     fprintf(stderr,"STOP: unsupported sysctl mib");
     for (uint32_t i=0;i<namelen && i<8;++i) fprintf(stderr," %d",name[i]);
     fputc('\n',stderr);
-    exit(21);
+    runtime_quit(21);
 }
 
 /* ---- pthread_once and thread-specific data ---- */

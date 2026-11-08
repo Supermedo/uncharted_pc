@@ -44,8 +44,8 @@ code runs directly on your PC and the graphics are translated to Vulkan. Unpack 
   the game could freeze and close with "GPU crash: the graphics device was lost". It came from
   the speed fix for that area and is fixed in 0.3. If it still happens to you, set Frame rate to
   60 on the Display page and open an issue with your `user\last_run.log`.
-- **Uncharted 3:** green or black shapes flash for a single frame on some characters (Sully's
-  shirt in Cartagena). It happens in shadPS4 too, so it's a shader translation problem. Not fixed yet.
+- **Uncharted 3:** green or black shapes flashing on Sully's shirt in Cartagena: the cloth
+  solvers raced on NVIDIA's 32-lane groups. Fixed in 0.3.9 with BilalReloaded's fix.
 - **Crash with "ASSERTION: GetRenderFrameParams(frameToFreeInstancesFor)->m_gfxEopTick"**
   (mostly U1 after the first cutscene): the game expected the GPU side to be done with a frame it
   wanted to reuse, and stopped when it wasn't yet (shaders building on a first run). Fixed in
@@ -78,6 +78,20 @@ Bloodborne by deadinside28, and on the [shadPS4](https://github.com/shadps4-emu/
 renderer. Video decoding (Videodec2) and the DLSS bridge come from
 [IFreemz/shadPS4-Bloodborne-DLSS-FSR](https://github.com/IFreemz/shadPS4-Bloodborne-DLSS-FSR).
 Thanks to Mindro for the shadPS4 Uncharted build that showed which problems to look for.
+Several fixes come from BilalReloaded's
+[Uncharted port](https://github.com/bc160201983/Uncharted-The-Nathan-Drake-Collection-PC-port)
+(GPL v2): the Uncharted 3 cloth solver barriers (Sully's shirt), guest memory committed as the
+game allocates it (error 1450), the Uncharted 3 look-at reset and the garbage descriptor fixes.
+Many of the 0.3.10 fixes were found and made by drakolordx7 in the
+[community build](https://github.com/drakolordx7/uncharted_pc), and the FSR 3 frame generation
+memory leak fix is from Mevlock, the NVIDIA crash fix above 55 FPS (large compute
+workgroups) from Umar-Qayyum-dev.
+Most 0.3.11 fixes come from Mevlock's [dev builds](https://github.com/Mevlock/uncharted_pc-dev).
+The 0.3.12 fixes are pull requests by Jhojan Jiménez, FerManjarres, dbcalo and mato215, and picks
+from drakolordx7's community build (Mevlock, Alex, iannitram).
+0.3.13: the Uncharted 3 sinking characters fix is drakolordx7's, the Quit game button dbcalo's.
+0.3.14: crash, freeze and speed fixes from Mevlock's dev builds, drakolordx7's community build and
+Lalit Shankar Chowdhury; the job guard for 1.02 games follows BilalReloaded's port.
 
 Also used: [FSR-Vulkan](https://github.com/FireBurn/FSR-Vulkan) and the AMD FidelityFX SDK (FSR),
 FSR 4 assets from [FireBurn/Q2RTX](https://github.com/FireBurn/Q2RTX), the
@@ -91,8 +105,9 @@ FSR 4 assets from [FireBurn/Q2RTX](https://github.com/FireBurn/Q2RTX), the
 [MSYS2](https://www.msys2.org) / [LLVM](https://llvm.org), [PyInstaller](https://pyinstaller.org),
 [Pillow](https://python-pillow.org) and the Cinzel font (SIL Open Font License).
 
-NVIDIA, GeForce RTX and DLSS are trademarks of NVIDIA Corporation. The default covers and the
-icon are original artwork; no official art is included.
+NVIDIA, GeForce RTX and DLSS are trademarks of NVIDIA Corporation. The launcher's pictures (the
+game scenes, the map banner, the compass emblem and the icon) are original artwork drawn by
+code (packaging/windows/make_uncharted_art.py); no official art or game images are included.
 
 ## License
 

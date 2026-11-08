@@ -34,7 +34,35 @@ if (BB_LTO)
         message(WARNING "LTO unavailable: ${bb_ipo_error}")
     endif()
 endif()
-if (BB_PGO STREQUAL "generate")
+if (BB_PGO MATCHES "^(generate|use)$" AND CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    # Functions local to a file (static, lambdas, anonymous namespaces, coroutine parts: a fifth
+    # of the profile, command processor included) are named in the profile with their source
+    # path. Without this the path holds the checkout's folder, so a profile recorded in one
+    # folder missed all of them in any other (another worktree, the GitHub runner). The leading
+    # folders up to the repository go: names read "gpu/...;f" or "src/...;f" everywhere.
+    get_filename_component(bb_repo_root "${CMAKE_CURRENT_SOURCE_DIR}/.." ABSOLUTE)
+    string(REGEX MATCHALL "/" bb_repo_seps "${bb_repo_root}/")
+    list(LENGTH bb_repo_seps bb_repo_depth)
+    add_compile_options("SHELL:-mllvm -static-func-strip-dirname-prefix=${bb_repo_depth}")
+endif()
+if (BB_PGO STREQUAL "generate" AND CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    # perf7, clang (Windows): IR instrumentation; the profile goes where LLVM_PROFILE_FILE says and is
+    # written every 30 s by bbgpu.cpp (the game often ends without the exit-time write). Atomic
+    # counters: several threads run the same code.
+    add_compile_options(-fprofile-generate -fprofile-update=atomic)
+    add_link_options(-fprofile-generate)
+    add_compile_definitions(BB_PGO_GENERATE BB_PGO_CLANG)
+elseif (BB_PGO STREQUAL "use" AND CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    # perf7, clang: the merged profile (llvm-profdata merge -o pgo/merged.profdata pgo/*.profraw).
+    # Functions changed since the profile keep the normal optimization. The IR profile's pass
+    # names each function whose code changed ("hash mismatch") or that is new ("no profile
+    # data"): build.sh counts them, so the build tells when the profile is due again. Warnings
+    # only, never errors.
+    add_compile_options(-fprofile-use=${BB_PGO_DIR}/merged.profdata
+                        "SHELL:-mllvm -pgo-warn-missing-function"
+                        -Wbackend-plugin -Wno-error=backend-plugin
+                        -Wno-profile-instr-out-of-date -Wno-profile-instr-unprofiled)
+elseif (BB_PGO STREQUAL "generate")
     # Atomic counters: the GPU, recording, preparation and copy threads run the same code.
     add_compile_options(-fprofile-generate=${BB_PGO_DIR} -fprofile-update=atomic)
     add_link_options(-fprofile-generate=${BB_PGO_DIR})
