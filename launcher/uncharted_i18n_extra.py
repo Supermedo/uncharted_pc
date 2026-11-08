@@ -3,6 +3,7 @@
 
 EXTRA_TRANSLATIONS = {
     'de': {
+        'Could not save settings: {}': 'Einstellungen konnten nicht gespeichert werden: {}',
         'AMD RCAS after FSR 1 (only while the image is enlarged).':
         'AMD RCAS nach FSR 1 (nur wenn das Bild vergrößert wird).',
         'Anti-aliasing': 'Kantenglättung',
@@ -101,6 +102,7 @@ EXTRA_TRANSLATIONS = {
         'version {}': 'Version {}',
     },
     'it': {
+        'Could not save settings: {}': 'Impossibile salvare le impostazioni: {}',
         'AMD RCAS after FSR 1 (only while the image is enlarged).':
         "AMD RCAS dopo FSR 1 (solo quando l'immagine viene ingrandita).",
         'Anti-aliasing': 'Antialiasing',
@@ -199,6 +201,7 @@ EXTRA_TRANSLATIONS = {
         'version {}': 'versione {}',
     },
     'ja': {
+        'Could not save settings: {}': '設定を保存できませんでした: {}',
         'AMD RCAS after FSR 1 (only while the image is enlarged).':
         'FSR 1 適用後の AMD RCAS（画像を拡大する場合のみ）。',
         'Anti-aliasing': 'アンチエイリアス',
