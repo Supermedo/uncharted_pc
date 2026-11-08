@@ -7,6 +7,7 @@ shortcuts.vdf is Valve's binary KeyValues: a type byte (0 = map, 1 = string, 2 =
 import os
 from pathlib import Path
 import struct
+import time
 import zlib
 
 MAP, STRING, INT32, UINT64, END = 0, 1, 2, 7, 8
@@ -104,6 +105,71 @@ def add_shortcut(vdf_path, name, exe, start_dir, icon, options=''):
     vdf_path.parent.mkdir(parents=True, exist_ok=True)
     vdf_path.write_bytes(dump(root) + bytes([END]))
     return result
+
+
+def backup(vdf_path, data, now=None):
+    """A copy of the file as it was, named by the time of this write (shortcuts.vdf.<time>.bak):
+    every write keeps its own."""
+    stamp = time.strftime('%Y%m%d-%H%M%S', time.localtime(now))
+    path = vdf_path.with_name(f'{vdf_path.name}.{stamp}.bak')
+    n = 2
+    while path.exists():
+        path = vdf_path.with_name(f'{vdf_path.name}.{stamp}-{n}.bak')
+        n += 1
+    path.write_bytes(data)
+    return path
+
+
+def set_shortcuts(vdf_path, wanted, replaces=None, now=None):
+    """Adds or updates several shortcuts that may start the same exe: wanted is a list of
+    (name, exe, start_dir, icon, options), matched to existing entries by exe and launch options
+    together. replaces(fields) marks old entries to remove (fields: lower-case keys); their slots
+    take the new entries, so no other entry changes. Returns (results, backup path or None)."""
+    vdf_path = Path(vdf_path)
+    data = vdf_path.read_bytes() if vdf_path.exists() else b''
+    root = parse(data)[0] if data else []
+    shortcuts = next((value for kind, key, value in root if kind == MAP and key.lower() == 'shortcuts'), None)
+    if shortcuts is None:
+        shortcuts = []
+        root.append((MAP, 'shortcuts', shortcuts))
+
+    def fields(value):
+        return {k.lower(): v for _t, k, v in value}
+
+    def same(value, exe, options):
+        f = fields(value)
+        return str(f.get('exe', '')).lower() == f'"{exe}"'.lower() and str(f.get('launchoptions', '')) == options
+
+    kept = ('lastplaytime', 'tags')  # what Steam or the player added
+    free = [i for i, (kind, _key, value) in enumerate(shortcuts)
+            if kind == MAP and replaces and replaces(fields(value))
+            and not any(same(value, w[1], w[4]) for w in wanted)]
+    results = []
+    for name, exe, start_dir, icon, options in wanted:
+        new = entry(name, exe, start_dir, icon, options)
+        index = next((i for i, (kind, _key, value) in enumerate(shortcuts)
+                      if kind == MAP and same(value, exe, options)), None)
+        if index is not None:
+            old = {k.lower(): (t, k, v) for t, k, v in shortcuts[index][2]}
+            new = [old[k.lower()] if k.lower() in kept and k.lower() in old else (t, k, v) for t, k, v in new]
+            shortcuts[index] = (MAP, shortcuts[index][1], new)
+            results.append('updated')
+        elif free:
+            index = free.pop(0)
+            shortcuts[index] = (MAP, shortcuts[index][1], new)
+            results.append('replaced')
+        else:
+            numbers = [int(key) for _kind, key, _value in shortcuts if key.isdigit()]
+            shortcuts.append((MAP, str(max(numbers) + 1 if numbers else 0), new))
+            results.append('added')
+    if free:  # more old entries than new ones: drop the rest and number the entries again
+        for index in reversed(free):
+            del shortcuts[index]
+        shortcuts[:] = [(kind, str(n), value) for n, (kind, _key, value) in enumerate(shortcuts)]
+    saved = backup(vdf_path, data, now) if data else None
+    vdf_path.parent.mkdir(parents=True, exist_ok=True)
+    vdf_path.write_bytes(dump(root) + bytes([END]))
+    return results, saved
 
 
 def steam_folder():
