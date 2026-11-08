@@ -35,7 +35,11 @@ import trophies  # noqa: E402  (scripts/trophies.py: the games' trophy lists)
 import uncharted_i18n
 
 DATA_DIR = Path(os.environ.get('BB_DATA_DIR', PORT_DIR))
-CONFIG_DIR = Path(os.environ.get('APPDATA', Path.home())) / 'uncharted-launcher'
+WINDOWS = sys.platform == 'win32'
+if not WINDOWS:
+    import uncharted_linux
+CONFIG_DIR = (Path(os.environ.get('APPDATA', Path.home())) / 'uncharted-launcher'
+              if WINDOWS else uncharted_linux.config_dir())
 CONFIG_FILE = CONFIG_DIR / 'settings.json'
 NAME = 'Uncharted'
 AUTHOR = 'SuperMedo'
@@ -245,6 +249,8 @@ def select_run_problem(current, output):
 
 def attach_stdio():
     """A windowed executable starts without sys.stdout; inherited pipes or a console still exist."""
+    if not WINDOWS:
+        return
     import msvcrt
     for name, std in (('stdout', -11), ('stderr', -12)):
         if getattr(sys, name) is not None:
@@ -372,14 +378,18 @@ def vibration_strength(s):
 def controller_probe_path():
     """The packaged or development loader, which also provides the lightweight controller probe."""
     configured = os.environ.get('BB_PROBE')
-    candidates = ([Path(configured)] if configured else []) + [PORT_DIR / 'bin' / 'bb-probe.exe',
-                                                               PORT_DIR / 'out' / 'bb-probe.exe']
+    name = 'bb-probe.exe' if WINDOWS else 'bb-probe'
+    candidates = ([Path(configured)] if configured else []) + [PORT_DIR / 'bin' / name,
+                                                               PORT_DIR / 'out' / name]
     return next((path for path in candidates if path.is_file()), None)
 
 
 def controller_probe_environment(probe):
     """Development builds find SDL beside MSYS2; packages already keep it beside bb-probe."""
     env = dict(os.environ)
+    if not WINDOWS:
+        env['LD_LIBRARY_PATH'] = os.pathsep.join(filter(None, [str(probe.parent / 'lib'), env.get('LD_LIBRARY_PATH')]))
+        return env
     if not (probe.parent / 'SDL3.dll').is_file():
         clang64 = Path(env.get('MSYS2_ROOT', r'C:\msys64')) / 'clang64' / 'bin'
         if clang64.is_dir():
@@ -594,11 +604,20 @@ class Launcher:
         self.card_hot = None
         self.info, self.available = None, {}
         self.update_box = None
-        root.title(f'{NAME} — The Nathan Drake Collection for Windows · by {AUTHOR}')
+        root.title(f'{NAME} — The Nathan Drake Collection for {"Windows" if WINDOWS else "Linux"} · by {AUTHOR}')
         root.configure(bg=BG)
         self.dpi = root.winfo_fpixels('1i') / 96.0
+        if not WINDOWS:
+            scale = uncharted_linux.font_scale(root)
+            self.dpi *= scale
+            root.tk.call('tk', 'scaling', float(root.tk.call('tk', 'scaling')) * scale)
         root.geometry(f'{self.px(1180)}x{self.px(860)}')
         root.minsize(self.px(1040), self.px(760))
+        if not WINDOWS:
+            width = min(self.px(1180), root.winfo_screenwidth())
+            height = min(self.px(800), root.winfo_screenheight() - 40)
+            root.geometry(f'{width}x{height}')
+            root.minsize(min(self.px(1040), width), min(self.px(500), height))
         self.set_icon()
         self.load_fonts()
         self.style()
@@ -614,6 +633,9 @@ class Launcher:
         return int(size * self.dpi)
 
     def set_icon(self):
+        if not WINDOWS:
+            uncharted_linux.set_icon(self.root, self.tk)
+            return
         try:
             self.root.iconbitmap(default=str(PORT_DIR / 'launcher' / 'uncharted.ico'))
         except self.tk.TclError:
@@ -624,6 +646,17 @@ class Launcher:
         from uncharted_fonts import font_path
 
         self.brand_family = 'Cinzel'
+        if not WINDOWS:
+            import ctypes.util
+            try:
+                fontconfig = ctypes.CDLL(ctypes.util.find_library('fontconfig') or 'libfontconfig.so.1')
+                fontconfig.FcConfigAppFontAddFile.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
+                for name in ('Cinzel-Regular.ttf', 'Cinzel-SemiBold.ttf', 'Cinzel-Bold.ttf'):
+                    path = font_path(name)
+                    if path:
+                        fontconfig.FcConfigAppFontAddFile(None, str(path).encode())
+            except (OSError, AttributeError):
+                pass
         for name in ('Cinzel-Regular.ttf', 'Cinzel-SemiBold.ttf', 'Cinzel-Bold.ttf'):
             path = font_path(name)
             if path:
@@ -1064,7 +1097,8 @@ class Launcher:
             self.nav[name], self.nav_pills[name], self.nav_marks[name] = item, pill, mark
         tk.Frame(side, bg=BG).pack(fill='both', expand=True)
         self.side = side
-        self.side_note = tk.Label(side, text=_('Native port: the original PS4 game code runs directly on Windows.'),
+        self.side_note = tk.Label(side, text=_('Native port: the original PS4 game code runs directly on Windows.')
+                                  if WINDOWS else _('Native port: the original PS4 game code runs directly on Linux.'),
                                   bg=BG, fg=MUTED, font=('Segoe UI', 9), justify='left',
                                   wraplength=side_w - 36)
         self.side_note.pack(anchor='w', padx=18, pady=(0, 18))
@@ -2024,12 +2058,13 @@ class Launcher:
         try:
             self.process = subprocess.Popen(run_command(), cwd=PORT_DIR, env=env,
                                             stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                                            stderr=subprocess.STDOUT, creationflags=NO_WINDOW)
+                                            stderr=subprocess.STDOUT, creationflags=NO_WINDOW,
+                                            **({} if WINDOWS else {'start_new_session': True}))
         except OSError as error:
             self.append(_('Could not start: {}').format(error) + '\n')
             self.process = None
             return
-        self.job = GameJob(self.process)
+        self.job = (GameJob if WINDOWS else uncharted_linux.GameJob)(self.process)
         self.entered, self.last_problem, self.stopping = False, '', False
         threading.Thread(target=self.read_output, args=(self.process,), daemon=True).start()
         self.play_button.configure(state='disabled')
@@ -2131,7 +2166,10 @@ class Launcher:
         path = Path(path or DATA_DIR)
         if not path.exists():
             path.mkdir(parents=True, exist_ok=True)
-        os.startfile(str(path))
+        if WINDOWS:
+            os.startfile(str(path))
+        else:
+            uncharted_linux.open_path(path)
 
     # ---- updates -------------------------------------------------------------------------------
     def check_update(self, manual=False):
@@ -2176,7 +2214,7 @@ class Launcher:
         if self.process:
             self.messagebox.showinfo(NAME, _('Close the game before updating.'))
             return
-        if not FROZEN or not url:  # a source tree updates with git
+        if not FROZEN or not url or not WINDOWS:  # a source tree updates with git
             webbrowser.open(page)
             return
         if not self.messagebox.askyesno(NAME, _(
@@ -2236,6 +2274,13 @@ class Launcher:
 
     def shortcut(self):
         """Configure the collection shortcut where the action happens."""
+        if not WINDOWS:
+            try:
+                uncharted_linux.desktop_entry(__file__, PORT_DIR)
+                self.messagebox.showinfo(NAME, _('Shortcut created on the desktop.'))
+            except OSError as error:
+                self.messagebox.showerror(NAME, str(error))
+            return
         from PIL import Image, ImageTk
 
         window = self.tk.Toplevel(self.root)
@@ -2433,26 +2478,31 @@ class Launcher:
     def perform_add_to_steam(self):
         """Write the collection shortcut and its user-selected artwork to Steam."""
         import bbport_steam
-        steam = bbport_steam.steam_folder()
+        steam = bbport_steam.steam_folder() if WINDOWS else uncharted_linux.steam_folder()
         configs = bbport_steam.user_configs(steam) if steam else []
         if not configs:
             self.messagebox.showerror(NAME, _('Steam was not found on this PC (or nobody has signed in to it yet).'))
             return
-        if FROZEN:
+        if not WINDOWS:
+            exe, options = uncharted_linux.launch_target(__file__)
+        elif FROZEN:
             exe, options = Path(sys.executable), '--play'
         else:
             pythonw = Path(sys.executable).with_name('pythonw.exe')
             exe, options = (pythonw if pythonw.exists() else Path(sys.executable)), f'"{Path(__file__).resolve()}" --play'
         self.collect()
         restart = False
-        if bbport_steam.steam_running():
+        if (bbport_steam.steam_running() if WINDOWS else uncharted_linux.steam_running()):
             if not self.messagebox.askyesno(NAME, _('Steam has to close while the game is added; it starts '
                                                     'again afterwards. Close Steam now?')):
                 return
-            subprocess.Popen([str(steam / 'steam.exe'), '-shutdown'], creationflags=NO_WINDOW)
+            if WINDOWS:
+                subprocess.Popen([str(steam / 'steam.exe'), '-shutdown'], creationflags=NO_WINDOW)
+            else:
+                uncharted_linux.steam_shutdown(steam)
             for _i in range(60):
                 time.sleep(0.5)
-                if not bbport_steam.steam_running():
+                if not (bbport_steam.steam_running() if WINDOWS else uncharted_linux.steam_running()):
                     break
             else:
                 self.messagebox.showerror(NAME, _('Steam did not close. Close it yourself and try again.'))
@@ -2477,7 +2527,10 @@ class Launcher:
             self.messagebox.showerror(NAME, _('Could not add the game to Steam: {}').format(error))
             return
         if restart:
-            os.startfile('steam://open/games')
+            if WINDOWS:
+                os.startfile('steam://open/games')
+            else:
+                uncharted_linux.open_path('steam://open/games')
         self.messagebox.showinfo(NAME, _('The collection is in your Steam library. It starts with the settings '
                                          'saved in this launcher.'))
 
@@ -2605,7 +2658,8 @@ def play_without_window(settings):
             text = raw.decode('utf-8', errors='replace')
             log.write(text)
             try:
-                sys.stdout.write(text)
+                if sys.stdout:
+                    sys.stdout.write(text)
             except (OSError, ValueError):
                 pass
         return process.wait()

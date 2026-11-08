@@ -1,8 +1,14 @@
 #!/usr/bin/env bash
-# Adaptação Linux do run.py do uncharted_pc (Windows)
+# Linux launcher for the source tree and the packaged AppImage.
 
 PORT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-GAME="${BB_GAME_DIR:?Defina BB_GAME_DIR com a pasta do jogo (com eboot.bin)}"
+if [[ ${1:-} == --help || -z ${BB_GAME_DIR:-} ]]; then
+    echo "Usage: BB_GAME_DIR=/path/to/CUSA02320 ${APPIMAGE:-$0} [probe options]"
+    echo "Set BB_EXE=u1, u2 or u3 to select a game. Supply your own decrypted game files."
+    [[ ${1:-} == --help ]] && exit 0
+    exit 2
+fi
+GAME="$BB_GAME_DIR"
 EXE_NAME="${BB_EXE:-u1}"
 
 case "$EXE_NAME" in
@@ -12,10 +18,12 @@ case "$EXE_NAME" in
     *)  EXE="$EXE_NAME" ;;
 esac
 
-USER_DIR="${BB_USER_DIR:-$PORT/user}"
-OUT_ROOT="$PORT/out"
+DATA_ROOT="${BB_DATA_DIR:-$PORT}"
+USER_DIR="${BB_USER_DIR:-$DATA_ROOT/user}"
+OUT_ROOT="$DATA_ROOT/out"
 OUT="$OUT_ROOT/${EXE%.*}"
 PROBE="$PORT/out/bb-probe"
+[[ -x $PORT/bin/bb-probe ]] && PROBE="$PORT/bin/bb-probe"
 
 if [ ! -f "$GAME/eboot.bin" ]; then
     echo "ERRO: não achei eboot.bin em $GAME" >&2
@@ -30,8 +38,12 @@ mkdir -p "$OUT" "$USER_DIR"
 
 export PYTHONUTF8=1
 export PYTHONIOENCODING=utf-8
-export BB_CONFIG="${BB_CONFIG:-$PORT/bbport.ini}"
-export BB_INPUT_CONFIG="${BB_INPUT_CONFIG:-$PORT/input.ini}"
+export BB_CONFIG="${BB_CONFIG:-$DATA_ROOT/bbport.ini}"
+export BB_INPUT_CONFIG="${BB_INPUT_CONFIG:-$DATA_ROOT/input.ini}"
+if [[ -n ${BB_DATA_DIR:-} ]]; then
+    export BB_FSR4_DIR="${BB_FSR4_DIR:-$DATA_ROOT/fsr4_shaders}"
+    export BB_FSR411_DIR="${BB_FSR411_DIR:-$DATA_ROOT/fsr4_411}"
+fi
 export BB_GPU_USER_DIR="$USER_DIR"
 export BB_VBLANK_HZ="${BB_VBLANK_HZ:-60}"
 export BB_VELOCITY_PS="${BB_VELOCITY_PS:-f4b18264}"

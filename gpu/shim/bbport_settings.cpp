@@ -161,7 +161,7 @@ void ConfigureDlssSupport(bool available, const char* problem) {
     v.dlss_problem = available || kept.empty() ? nullptr : kept.c_str();
     if (v.upscaler == UpscalerDlss && !available) {
         std::printf("Upscaler: DLSS unavailable (%s); falling back to FSR 3.1\n",
-                    kept.empty() ? "bbport_dlss.dll or nvngx_dlss.dll missing" : kept.c_str());
+                    kept.empty() ? "DLSS bridge or runtime missing" : kept.c_str());
         v.upscaler = UpscalerFsr3;
     }
 }

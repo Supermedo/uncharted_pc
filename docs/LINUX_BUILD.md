@@ -25,7 +25,7 @@ sudo apt update
 sudo apt install gcc-14 g++-14
 ```
 
-### Protobuf (must be built from source with `-fPIC`)
+### Protobuf for the system package build
 
 The system Protobuf (3.21) lacks the CMake config files and is not built as PIC, which causes linker errors when building shared libraries.
 
@@ -45,6 +45,16 @@ cd ..
 ```
 
 ## Building
+
+For a clean build with the dependencies in `shell.nix`, including Protobuf, clone recursively and build inside the Nix shell. This is the build path for AppImage binaries; it does not require the Protobuf installation under `/usr/local` described above.
+
+```bash
+git submodule update --init --recursive
+nix-shell shell.nix --run 'BB_IN_NIX_SHELL=1 bash build.sh'
+cat out/VERSION
+```
+
+For a system package build on Pop!_OS, use the prerequisites above:
 
 ```bash
 cd ~/uncharted_pc
