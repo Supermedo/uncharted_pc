@@ -613,6 +613,59 @@ void DrawXbox(Canvas& c, const Slot& s) {
                  s.y1 - s.y0 - 6.0f);
 }
 
+const char* NintendoLabel(u8 icon, Style style) {
+    if (style == Style::GameCube) {
+        switch (icon) {
+        case Cross: return "A";
+        case Circle: return "X";
+        case Square: return "B";
+        case Triangle: return "Y";
+        case L1: return "L1"; // No equivalent on the original controller.
+        case R1: return "Z";
+        case L2: return "L";
+        case R2: return "R";
+        case Options: return "START";
+        case Touchpad: return "Touchpad";
+        default: break;
+        }
+    }
+    switch (icon) {
+    case Cross: return "B";
+    case Circle: return "A";
+    case Square: return "Y";
+    case Triangle: return "X";
+    case L1: return "L";
+    case R1: return "R";
+    case L2: return "ZL";
+    case R2: return "ZR";
+    case L3: return "L3";
+    case R3: return "R3";
+    case Options: return "+";
+    case Touchpad: return "−";
+    default: return "";
+    }
+}
+
+void DrawNintendo(Canvas& c, const Font& font, const Slot& s, Style style) {
+    if (s.icon >= DPad || s.icon == Move || s.icon == Look) {
+        DrawXbox(c,s); // sticks and d-pad have no platform-specific letters
+        return;
+    }
+    const float x0=s.x0+2.0f, y0=s.y0+2.0f, x1=s.x1-2.0f, y1=s.y1-2.0f;
+    const float cx=(x0+x1)*0.5f, cy=(y0+y1)*0.5f;
+    const bool face=s.icon<=Triangle;
+    DrawCap(c,x0,y0,x1,y1,[&](float x,float y) -> float {
+        if (face) {
+            const float r=std::min(x1-x0,y1-y0)*0.5f;
+            const float dx=x-cx, dy=y-cy;
+            return std::hypot(dx,dy)-r;
+        }
+        return RoundedRect(x,y,cx,cy,(x1-x0)*0.5f,(y1-y0)*0.5f,
+                           std::min(x1-x0,y1-y0)*0.22f);
+    });
+    font.Draw(c,NintendoLabel(s.icon,style),cx,cy,x1-x0-8.0f,(y1-y0)*0.55f);
+}
+
 Color Expand565(u16 v) {
     return {float((v >> 11) & 31) / 31.0f, float((v >> 5) & 63) / 63.0f, float(v & 31) / 31.0f};
 }
@@ -819,16 +872,19 @@ std::vector<Patch> BuildPicture(const Picture& picture, u32 levels, Style style)
         }
     }
     const int xbox = style == Style::Xbox && picture.shape != HudDPad ? XboxGlyph(picture.icon) : -1;
+    const std::string label = style == Style::Nintendo || style == Style::GameCube
+                                 ? NintendoLabel(picture.icon,style)
+                                                       : bindings.keys[picture.icon];
     switch (picture.shape) {
     case RoundButton:
-        DrawRoundButton(up, font, bindings.keys[picture.icon], xbox);
+        DrawRoundButton(up, font, label, xbox);
         break;
     case Puck:
     case PressedPuck:
-        DrawPuck(up, font, bindings.keys[picture.icon], picture.shape == PressedPuck, xbox);
+        DrawPuck(up, font, label, picture.shape == PressedPuck, xbox);
         break;
     case HudDPad:
-        if (style == Style::Xbox) {
+        if (style == Style::Xbox || style == Style::Nintendo || style == Style::GameCube) {
             DrawXboxHudDPad(up, picture.icon);
         } else {
             DrawHudDPad(up, font, bindings, picture.icon);
@@ -970,6 +1026,8 @@ std::vector<Patch> Build(const Sheet& sheet, u32 levels, Style style) {
     for (const Slot& s : sheet.slots) {
         if (style == Style::Xbox) {
             DrawXbox(canvas, s);
+        } else if (style == Style::Nintendo || style == Style::GameCube) {
+            DrawNintendo(canvas,font,s,style);
         } else if (s.icon >= DPad) {
             DrawArrows(canvas, font, s, bindings);
         } else if (s.icon < Actions) {
@@ -1024,10 +1082,10 @@ std::vector<Patch> Build(const Sheet& sheet, u32 levels, Style style) {
 } // namespace
 
 namespace {
-std::atomic<int> device_used{0}; ///< 0 keyboard and mouse, 1 PlayStation pad, 2 Xbox or other pad
+std::atomic<int> device_used{0}; ///< 0 keyboard, 1 PlayStation, 2 Xbox/other, 3 Switch, 4 GameCube
 std::atomic<u32> switches{0};
 
-enum class Force : u8 { Auto, Off, Keyboard, Xbox };
+enum class Force : u8 { Auto, Off, Keyboard, Xbox, Nintendo, GameCube };
 
 /// BB_BUTTON_PROMPTS: unset or auto follows the device used last; 0 (or off, playstation) keeps the
 /// game's own pictures; keyboard or xbox shows that style always.
@@ -1043,6 +1101,12 @@ Force Forced() {
         if (!std::strcmp(env, "xbox")) {
             return Force::Xbox;
         }
+        if (!std::strcmp(env, "nintendo")) {
+            return Force::Nintendo;
+        }
+        if (!std::strcmp(env, "gamecube")) {
+            return Force::GameCube;
+        }
         return !std::strcmp(env, "0") || !std::strcmp(env, "off") || !std::strcmp(env, "playstation")
                    ? Force::Off
                    : Force::Auto;
@@ -1052,11 +1116,13 @@ Force Forced() {
 } // namespace
 
 void SetDevice(int device) {
-    device = std::clamp(device, 0, 2);
+    device = std::clamp(device, 0, 4);
     if (device_used.exchange(device) != device) {
         switches.fetch_add(1, std::memory_order_release);
         static constexpr const char* names[] = {"keyboard keys", "PlayStation controller used, PlayStation buttons",
-                                                "Xbox controller used, Xbox buttons"};
+                                                "Xbox controller used, Xbox buttons",
+                                                "Nintendo controller used, Nintendo buttons",
+                                                "GameCube controller used, GameCube buttons"};
         std::printf("Button prompts: %s\n", names[device]);
     }
 }
@@ -1069,11 +1135,16 @@ Style Shown() {
         return Style::Keyboard;
     case Force::Xbox:
         return Style::Xbox;
+    case Force::Nintendo:
+        return Style::Nintendo;
+    case Force::GameCube:
+        return Style::GameCube;
     case Force::Auto:
         break;
     }
     const int device = device_used.load(std::memory_order_relaxed);
-    return device == 0 ? Style::Keyboard : device == 1 ? Style::Original : Style::Xbox;
+    return device == 0 ? Style::Keyboard : device == 1 ? Style::Original
+                    : device == 3 ? Style::Nintendo : device == 4 ? Style::GameCube : Style::Xbox;
 }
 
 u32 Switches() {
@@ -1088,7 +1159,9 @@ u32 Switches() {
             char word[16]{};
             if (FILE* f = std::fopen(path, "r")) {
                 if (std::fscanf(f, "%15s", word) == 1) {
-                    SetDevice(!std::strcmp(word, "ps") ? 1 : !std::strcmp(word, "xbox") ? 2 : 0);
+                    SetDevice(!std::strcmp(word, "ps") ? 1 : !std::strcmp(word, "xbox") ? 2
+                                                       : !std::strcmp(word, "nintendo") ? 3
+                                                       : !std::strcmp(word, "gamecube") ? 4 : 0);
                 }
                 std::fclose(f);
             }
@@ -1156,7 +1229,9 @@ const std::vector<Patch>* Find(u64 hash, u32 width, u32 height, u32 levels, Form
     if (const auto it = built.find(key); it != built.end()) {
         return &it->second;
     }
-    const char* look = style == Style::Xbox ? "Xbox buttons" : "keyboard and mouse keys";
+    const char* look = style == Style::Xbox ? "Xbox buttons"
+                        : style == Style::Nintendo ? "Nintendo buttons"
+                        : style == Style::GameCube ? "GameCube buttons" : "keyboard and mouse keys";
     if (sheet) {
         auto& patches = built[key] = Build(*sheet, levels, style);
         std::printf("Button prompts: %s button pictures drawn as %s (%zu pictures, %u mip levels)\n",
