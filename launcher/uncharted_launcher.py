@@ -294,16 +294,36 @@ def load_json(path, default):
         return default
 
 
+def atomic_write_text(path, text):
+    """Replace a text file only after its complete contents reach a sibling temporary file."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile('w', encoding='utf-8', dir=path.parent,
+                                         prefix=f'.{path.name}.', suffix='.tmp',
+                                         delete=False) as stream:
+            temporary = Path(stream.name)
+            stream.write(text)
+        os.replace(temporary, path)
+    finally:
+        if temporary:
+            try:
+                temporary.unlink()
+            except FileNotFoundError:
+                pass
+
+
 def ini_path():
     return Path(os.environ.get('BB_CONFIG', DATA_DIR / 'bbport.ini'))
 
 
 def set_ini(key, value):
-    """bbport.ini (read by the game; the in-game menu edits it): one key rewritten in place."""
+    """Update a bbport.ini key while preserving the other in-game settings."""
     path = ini_path()
     try:
         lines = path.read_text(encoding='utf-8').splitlines()
-    except OSError:
+    except FileNotFoundError:
         lines = []
     out, found = [], False
     for line in lines:
@@ -314,7 +334,7 @@ def set_ini(key, value):
             out.append(line)
     if not found:
         out.append(f'{key}={value}')
-    path.write_text('\n'.join(out) + '\n', encoding='utf-8')
+    atomic_write_text(path, '\n'.join(out) + '\n')
 
 
 def game_info(folder):
@@ -460,8 +480,7 @@ def write_input_ini(s):
     lines += [f'key.{action}={keys.get(action, "")}' for action in DEFAULT_KEYS]
     lines += [f'pad.{action}={pad.get(action, "none")}' for action in DEFAULT_PAD]
     path = input_ini_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text('\n'.join(lines) + '\n', encoding='utf-8')
+    atomic_write_text(path, '\n'.join(lines) + '\n')
     return path
 
 
@@ -1887,7 +1906,8 @@ class Launcher:
         """Save and rebuild every label as soon as the interface language changes."""
         global UI_LANGUAGE
         page = self.current_page or 'advanced'
-        self.collect()
+        if not self.collect():
+            return
         UI_LANGUAGE = uncharted_i18n.language_code(self.app['ui_language'])
         for child in self.root.winfo_children():
             child.destroy()
@@ -1928,7 +1948,8 @@ class Launcher:
 
     def change_art(self):
         """Apply local artwork immediately while keeping the original as fallback."""
-        self.collect()
+        if not self.collect():
+            return
         self.configure_art()
         self.banner_key = self.banner_scaled = None
         self.card_images = {}
@@ -1939,12 +1960,13 @@ class Launcher:
             self.app[key] = v.get()
         if getattr(self, 'pad_vars', None):
             self.app['pad_bindings'] = {a: v.get() for a, v in self.pad_vars.items()}
-        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-        CONFIG_FILE.write_text(json.dumps(self.app, indent=2) + '\n', encoding='utf-8')
         try:
+            atomic_write_text(CONFIG_FILE, json.dumps(self.app, indent=2) + '\n')
             set_ini('show_fps', '1' if self.app['show_fps'] else '0')
-        except OSError:
-            pass
+        except (OSError, UnicodeError) as error:
+            self.messagebox.showerror(NAME, _('Could not save settings: {}').format(error))
+            return False
+        return True
 
     def detect_controller(self, test=False):
         """Detect or briefly rumble the first SDL gamepad without starting the game renderer."""
@@ -2003,9 +2025,8 @@ class Launcher:
         self.controller_status.configure(text=status)
 
     def play(self):
-        if self.process:
+        if self.process or not self.collect():
             return
-        self.collect()
         folder = game_folder(self.app, self.app['start'])
         if not folder or not Path(folder).is_dir():
             self.messagebox.showerror(NAME, _('Choose the game folder with eboot.bin.'))
@@ -2296,7 +2317,8 @@ class Launcher:
         def create():
             self.app['shortcut_name'] = name.get().strip() or APP_DEFAULTS['shortcut_name']
             self.app['shortcut_icon'] = icon.get()
-            self.collect()
+            if not self.collect():
+                return
             window.destroy()
             self.create_shortcut()
 
@@ -2422,7 +2444,8 @@ class Launcher:
             self.app['steam_art'] = selected['path']
             self.app.setdefault('art_crops', {}).update(
                 {f'steam_{name}': crop for name, crop in selected['crops'].items()})
-            self.collect()
+            if not self.collect():
+                return
             window.destroy()
             self.perform_add_to_steam()
 
@@ -2443,7 +2466,6 @@ class Launcher:
         else:
             pythonw = Path(sys.executable).with_name('pythonw.exe')
             exe, options = (pythonw if pythonw.exists() else Path(sys.executable)), f'"{Path(__file__).resolve()}" --play'
-        self.collect()
         restart = False
         if bbport_steam.steam_running():
             if not self.messagebox.askyesno(NAME, _('Steam has to close while the game is added; it starts '
