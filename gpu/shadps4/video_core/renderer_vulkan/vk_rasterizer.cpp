@@ -3585,10 +3585,12 @@ void Rasterizer::BindTextures(const Shader::Info& stage, const PreparedStage* pr
         }
 
         const Shader::MipStorageFallbackMode mip_fallback_mode = image_desc.mip_fallback_mode;
-        // Same as image_desc.NumBindings(stage), without fetching the T# again.
+        // Same as image_desc.NumBindings(stage), without fetching the T# again. Levels reversed (a
+        // broken T#): 1, not the ~4e9 the unsigned difference gives (BilalReloaded's port 0.8.3, via
+        // El Dorado 778cc70c; like layout_count above).
         const u32 num_bindings =
             mip_fallback_mode == Shader::MipStorageFallbackMode::DynamicIndex
-                ? static_cast<u32>(tsharp.last_level - tsharp.base_level + 1)
+                ? Shader::ImageResource::MipBindingCount(tsharp)
                 : 1u;
         const bool proxy_candidate = sample_proxies && num_bindings == 1 &&
                                      !image_desc.needs_native && !image_desc.is_written &&

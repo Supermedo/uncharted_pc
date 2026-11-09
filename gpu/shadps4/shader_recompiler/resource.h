@@ -163,8 +163,16 @@ struct ImageResource {
     u32 NumBindings(const auto& info) const {
         const AmdGpu::Image tsharp = GetSharp(info);
         return (mip_fallback_mode == MipStorageFallbackMode::DynamicIndex)
-                   ? (tsharp.last_level - tsharp.base_level + 1)
+                   ? MipBindingCount(tsharp)
                    : 1;
+    }
+    /// bbport (BilalReloaded's port 0.8.3, via El Dorado 778cc70c): the mip levels a dynamically
+    /// indexed storage image binds. A garbage T# (a checkpoint loading) can have last_level below
+    /// base_level: the plain difference wrapped to about 4e9 descriptors. Such a T# gets one.
+    static u32 MipBindingCount(const AmdGpu::Image& tsharp) {
+        const u32 base = static_cast<u32>(tsharp.base_level);
+        const u32 last = static_cast<u32>(tsharp.last_level);
+        return last >= base ? last - base + 1 : 1u;
     }
 };
 using ImageResourceList = boost::container::static_vector<ImageResource, NUM_IMAGES>;
