@@ -153,6 +153,7 @@ TK_KEYS = {'space': 'Space', 'Return': 'Return', 'Escape': 'Escape', 'Tab': 'Tab
 WIN_NUMPAD = {**{0x60 + n: f'Keypad {n}' for n in range(10)},
               0x6A: 'Keypad *', 0x6B: 'Keypad +', 0x6D: 'Keypad -', 0x6E: 'Keypad .', 0x6F: 'Keypad /'}
 MOUSE_SENS_MIN, MOUSE_SENS_MAX = 0.1, 10.0  # the Controls page slider (the game's default pace is 1)
+MOUSE_AIM_MIN, MOUSE_AIM_MAX = 0.1, 3.0  # raw mouse: aiming speed, times the mouse sensitivity
 # Fixes page: fixes that cost speed, so they run only where they help unless the player picks.
 # key -> (title, hint, {choice: {variable: value}}); 'auto' sets nothing (the game's own default).
 FIXES = {
@@ -209,6 +210,7 @@ APP_DEFAULTS = {'game_dir': '', 'game_dir_u1': '', 'game_dir_u2': '', 'game_dir_
                 'anti_aliasing': 'off', 'aa_sharpness': '0.2', 'frame_generation': 'off', 'low_latency': '0',
                 'frame_gen_multiplier': '2', 'extra_env': '', 'close_on_play': False,
                 'mouse_look': True, 'mouse_sensitivity': '1.0', 'mouse_invert_y': False,
+                'mouse_raw': True, 'mouse_aim_sensitivity': '1.0',
                 'pad_invert_y': False, 'art_banner': '', 'art_u1': '', 'art_u2': '', 'art_u3': '', 'steam_art': '', 'art_crops': {}, 'shortcut_name': 'Uncharted: The Nathan Drake Collection', 'shortcut_icon': '', 'trophy_game': 'u1', 'pad_vibration': True, 'pad_vibration_strength': '100', 'button_prompts': 'auto', 'key_bindings': {}, 'pad_bindings': {}, 'check_updates': True,
                 **{key: 'auto' for key in FIXES},
                 **{f'{game}_infinite_{cheat}': False for game, _t, _s, _e in GAMES for cheat in ('health', 'ammo')}}
@@ -361,6 +363,14 @@ def mouse_sensitivity(s):
         return '1.00'
 
 
+def mouse_aim_sensitivity(s):
+    """Raw mouse: the saved aim sensitivity as the game reads it, in its slider's range."""
+    try:
+        return f"{min(MOUSE_AIM_MAX, max(MOUSE_AIM_MIN, float(s.get('mouse_aim_sensitivity')))):.2f}"
+    except (TypeError, ValueError):
+        return '1.00'
+
+
 def vibration_strength(s):
     """Saved vibration percentage, clamped at the launcher/runtime boundary."""
     try:
@@ -454,6 +464,8 @@ def write_input_ini(s):
              f"mouse_look={1 if s.get('mouse_look', True) else 0}",
              f"mouse_sensitivity={mouse_sensitivity(s)}",
              f"mouse_invert_y={1 if s.get('mouse_invert_y') else 0}",
+             f"mouse_raw={1 if s.get('mouse_raw', True) else 0}",
+             f"mouse_aim_sensitivity={mouse_aim_sensitivity(s)}",
              f"pad_invert_y={1 if s.get('pad_invert_y') else 0}",
              f"pad_vibration={1 if s.get('pad_vibration', True) else 0}",
              f"pad_vibration_strength={vibration_strength(s)}"]
@@ -1451,6 +1463,15 @@ class Launcher:
                  _('How far the camera turns for a mouse movement; 1.00 is the default. Drag the slider or '
                    'type a number (0.1 to 10) for a faster turn.'))
         self.check(f, 'mouse_invert_y', _('Invert the mouse vertically'))
+        self.check(f, 'mouse_raw', _('Raw mouse aiming and cover camera (Uncharted 1 and 2)'),
+                   _('Aiming, the camera in cover and fast turns follow the mouse directly, not through the right '
+                     'stick and its top speed. For the US 1.02 version of the games; other versions keep the stick. '
+                     'Turn it off if the camera misbehaves.'))
+        self.row(f, _('Aim sensitivity (raw mouse)'),
+                 Slider(self.tk, self.target(f), self.var('mouse_aim_sensitivity'), MOUSE_AIM_MIN, MOUSE_AIM_MAX, 0.05,
+                        COLORS, self.px, self.font_ui_md, width=300, log=True, entry=True),
+                 _('How fast the aim turns compared with the mouse sensitivity above; 1.00 is the same speed, '
+                   'lower is slower while aiming.'))
 
         self.section(f, _('Button pictures'))
         self.row(f, _('Show in the game'), self.choice(f, 'button_prompts', BUTTON_PROMPTS, 40),
