@@ -45,6 +45,12 @@ rm -rf -- out/stage
 mkdir -p "$dest/bin" "$dest/launcher" "$dest/scripts"
 cp -r out/pyi-dist/Uncharted/. "$dest/"
 llvm-strip -o "$dest/Play Uncharted.exe" out/bb-play.exe
+# launcher/uncharted.png is gitignored (*.png): draw it on a clean checkout. The tracked .ico stays
+# as it is; the icon script's .ico output goes to a scratch file.
+if [[ ! -f launcher/uncharted.png ]]; then
+    out/pyenv/Scripts/python.exe packaging/windows/make_uncharted_icon.py \
+        "$(cygpath -w "$PWD/out/uncharted-scratch.ico")" "$(cygpath -w "$PWD/launcher/uncharted.png")"
+fi
 cp launcher/uncharted.ico launcher/uncharted.png "$dest/launcher/"
 # The executables without debug information (out/ keeps the symbols for crash reports).
 for exe in bb-probe.exe bb-gpu-capabilities.exe; do
