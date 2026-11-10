@@ -40,6 +40,10 @@ EXTRA_TRANSLATIONS = {
         'How the game window is shown.': 'Wie das Spielfenster angezeigt wird.',
         'Interface language': 'Sprache der Benutzeroberfläche',
         'Invert the mouse vertically': 'Maus vertikal umkehren',
+        'Raw mouse aiming and cover camera (Uncharted 1 and 2)': 'Zielen und Deckungskamera mit direkter Maus (Uncharted 1 und 2)',
+        'Aiming, the camera in cover and fast turns follow the mouse directly, not through the right stick and its top speed. For the US 1.02 version of the games; other versions keep the stick. Turn it off if the camera misbehaves.': 'Zielen, die Kamera in Deckung und schnelle Drehungen folgen der Maus direkt, nicht über den rechten Stick und dessen Höchstgeschwindigkeit. Für die US-Version 1.02 der Spiele; andere Versionen behalten den Stick. Ausschalten, wenn sich die Kamera falsch verhält.',
+        'Aim sensitivity (raw mouse)': 'Zielempfindlichkeit (direkte Maus)',
+        'How fast the aim turns compared with the mouse sensitivity above; 1.00 is the same speed, lower is slower while aiming.': 'Wie schnell sich das Zielen im Vergleich zur Mausempfindlichkeit oben dreht; 1.00 ist dieselbe Geschwindigkeit, ein kleinerer Wert ist beim Zielen langsamer.',
         'Invert the right stick vertically': 'Rechten Stick vertikal umkehren',
         'Keyboard and mouse buttons': 'Tastatur- und Maustasten',
         'Keyboard, mouse and controller. They work together; changes apply when the game starts.':
@@ -138,6 +142,10 @@ EXTRA_TRANSLATIONS = {
         'How the game window is shown.': 'Come viene mostrata la finestra del gioco.',
         'Interface language': "Lingua dell'interfaccia",
         'Invert the mouse vertically': 'Inverti verticalmente il mouse',
+        'Raw mouse aiming and cover camera (Uncharted 1 and 2)': 'Mira e telecamera in copertura con mouse diretto (Uncharted 1 e 2)',
+        'Aiming, the camera in cover and fast turns follow the mouse directly, not through the right stick and its top speed. For the US 1.02 version of the games; other versions keep the stick. Turn it off if the camera misbehaves.': 'La mira, la telecamera in copertura e le rotazioni rapide seguono direttamente il mouse, senza passare dalla levetta destra e dalla sua velocità massima. Per la versione US 1.02 dei giochi; le altre versioni mantengono la levetta. Disattivala se la telecamera si comporta male.',
+        'Aim sensitivity (raw mouse)': 'Sensibilità della mira (mouse diretto)',
+        'How fast the aim turns compared with the mouse sensitivity above; 1.00 is the same speed, lower is slower while aiming.': 'Velocità di rotazione in mira rispetto alla sensibilità del mouse qui sopra; 1.00 è la stessa velocità, un valore più basso è più lento in mira.',
         'Invert the right stick vertically': 'Inverti verticalmente la levetta destra',
         'Keyboard and mouse buttons': 'Tasti di tastiera e mouse',
         'Keyboard, mouse and controller. They work together; changes apply when the game starts.':
@@ -236,6 +244,10 @@ EXTRA_TRANSLATIONS = {
         'How the game window is shown.': 'ゲームウィンドウの表示方法です。',
         'Interface language': 'インターフェース言語',
         'Invert the mouse vertically': 'マウスの上下操作を反転',
+        'Raw mouse aiming and cover camera (Uncharted 1 and 2)': 'マウス直接入力のエイムとカバー時カメラ（Uncharted 1・2）',
+        'Aiming, the camera in cover and fast turns follow the mouse directly, not through the right stick and its top speed. For the US 1.02 version of the games; other versions keep the stick. Turn it off if the camera misbehaves.': 'エイム、カバー中のカメラ、素早い旋回が、右スティックとその最高速度を介さずマウスに直接追従します。ゲームのUS 1.02版向けです。他のバージョンではスティック操作のままです。カメラの挙動がおかしい場合はオフにしてください。',
+        'Aim sensitivity (raw mouse)': 'エイム感度（マウス直接入力）',
+        'How fast the aim turns compared with the mouse sensitivity above; 1.00 is the same speed, lower is slower while aiming.': '上のマウス感度に対するエイム時の旋回速度です。1.00で同じ速度、小さくするとエイム時に遅くなります。',
         'Invert the right stick vertically': '右スティックの上下操作を反転',
         'Keyboard and mouse buttons': 'キーボードとマウスのボタン',
         'Keyboard, mouse and controller. They work together; changes apply when the game starts.':
