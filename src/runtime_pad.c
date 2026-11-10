@@ -10,6 +10,7 @@
  *       lefttrigger righttrigger leftstick rightstick back start dpup dpdown dpleft dpright
  *       touchpad misc1 paddle1..paddle4) or "none", for the button actions above.
  *   mouse_look=1  mouse_sensitivity=1.0  mouse_invert_y=0  pad_invert_y=0
+ *   mouse_raw=0  mouse_aim_sensitivity=1.0   (raw mouse, Uncharted 1 and 2: see "Raw mouse" below)
  *   pad_vibration=1  pad_vibration_strength=100
  *
  * Defaults (no file): WASD move, mouse look, left button R2 (fire), right button L2 (aim),
@@ -129,6 +130,8 @@ static struct {
     int pad[16];               /* SDL_GamepadButton, PAD_TRIGGER_*, or -1 */
     int mouse_look, mouse_invert_y, pad_invert_y, pad_vibration, pad_vibration_strength;
     float mouse_sensitivity;
+    int mouse_raw;               /* raw mouse (Uncharted 1 and 2): aiming, cover and blending cameras turn 1:1 */
+    float mouse_aim_sensitivity; /* raw aiming: times mouse_sensitivity */
 } input;
 
 /* Whether `name` is one of the keys in `defaults` ("Escape|Return"). */
@@ -177,6 +180,7 @@ static void load_input(void) {
         if (a<16) input.pad[a]=parse_pad(actions[a].pad);
     }
     input.mouse_look=1; input.mouse_sensitivity=1.0f;
+    input.mouse_raw=0; input.mouse_aim_sensitivity=1.0f;
     input.pad_vibration=1; input.pad_vibration_strength=100;
     const char *path=getenv("BB_INPUT_CONFIG");
     FILE *f=path && *path ? fopen(path,"r") : NULL;
@@ -191,6 +195,8 @@ static void load_input(void) {
             if (!strcmp(key,"mouse_look")) input.mouse_look=atoi(value)!=0;
             else if (!strcmp(key,"mouse_sensitivity")) input.mouse_sensitivity=(float)atof(value);
             else if (!strcmp(key,"mouse_invert_y")) input.mouse_invert_y=atoi(value)!=0;
+            else if (!strcmp(key,"mouse_raw")) input.mouse_raw=atoi(value)!=0;
+            else if (!strcmp(key,"mouse_aim_sensitivity")) input.mouse_aim_sensitivity=(float)atof(value);
             else if (!strcmp(key,"pad_invert_y")) input.pad_invert_y=atoi(value)!=0;
             else if (!strcmp(key,"pad_vibration")) input.pad_vibration=atoi(value)!=0;
             else if (!strcmp(key,"pad_vibration_strength")) input.pad_vibration_strength=atoi(value);
@@ -200,10 +206,11 @@ static void load_input(void) {
             }
         }
         fclose(f);
-        printf("Runtime: controls from %s (mouse look %s, sensitivity %.2f)\n",path,
-               input.mouse_look ? "on" : "off",input.mouse_sensitivity);
+        printf("Runtime: controls from %s (mouse look %s, sensitivity %.2f, raw mouse %s)\n",path,
+               input.mouse_look ? "on" : "off",input.mouse_sensitivity,input.mouse_raw ? "on" : "off");
     }
     if (input.mouse_sensitivity<=0.0f) input.mouse_sensitivity=1.0f;
+    if (input.mouse_aim_sensitivity<=0.0f) input.mouse_aim_sensitivity=1.0f;
     if (input.pad_vibration_strength<0) input.pad_vibration_strength=0;
     if (input.pad_vibration_strength>100) input.pad_vibration_strength=100;
     bbgpu_mouse_configure(input.mouse_look);
@@ -263,6 +270,20 @@ static pthread_mutex_t camera_lock=PTHREAD_MUTEX_INITIALIZER;
  * gets all of it (the follow camera does not read the joypad's right stick values, the other
  * cameras do not use the follow camera's direction). */
 static float camera_dx[2], camera_dy[2];
+/* Raw mouse (input.ini mouse_raw=1, Uncharted 1 and 2 US 1.02; from Umar-Qayyum-dev's pull request
+ * #561). Without it the mouse reaches the aiming camera and the cover camera only as a right stick
+ * value, held to the stick's top speed (about 46 degrees/s while aiming). With it:
+ * - aiming: the mouse turns the aiming camera's remembered aim direction itself (raw_aim);
+ * - cover: the mouse turns the cover camera's direction and pitch (cover_camera);
+ * - follow camera: each camera of a blend keeps its own state, and fast flicks stay within 60
+ *   degrees of the camera the game shows (follow_camera).
+ * Off, none of this code changes anything. BB_CALLBACKS_SKIP="raw mouse" leaves its hooks out. */
+static float aim_dx, aim_dy;            /* mouse pixels not yet given to the aim direction */
+static volatile uint64_t aim_direct_us; /* last time the aiming camera's aim controller ran */
+/* When aim was pressed. After a roll the game starts the aiming camera's controller up to a second
+ * later: the mouse motion of that time waits for it (1.5 s at most) instead of being lost. */
+static volatile uint64_t aim_press_us;
+static uint64_t cover_hook_us;        /* last cover camera callback: it turns with the mouse too */
 static uint64_t camera_hook_us;       /* last follow camera callback: it turns with the mouse */
 static uint64_t sticks_hook_us;       /* last joypad callback: the mouse is a right stick value there */
 static float camera_test_rate=-1.0f;  /* BB_MOUSE_CAMERA_TEST=<degrees per frame>: constant turn */
@@ -304,11 +325,46 @@ static float heading_of(const float *dir) { return SDL_atan2f(-dir[0],-dir[2])*5
  * curve), with a small turn each frame to notice when turns are kept again. */
 static volatile int follow_direct=1;
 static float follow_kept=1.0f;            /* average fraction of a turn still there the next frame */
-static float follow_before, follow_after; /* heading before and after the last turn */
-static int follow_pending;
 static volatile int aim_held;             /* L2 is held: the aiming camera (also while it blends in) */
-static float follow_target;               /* wanted heading (degrees) */
-static uint64_t follow_moved_us;          /* last frame the mouse moved */
+static int raw_aim_armed(uint64_t now) {
+    return aim_held && aim_direct_us && (now-aim_direct_us<1000000 || now-aim_press_us<1500000);
+}
+/* One follow camera's turn state. Without raw mouse there is one, shared (slot 0). With it each
+ * camera has its own: while the game blends (a roll, cover, a cut) it runs two follow cameras, a
+ * new one each time, and shared state made them pull against each other and sent the mouse to the
+ * joypad. */
+typedef struct {
+    uint64_t camera, last_us;
+    uint64_t moved_us;    /* last frame the mouse moved */
+    float target;         /* wanted heading (degrees) */
+    float before, after;  /* heading before and after the last turn */
+    float shown, shown_v; /* raw mouse: where the game's smoothed camera is, estimated (degrees, degrees/s) */
+    uint64_t shown_us;
+    int pending;
+} FollowState;
+static FollowState follow_states[4];
+static FollowState *follow_state(uint64_t camera, uint64_t now) {
+    FollowState *slot=&follow_states[0];
+    for (int i=0;i<4;++i) {
+        if (follow_states[i].camera==camera) { slot=&follow_states[i]; slot->last_us=now; return slot; }
+        if (follow_states[i].last_us<slot->last_us) slot=&follow_states[i];
+    }
+    *slot=(FollowState){.camera=camera,.last_us=now};
+    return slot;
+}
+/* Raw mouse: every camera updated in the same frame gets the frame's mouse motion (the follow
+ * cameras of a blend, and the cover camera blending with them), so they turn together. A new frame
+ * starts when the camera that took the motion comes again, or after 4 ms. */
+static void frame_motion(uint64_t camera, uint64_t now, float *dx, float *dy) {
+    static uint64_t frame_take_us, frame_camera;
+    static float frame_dx, frame_dy;
+    if (camera==frame_camera || now-frame_take_us>4000) {
+        camera_take(0,&frame_dx,&frame_dy);
+        frame_take_us=now;
+        frame_camera=camera;
+    }
+    *dx=frame_dx; *dy=frame_dy;
+}
 static volatile float follow_correction;  /* degrees the direction is short of the wanted heading */
 static volatile float follow_push;        /* the right stick while the direction turns (-0.3, 0, 0.3) */
 static volatile int follow_has_arc;       /* the follow camera's vertical arc is known */
@@ -333,27 +389,48 @@ static float pitch_to_arc(const ArcTable *t, float pitch) {   /* pitch falls as 
     const float slope=(t->pitch[i+1]-t->pitch[i])/(t->arc[i+1]-t->arc[i]);
     return t->arc[i]+(pitch-t->pitch[i])/slope;
 }
-static void follow_camera(uint64_t camera, uint32_t dir_offset, uint32_t arc_offset, const ArcTable *arc_table) {
+/* raw: raw mouse is on for this game; raw_arc_max: the highest arc the raw mouse moves the camera to. */
+static void follow_camera(uint64_t camera, uint32_t dir_offset, uint32_t arc_offset, const ArcTable *arc_table,
+                          int raw, float raw_arc_max) {
     const uint64_t now=now_us();
     follow_has_arc=arc_offset!=0;
     if (camera_hook_us && now-camera_hook_us>100000) {
         float ignore_x, ignore_y;
         camera_take(0,&ignore_x,&ignore_y);
-        follow_moved_us=0;
+        for (int i=0;i<4;++i) follow_states[i].moved_us=0;
     }
     camera_hook_us=now;
     float *dir=(float *)(uintptr_t)(camera+dir_offset);
     const float heading=heading_of(dir);
+    FollowState *st=raw ? follow_state(camera,now) : &follow_states[0];
     float dx, dy;
-    camera_take(0,&dx,&dy);
-    if (aim_held) { follow_moved_us=0; follow_pending=0; return; } /* the aiming camera takes the mouse */
-    if (follow_pending) {
-        float kept=wrap_degrees(heading-follow_before)/wrap_degrees(follow_after-follow_before);
+    if (raw) frame_motion(camera,now,&dx,&dy);
+    else camera_take(0,&dx,&dy);
+    if (aim_held) { st->moved_us=0; st->pending=0; return; } /* the aiming camera takes the mouse */
+    if (raw) {
+        /* The shown camera follows the camera's position with the game's smoothing, a spring (fitted
+         * to a recording: critically damped, w about 24/s). It moves the position in a straight line,
+         * so a direction far ahead cut through the orbit and swung the camera up over Drake (looking
+         * straight down). Below, the direction stays within 60 degrees of this spring; turns faster
+         * than about 700 degrees/s follow a few frames later through the wanted heading. */
+        float lag_dt=st->shown_us ? (float)(now-st->shown_us)*1e-6f : 0.0f;
+        if (!st->shown_us || lag_dt>0.5f) { st->shown=heading; st->shown_v=0.0f; lag_dt=0.0f; }
+        const float w=24.0f;
+        const int steps=1+(int)(lag_dt/0.004f);
+        for (int i=0;i<steps;++i) {
+            const float h=lag_dt/(float)steps;
+            st->shown_v+=(w*w*wrap_degrees(heading-st->shown)-2.0f*w*st->shown_v)*h;
+            st->shown=wrap_degrees(st->shown+st->shown_v*h);
+        }
+        st->shown_us=now;
+    }
+    if (st->pending) {
+        float kept=wrap_degrees(heading-st->before)/wrap_degrees(st->after-st->before);
         kept=kept<0.0f ? 0.0f : kept>1.0f ? 1.0f : kept;
         follow_kept+=0.2f*(kept-follow_kept);
         if (follow_kept<0.12f) follow_direct=0;
         else if (follow_kept>0.3f) follow_direct=1;
-        follow_pending=0;
+        st->pending=0;
     }
     float shown=heading; /* the shown camera's yaw (debug output) */
     double age=0.0;
@@ -362,19 +439,19 @@ static void follow_camera(uint64_t camera, uint32_t dir_offset, uint32_t arc_off
     /* the wanted heading and how far the direction is short of it (degrees still to turn). The
      * camera rests 0.15 s after the mouse stopped, once the direction has reached the wanted heading
      * (fast turns go beyond what the game keeps in a frame) or at the latest after 0.5 s. */
-    float correction=wrap_degrees(heading-follow_target);
-    const uint64_t still=now-follow_moved_us;
-    const int resting=!follow_moved_us || (still>150000 && (SDL_fabsf(correction)<0.5f || still>500000));
-    if (turn!=0.0f) follow_moved_us=now;
+    float correction=wrap_degrees(heading-st->target);
+    const uint64_t still=now-st->moved_us;
+    const int resting=!st->moved_us || (still>150000 && (SDL_fabsf(correction)<0.5f || still>500000));
+    if (turn!=0.0f) st->moved_us=now;
     if (resting) {
-        follow_target=heading;
+        st->target=heading;
         correction=0.0f;
     }
     if (correction>90.0f || correction<-90.0f) { /* at most a quarter turn behind */
         correction=correction>0.0f ? 90.0f : -90.0f;
-        follow_target=wrap_degrees(heading-correction);
+        st->target=wrap_degrees(heading-correction);
     }
-    follow_target=wrap_degrees(follow_target-turn); /* a positive turn lowers the heading */
+    st->target=wrap_degrees(st->target-turn); /* a positive turn lowers the heading */
     if (!follow_direct) {
         /* the joypad turns the camera (with the shortfall as extra speed); a small probe turn shows
          * whether direct turns are kept again */
@@ -386,54 +463,224 @@ static void follow_camera(uint64_t camera, uint32_t dir_offset, uint32_t arc_off
             const float x=dir[0], z=dir[2];
             dir[0]=x*c-z*s;
             dir[2]=x*s+z*c;
-            follow_before=heading;
-            follow_after=heading_of(dir);
-            follow_pending=1;
+            st->before=heading;
+            st->after=heading_of(dir);
+            st->pending=1;
         }
         if (mouse_debug()) printf("Mouse: follow t=%.4f dx=%.1f heading=%.2f shown=%.2f target=%.2f kept=%.2f joypad\n",
-                                  now*1e-6,dx,heading,shown,follow_target,follow_kept);
+                                  now*1e-6,dx,heading,shown,st->target,follow_kept);
         return;
     }
     follow_correction=0.0f;
     /* the shortfall is made up a few degrees a frame (no jump when the game keeps turns again) */
     if (correction<-4.0f) correction=-4.0f;
     if (correction>4.0f) correction=4.0f;
-    const float total=turn+correction;
-    follow_push=total>0.05f ? 0.3f : total<-0.05f ? -0.3f : 0.0f;
+    float total=turn+correction;
+    if (raw) {
+        const float lead=wrap_degrees(heading-total-st->shown); /* a positive turn lowers the heading */
+        if (lead>60.0f) total+=lead-60.0f;
+        else if (lead<-60.0f) total+=lead+60.0f;
+        /* the stick is held the way the mouse moves (until 0.1 s after it stops): the stick's own turn
+         * is then steady and the correction takes it out evenly. Following the sign of the total flipped
+         * the stick every frame on slow moves, and the camera shook by the stick's turn. */
+        static float push_sign;
+        static uint64_t push_us;
+        if (turn!=0.0f) { push_sign=turn>0.0f ? 0.3f : -0.3f; push_us=now; }
+        follow_push=push_us && now-push_us<100000 ? push_sign : 0.0f;
+    } else follow_push=total>0.05f ? 0.3f : total<-0.05f ? -0.3f : 0.0f;
     if (mouse_debug()) printf("Mouse: follow t=%.4f dx=%.1f dy=%.1f heading=%.2f shown=%.2f target=%.2f turn=%.2f total=%.2f arc=%.4f\n",
-                              now*1e-6,dx,dy,heading,shown,follow_target,turn,total,arc_offset ? *(float *)(uintptr_t)(camera+arc_offset) : -1.0f);
+                              now*1e-6,dx,dy,heading,shown,st->target,turn,total,arc_offset ? *(float *)(uintptr_t)(camera+arc_offset) : -1.0f);
     if (total!=0.0f) {
         const float a=total*0.017453293f, c=SDL_cosf(a), s=SDL_sinf(a);
         const float x=dir[0], z=dir[2];
         dir[0]=x*c-z*s;
         dir[2]=x*s+z*c;
         if (SDL_fabsf(total)>=0.15f) {
-            follow_before=heading;
-            follow_after=heading_of(dir);
-            follow_pending=1;
+            st->before=heading;
+            st->after=heading_of(dir);
+            st->pending=1;
         }
     }
     if (dy!=0.0f && arc_offset) {
         float *arc=(float *)(uintptr_t)(camera+arc_offset);
         const float pitch=arc_to_pitch(arc_table,*arc)-(input.mouse_invert_y ? -dy : dy)*MOUSE_DEGREES_PER_PIXEL*input.mouse_sensitivity;
         const float v=pitch_to_arc(arc_table,pitch);
-        *arc=v<0.0f ? 0.0f : v>1.0f ? 1.0f : v;
+        /* Raw mouse stops below the top of the arc (U2: 0.75): at the top the camera looks straight
+         * down and a small sideways move spins the whole view around Drake. Where the game itself
+         * has the camera higher, the mouse only lowers it. */
+        const float top=!raw ? 1.0f : *arc>raw_arc_max ? *arc : raw_arc_max;
+        *arc=v<0.0f ? 0.0f : v>top ? top : v;
     }
+}
+/* Raw mouse, cover. The cover camera (CameraControlCover) turns with the right stick in its own
+ * update: its horizontal direction (x, 0, z) turns around the vertical, and its pitch (degrees)
+ * moves within limits (up to limits[0], down to -limits[1]). The stick's top speed made the mouse
+ * slow there; at the start of the update the mouse turns both directly, the same amount as the
+ * follow camera. */
+static void cover_camera(uint64_t camera, float *dir, float *pitch, const float *limits) {
+    const uint64_t now=now_us();
+    if (cover_hook_us && now-cover_hook_us>100000 && !(camera_hook_us && now-camera_hook_us<100000)) {
+        float ignore_x, ignore_y;
+        camera_take(0,&ignore_x,&ignore_y);
+    }
+    cover_hook_us=now;
+    follow_push=0.0f;
+    float dx, dy;
+    frame_motion(camera,now,&dx,&dy);
+    if (aim_held) return; /* the aiming camera takes the mouse */
+    if (mouse_debug()) printf("Mouse: cover t=%.4f dx=%.1f dy=%.1f heading=%.2f pitch=%.2f limits=%.1f..%.1f\n",
+                              now*1e-6,dx,dy,heading_of(dir),*pitch,limits ? -limits[1] : 0.0f,limits ? limits[0] : 0.0f);
+    const float turn=dx*MOUSE_DEGREES_PER_PIXEL*input.mouse_sensitivity;
+    if (turn!=0.0f) {
+        const float a=turn*0.017453293f, c=SDL_cosf(a), s=SDL_sinf(a);
+        const float x=dir[0], z=dir[2];
+        dir[0]=x*c-z*s;
+        dir[2]=x*s+z*c;
+    }
+    if (dy!=0.0f && limits) {
+        float v=*pitch-(input.mouse_invert_y ? -dy : dy)*MOUSE_DEGREES_PER_PIXEL*input.mouse_sensitivity;
+        if (v>limits[0]) v=limits[0];
+        if (v<-limits[1]) v=-limits[1];
+        *pitch=v;
+    }
+}
+/* U1 and U2: rsi = the camera; the limits come from its settings (+0x8 up, +0xc down). */
+static void cover_camera_settings(uint64_t camera, uint32_t dir_offset, uint32_t pitch_offset,
+                                  uint32_t settings_offset) {
+    if (!input.mouse_raw) return;
+    const float *settings=*(const float *const *)(uintptr_t)(camera+settings_offset);
+    cover_camera(camera,(float *)(uintptr_t)(camera+dir_offset),(float *)(uintptr_t)(camera+pitch_offset),
+                 settings ? settings+2 : NULL);
+}
+static void __attribute__((ms_abi)) u1_cover_camera(uint64_t output, uint64_t camera, uint64_t image, uint64_t r14,
+                                                    const RuntimeGuestRegs *regs) {
+    (void)output; (void)image; (void)r14; (void)regs;
+    cover_camera_settings(camera,0x240,0x230,0x1300);
+}
+static void __attribute__((ms_abi)) u2_cover_camera(uint64_t output, uint64_t camera, uint64_t image, uint64_t r14,
+                                                    const RuntimeGuestRegs *regs) {
+    (void)output; (void)image; (void)r14; (void)regs;
+    cover_camera_settings(camera,0x1c0,0x1b0,0x1290);
+}
+/* Turns an aim direction (x, y, z) by yaw and pitch (degrees), keeping its length; pitch stays
+ * within +-70 degrees. Same yaw sense as the follow camera: a positive yaw is a turn right. */
+static void aim_turn(float *v, float yaw, float pitch) {
+    const float x=v[0], y=v[1], z=v[2];
+    const float len=SDL_sqrtf(x*x+y*y+z*z), h=SDL_sqrtf(x*x+z*z);
+    if (!(len>0.5f && len<1.5f) || h<1e-4f) return;
+    const float a=yaw*0.017453293f, c=SDL_cosf(a), s=SDL_sinf(a);
+    const float hx=(x*c-z*s)/h, hz=(x*s+z*c)/h;
+    float p=SDL_atan2f(y,h)+pitch*0.017453293f;
+    if (p>1.2217f) p=1.2217f;
+    if (p<-1.2217f) p=-1.2217f;
+    v[0]=hx*SDL_cosf(p)*len; v[1]=SDL_sinf(p)*len; v[2]=hz*SDL_cosf(p)*len;
+}
+/* Raw mouse, aiming (U1 and U2, US 1.02). The aim controller (U1 0x276a10, U2 0x71a1b0; rsi = the
+ * controller) gets the aiming camera's remembered aim direction as its 4th argument (rcx): it turns
+ * it by the stick, the camera saves it back, and the shown direction adds aim assist and recoil on
+ * top. Called from the aiming camera's own call site (return address main_return, the only direct
+ * call in these builds), the mouse turns that direction itself: 0.15 degrees per pixel times the
+ * sensitivities, at any frame rate. Another caller (another build) is left alone and aiming stays
+ * with the stick, as without raw mouse. The hook sits at the function's first instruction, so the
+ * return address lies right above the saved registers. */
+static void raw_aim(const char *game, uint64_t controller, const RuntimeGuestRegs *regs, uint64_t image,
+                    uint64_t main_return) {
+    if (!input.mouse_raw) return;
+    const uint64_t ret=*(const uint64_t *)(regs+1)-image;
+    float *dir=(float *)(uintptr_t)regs->rcx;
+    static uint64_t other_logged;
+    if (ret!=main_return) {
+        if (other_logged!=ret) {
+            other_logged=ret;
+            printf("Mouse: %s aim controller from another caller (return %#llx), left alone\n",game,
+                   (unsigned long long)ret);
+        }
+        return;
+    }
+    static int first=1;
+    if (first) {
+        first=0;
+        printf("Mouse: %s raw aim on: controller %#llx, remembered direction %#llx (controller %+lld)\n",
+               game,(unsigned long long)controller,(unsigned long long)(uintptr_t)dir,
+               (long long)((uintptr_t)dir-controller));
+    }
+    const uint64_t now=now_us();
+    pthread_mutex_lock(&camera_lock);
+    const float dx=aim_dx, dy=aim_dy;
+    aim_dx=aim_dy=0.0f;
+    pthread_mutex_unlock(&camera_lock);
+    aim_direct_us=now;
+    const float k=MOUSE_DEGREES_PER_PIXEL*input.mouse_sensitivity*input.mouse_aim_sensitivity;
+    if (mouse_debug()) printf("Mouse: raw aim t=%.4f ctl=%#llx yaw=%.3f pitch=%.3f dx=%.1f dy=%.1f\n",now*1e-6,(unsigned long long)controller,
+                              SDL_atan2f(-dir[0],-dir[2])*57.29578f,SDL_atan2f(dir[1],SDL_sqrtf(dir[0]*dir[0]+dir[2]*dir[2]))*57.29578f,dx,dy);
+    /* While aim is held the game may swap in new aiming cameras (after a roll: a new one about
+     * every 100 ms while Drake gets up), which threw away the turns given to the one before. A new
+     * controller in the same aim press gets the mouse's turns of this press on top of the game's
+     * own direction: copying the last camera's direction kept the first camera of a roll, which
+     * still faced the way Drake looked before the roll. On the same controller the game's own
+     * changes (aim assist, recoil) stay.
+     * Two aiming cameras can also take turns within one frame (blending): each controller keeps
+     * how much of this press's turns it already has, so each gets every turn exactly once. */
+    static uint64_t session_press;
+    static float turned_yaw, turned_pitch; /* the mouse's turns in this aim press (degrees) */
+    static struct { uint64_t controller, last_us; float yaw, pitch; } given[4];
+    static float last_dir[3];
+    static int have_last;
+    if (session_press!=aim_press_us) {
+        session_press=aim_press_us;
+        turned_yaw=turned_pitch=0.0f;
+        memset(given,0,sizeof(given));
+    }
+    if (!aim_held) return;
+    int slot=0;
+    for (int i=0;i<4;++i) {
+        if (given[i].controller==controller) { slot=i; break; }
+        if (given[i].last_us<given[slot].last_us) slot=i;
+    }
+    /* A new controller that starts where the last one ended (U1 swaps aiming cameras while aiming)
+     * copied the turns already; one that starts elsewhere (after a roll: the game's own direction)
+     * gets them. */
+    if (given[slot].controller!=controller) {
+        given[slot].controller=controller;
+        given[slot].yaw=given[slot].pitch=0.0f;
+        if (have_last && dir[0]*last_dir[0]+dir[1]*last_dir[1]+dir[2]*last_dir[2]>0.9986f) { /* within 3 degrees */
+            given[slot].yaw=turned_yaw; given[slot].pitch=turned_pitch;
+        }
+    }
+    given[slot].last_us=now;
+    if (dx!=0.0f || dy!=0.0f) {
+        turned_yaw+=dx*k;
+        turned_pitch+=-(input.mouse_invert_y ? -dy : dy)*k;
+    }
+    const float yaw=turned_yaw-given[slot].yaw, pitch=turned_pitch-given[slot].pitch;
+    if (yaw!=0.0f || pitch!=0.0f) aim_turn(dir,yaw,pitch);
+    given[slot].yaw=turned_yaw; given[slot].pitch=turned_pitch;
+    last_dir[0]=dir[0]; last_dir[1]=dir[1]; last_dir[2]=dir[2]; have_last=1;
+}
+static void __attribute__((ms_abi)) u1_aim_controller(uint64_t output, uint64_t controller, uint64_t image, uint64_t r14,
+                                                      const RuntimeGuestRegs *regs) {
+    (void)output; (void)r14;
+    raw_aim("U1",controller,regs,image,0xc4c57); /* the aiming camera's update (0xc43b0) calls it at 0xc4c52 */
+}
+static void __attribute__((ms_abi)) u2_aim_controller(uint64_t output, uint64_t controller, uint64_t image, uint64_t r14,
+                                                      const RuntimeGuestRegs *regs) {
+    (void)output; (void)r14;
+    raw_aim("U2",controller,regs,image,0x451250); /* the aiming camera calls it at 0x45124b */
 }
 static void __attribute__((ms_abi)) u1_follow_camera(uint64_t camera, uint64_t unused, uint64_t image, uint64_t r14, const RuntimeGuestRegs *regs) {
     (void)regs;
     (void)unused; (void)image; (void)r14;
-    follow_camera(camera,0x1310,0x12bc,&u1_arc);
+    follow_camera(camera,0x1310,0x12bc,&u1_arc,input.mouse_raw,1.0f);
 }
 static void __attribute__((ms_abi)) u2_follow_camera(uint64_t camera, uint64_t unused, uint64_t image, uint64_t r14, const RuntimeGuestRegs *regs) {
     (void)regs;
     (void)unused; (void)image; (void)r14;
-    follow_camera(camera,0x9ec0,0x9e60,&u2_arc);
+    follow_camera(camera,0x9ec0,0x9e60,&u2_arc,input.mouse_raw,0.75f);
 }
 static void __attribute__((ms_abi)) u3_follow_camera(uint64_t camera, uint64_t unused, uint64_t image, uint64_t r14, const RuntimeGuestRegs *regs) {
     (void)regs;
     (void)unused; (void)image; (void)r14;
-    follow_camera(camera,0x78c0,0x7874,&u3_arc);
+    follow_camera(camera,0x78c0,0x7874,&u3_arc,0,1.0f);
 }
 /* U1: the game's pad update (image+0x117200) fills the caller's joypad state (its first argument):
  * the sticks as floats lx ly rx ry at +0 and again at +0x10, converted from the pad's bytes. Cameras
@@ -516,10 +763,12 @@ static void mouse_sticks(float *pad, const AimCurve *aim) {
         const float scale=MOUSE_DEGREES_PER_PIXEL*input.mouse_sensitivity/dt;
         const int following=camera_hook_us && now-camera_hook_us<50000;
         float push=0.0f;
+        if (raw_aim_armed(now)) dx=dy=0.0f; /* raw mouse: the aim direction turned itself */
         if (!aim_held && following && follow_direct) { /* the follow camera turned itself */
             dx=dy=0.0f;
             push=follow_push;
         }
+        if (!aim_held && cover_hook_us && now-cover_hook_us<50000) dx=dy=0.0f; /* raw mouse: the cover camera too */
         /* following through the joypad: the shortfall is made up within about a quarter second */
         const float extra=!aim_held && following && !follow_direct ? follow_correction*4.0f : 0.0f;
         const float ry=(input.mouse_invert_y ? -dy : dy)*scale;
@@ -775,6 +1024,28 @@ static const RuntimeGuestCallback guest_callbacks[]={
     {"U1 joypad sticks (mouse)",
       "80 7c 01 6d 00 74 3b c5 e2 59 64 01 40 c4 c1 7a 11 66 be",
       0x0, 5, u1_joypad_sticks_102, NULL},
+    /* Raw mouse (mouse_raw=1), build 102: U1 aim controller and cover camera update */
+    {"U1 aim controller (raw mouse)",
+      "55 48 89 e5 41 57 41 56 41 55 41 54 53 48 81 ec 08 03 00 00 "
+      "45 89 c4 48 89 8d 00 fd ff ff 49 89 d5 49 89 f7 48 89 bd 10 "
+      "fd ff ff 4c 8b 35 ?? ?? ?? ??",
+      0x0, 6, u1_aim_controller, NULL},
+    {"U1 cover camera (raw mouse)",
+      "55 48 89 e5 41 57 41 56 41 55 41 54 53 48 81 ec 88 01 00 00 "
+      "49 89 d7 48 89 f3 49 89 fe 4c 8b 25 ?? ?? ?? ?? 49 8b 04 24 "
+      "48 89 45 d0 80 bb f4 01 00 00 00",
+      0x0, 6, u1_cover_camera, NULL},
+    /* Raw mouse (mouse_raw=1), build 102: U2 aim controller and cover camera update */
+    {"U2 aim controller (raw mouse)",
+      "55 48 89 e5 41 57 41 56 41 55 41 54 53 48 81 ec 18 01 00 00 "
+      "c5 fa 11 45 90 44 89 85 60 ff ff ff 49 89 ce 49 89 d5 49 89 "
+      "f7 48 89 fb 80 3d ?? ?? ?? ?? 00",
+      0x0, 6, u2_aim_controller, NULL},
+    {"U2 cover camera (raw mouse)",
+      "55 48 89 e5 41 57 41 56 41 55 41 54 53 48 81 ec 68 01 00 00 "
+      "49 89 d7 48 89 f3 49 89 fe 4c 8b 2d ?? ?? ?? ?? 49 8b 45 00 "
+      "48 89 45 d0 8a 8b 74 01 00 00",
+      0x0, 6, u2_cover_camera, NULL},
     /* U2 follow camera, build 100 */
     {"U2 follow camera (mouse)",
       "55 48 89 e5 41 57 41 56 41 55 41 54 53 48 81 ec 48 01 00 00 "
@@ -1034,13 +1305,19 @@ static void sample_host(PadData *d) {
     pthread_mutex_lock(&camera_lock);
     const int following=camera_hook_us && now-camera_hook_us<100000;
     const int joypad=sticks_hook_us && now-sticks_hook_us<100000;
+    const int cover=cover_hook_us && now-cover_hook_us<100000;   /* raw mouse only */
+    const int raw_aiming=raw_aim_armed(now);                     /* raw mouse only */
     for (int q=0;q<2;++q) {
-        if (captured && (following || joypad)) { camera_dx[q]+=mdx; camera_dy[q]+=mdy; }
+        if (captured && (following || joypad || cover)) { camera_dx[q]+=mdx; camera_dy[q]+=mdy; }
         else { camera_dx[q]=camera_dy[q]=0; }
     }
+    /* kept while aiming: at low frame rates the aim controller runs only every 100-200 ms */
+    if (captured && raw_aiming) { aim_dx+=mdx; aim_dy+=mdy; }
+    else { aim_dx=aim_dy=0.0f; }
     pthread_mutex_unlock(&camera_lock);
-    const int direct_x=joypad || (following && !aim_held && follow_direct);
-    const int direct_y=joypad || (following && !aim_held && follow_direct && follow_has_arc);
+    const int direct_x=joypad || raw_aiming || (cover && !aim_held) || (following && !aim_held && follow_direct);
+    const int direct_y=joypad || raw_aiming || (cover && !aim_held) ||
+                       (following && !aim_held && follow_direct && follow_has_arc);
     if (captured && direct_x && direct_y) {
         mouse_vx=mouse_vy=0; mouse_last_us=0;
     } else if (captured) {
@@ -1206,7 +1483,11 @@ static void sample(PadData *d) {
     mouse_inject_us=inject_now;
     replay_sample(d);
     d->buttons|=injected.buttons;
-    aim_held=(d->buttons & BTN_L2)!=0;
+    {
+        const int held=(d->buttons & BTN_L2)!=0;
+        if (held && !aim_held) aim_press_us=now_us();
+        aim_held=held;
+    }
     if (injected.touch_side>=0) touch_click(d,injected.touch_side);
     else if ((d->buttons & BTN_TOUCHPAD) && !d->touch_count) touch_click(d,0);
     if (injected.buttons & BTN_L2) d->l2=255;
