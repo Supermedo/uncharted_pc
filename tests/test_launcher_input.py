@@ -32,6 +32,29 @@ class InputConfigTests(unittest.TestCase):
             finally:
                 LAUNCHER.input_ini_path = original
 
+    def test_raw_mouse_defaults_on_and_can_be_disabled(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'input.ini'
+            original = LAUNCHER.input_ini_path
+            LAUNCHER.input_ini_path = lambda: path
+            try:
+                LAUNCHER.write_input_ini({})
+                text = path.read_text(encoding='utf-8')
+                self.assertIn('mouse_raw=1\n', text)
+                self.assertIn('mouse_aim_sensitivity=1.00\n', text)
+
+                LAUNCHER.write_input_ini({'mouse_raw': False, 'mouse_aim_sensitivity': '0.6'})
+                text = path.read_text(encoding='utf-8')
+                self.assertIn('mouse_raw=0\n', text)
+                self.assertIn('mouse_aim_sensitivity=0.60\n', text)
+            finally:
+                LAUNCHER.input_ini_path = original
+
+    def test_aim_sensitivity_is_clamped(self):
+        self.assertEqual(LAUNCHER.mouse_aim_sensitivity({'mouse_aim_sensitivity': '0'}), '0.10')
+        self.assertEqual(LAUNCHER.mouse_aim_sensitivity({'mouse_aim_sensitivity': '50'}), '3.00')
+        self.assertEqual(LAUNCHER.mouse_aim_sensitivity({'mouse_aim_sensitivity': 'invalid'}), '1.00')
+
     def test_vibration_strength_is_clamped(self):
         self.assertEqual(LAUNCHER.vibration_strength({'pad_vibration_strength': '-5'}), 0)
         self.assertEqual(LAUNCHER.vibration_strength({'pad_vibration_strength': '250'}), 100)
