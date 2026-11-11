@@ -69,9 +69,18 @@ enum : std::uint64_t {
     // On by default (bit set: off): history of a thin feature this jitter phase missed is kept
     // when nothing moves. Static-camera flicker of railings/window bars p99.9 -45% (2026-10-03).
     TaaKeepNearerHistory = 1ull << 55,
+    /// PostDraw visits the dirty register blocks a 64-bit word at a time instead of testing all
+    /// 1664 bits (RegDirty::Bits::ForEach). On by default.
+    FastDirtyBlocks = 1ull << 56,
     SceneMipBias = 1ull << 57, ///< negative LOD bias of G-buffer samplers at reduced scene sizes
+    /// Reads of the stream buffer (host-written guest constants, never written by the GPU) skip
+    /// the barrier tracker (Rasterizer::ResetBindings, BindBuffers). On by default.
+    UntrackedStreamReads = 1ull << 58,
     /// One upscaler frame start per frame (Uncharted draws twice into its display buffer).
     OneFrameStart = 1ull << 59,
+    /// TextureCache::GetSampler answers repeated samplers from a per-thread table within a GC
+    /// tick (no hash, no lock): ~5% of the draw recording thread in U1 chapter 2.
+    SamplerMemo = 1ull << 63,
     // Bits 20-29 are used as raw debug toggles by the camera/object motion and the upscaler.
 };
 inline bool Disabled(std::uint64_t bit) {

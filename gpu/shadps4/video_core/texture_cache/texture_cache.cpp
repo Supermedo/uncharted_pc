@@ -2,7 +2,9 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <algorithm>
+#include <array>
 #include <cstdlib>
+#include <cstring>
 #include <xxhash.h>
 
 #include "bbport_toggles.h"
@@ -1029,11 +1031,45 @@ void TextureCache::RefreshImage(Image& image) {
 vk::Sampler TextureCache::GetSampler(const AmdGpu::Sampler& sampler,
                                      AmdGpu::BorderColorBuffer border_color_base,
                                      const bool is_depth, float extra_lod_bias) {
+    // bbport (SamplerMemo): every sampler of every draw came here (U1 chapter 2: ~2 million a
+    // second on the draw recording thread, a hash and a lock each, ~5% of that thread). A small
+    // per-thread table answers repeats. An entry is trusted only within the GC tick it was last
+    // looked up in the map (which touched its LRU entry), so the GC, which frees only samplers
+    // unused for several ticks, cannot have freed it.
+    struct MemoEntry {
+        AmdGpu::Sampler sampler;
+        u32 bias_bits;
+        bool is_depth;
+        const TextureCache* owner;
+        u64 tick;
+        vk::Sampler handle;
+    };
+    static thread_local std::array<MemoEntry, 256> memo{};
+    const u32 bias_bits = std::bit_cast<u32>(extra_lod_bias);
+    const bool use_memo = !BbToggle::Disabled(BbToggle::SamplerMemo);
+    MemoEntry* slot = nullptr;
+    if (use_memo) {
+        u64 words[2];
+        static_assert(sizeof(AmdGpu::Sampler) >= sizeof(words));
+        std::memcpy(words, &sampler, sizeof(words));
+        const u64 mix = (words[0] ^ (words[1] * 0x9E3779B97F4A7C15ull) ^ bias_bits ^ u64(is_depth))
+                        * 0xBF58476D1CE4E5B9ull;
+        slot = &memo[mix >> 56];
+        const u64 tick = gc_tick;
+        if (slot->owner == this && slot->tick == tick && slot->is_depth == is_depth &&
+            slot->bias_bits == bias_bits &&
+            std::memcmp(&slot->sampler, &sampler, sizeof(sampler)) == 0) {
+            return slot->handle;
+        }
+    }
     // Compare and plain uses of one S# need separate samplers; so do extra LOD biases.
     const u64 hash = HashCombine(HashCombine(XXH3_64bits(&sampler, sizeof(sampler)), is_depth),
-                                 u64(std::bit_cast<u32>(extra_lod_bias)));
+                                 u64(bias_bits));
 
     std::scoped_lock lock{samplers_mutex};
+    if (slot) {
+        *slot = {sampler, bias_bits, is_depth, this, gc_tick, {}};
+    }
     const auto [it, new_sampler] = samplers.try_emplace(hash, instance, sampler, border_color_base,
                                                         is_depth, extra_lod_bias);
     if (new_sampler) {
@@ -1041,7 +1077,9 @@ vk::Sampler TextureCache::GetSampler(const AmdGpu::Sampler& sampler,
     } else {
         sampler_lru_cache.Touch(it->second.lru_id, gc_tick);
     }
-
+    if (slot) {
+        slot->handle = it->second.Handle();
+    }
     return it->second.Handle();
 }
 

@@ -1303,6 +1303,12 @@ const char* LiveShaderDebugFile() {
 LiveShaderDebug& LiveDebug() {
     static LiveShaderDebug state;
     const char* path = LiveShaderDebugFile();
+    // Called for every draw (SkipShader): the clock is read once every 256 calls of a thread
+    // (U1 chapter 2: QueryPerformanceCounter per draw was 1.6% of the draw recording thread).
+    static thread_local u32 calls = 0;
+    if (!path || (++calls & 255) != 1) {
+        return state;
+    }
     const s64 now = std::chrono::steady_clock::now().time_since_epoch().count();
     if (!path || now < state.next_read_ns.load(std::memory_order_relaxed) ||
         !state.read_mutex.try_lock()) {
@@ -2978,7 +2984,16 @@ void Rasterizer::ResetBindings(bool is_compute) {
     for (auto& image_id : bound_images) {
         texture_cache.GetImage(image_id).binding = {};
     }
+    // bbport (UntrackedStreamReads): the stream buffer is written by the host only, at a new
+    // offset every time, and never by the GPU; its reads need no barrier tracking (U1 chapter 2:
+    // the read inserts were ~7% of the draw recording thread).
+    const VideoCore::Buffer* stream =
+        BbToggle::Disabled(BbToggle::UntrackedStreamReads) ? nullptr
+                                                           : &buffer_cache.GetStreamBuffer();
     for (const auto [buffer, offset, size, is_written] : bound_buffers) {
+        if (buffer == stream && !is_written) {
+            continue;
+        }
         const auto dst_stage = is_compute ? vk::PipelineStageFlagBits2::eComputeShader
                                           : vk::PipelineStageFlagBits2::eAllGraphics;
         const auto write_flag =
@@ -3339,7 +3354,12 @@ void Rasterizer::BindBuffers(const Shader::Info& stage, const PreparedStage* pre
                     // Raw storage-buffer writes can also make an aliased cached image stale.
                     texture_cache.InvalidateMemoryFromGPU(vsharp.base_address, size);
                 }
-                needs_barrier |= runtime.IsBufferAccessed(buffer, offset, size, desc.is_written);
+                // The stream buffer holds no GPU writes (UntrackedStreamReads, ResetBindings).
+                if (desc.is_written || BbToggle::Disabled(BbToggle::UntrackedStreamReads) ||
+                    buffer != &buffer_cache.GetStreamBuffer()) {
+                    needs_barrier |=
+                        runtime.IsBufferAccessed(buffer, offset, size, desc.is_written);
+                }
                 if (const VAddr watch = WatchedGpuWrite();
                     watch && desc.is_written && vsharp.base_address < watch + 0x1000 &&
                     watch < vsharp.base_address + size) {
