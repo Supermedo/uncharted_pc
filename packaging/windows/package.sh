@@ -58,6 +58,8 @@ ldd "$dest/bin/bb-probe.exe" "$dest/bin/bb-gpu-capabilities.exe" |
 # Only what run.py runs to prepare a game (Bloodborne's patch and mod tools stay out).
 cp scripts/prepare.py scripts/link_modules.py scripts/link_libc.py scripts/content_profile.py scripts/trophies.py "$dest/scripts/"
 cp run.py LICENSE "$dest/"
+# RecompLauncher reads this from the top of the release: one-click setup and the settings page.
+cp recomplauncher.json "$dest/"
 cp packaging/windows/README-Uncharted.txt "$dest/README.txt"
 mkdir -p "$dest/licenses"
 cp packaging/windows/licenses/*.txt "$dest/licenses/" 2>/dev/null || true

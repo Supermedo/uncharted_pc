@@ -1,0 +1,119 @@
+{
+  "$schema": "https://recomplauncher.com/schema/recomplauncher.json",
+  "format": 1,
+  "name": "Uncharted: The Nathan Drake Collection",
+  "repo": "Supermedo/uncharted_pc",
+  "game": {
+    "kind": "folder",
+    "label": "Your decrypted dump of Uncharted: The Nathan Drake Collection (CUSA02343, CUSA02320, ...): the folder with eboot.bin, big2-ps4_Shipping.elf, big3-ps4_Shipping.elf and sce_sys.",
+    "check": { "file": "eboot.bin" }
+  },
+  "start": {
+    "program": ["Uncharted.exe"],
+    "args": ["--play", "--game", "{game}"]
+  },
+  "games": [
+    { "id": "u1", "name": "Uncharted: Drake's Fortune", "args": ["--start", "u1"] },
+    { "id": "u2", "name": "Uncharted 2: Among Thieves", "args": ["--start", "u2"] },
+    { "id": "u3", "name": "Uncharted 3: Drake's Deception", "args": ["--start", "u3"] }
+  ],
+  "config": [
+    {
+      "id": "main",
+      "format": "json",
+      "file": [{ "path": "{config}/uncharted-launcher/settings.json" }]
+    }
+  ],
+  "saves": ["{install}/user/savedata"],
+  "folders": {
+    "saves": [{ "path": "{install}/user/savedata" }],
+    "logs": [{ "path": "{install}/user" }]
+  },
+  "settings": [
+    {
+      "id": "window",
+      "label": "Window",
+      "help": "Fullscreen fills your screen. Windowed uses the window size chosen in the Uncharted launcher.",
+      "choices": [
+        { "label": "Fullscreen", "set": { "fullscreen": "true" } },
+        { "label": "Windowed", "set": { "fullscreen": "false" } }
+      ],
+      "defaults": { "fullscreen": "false" }
+    },
+    {
+      "id": "frame_rate",
+      "label": "Frame rate",
+      "help": "60 is the PS4's own. Higher rates are smoother on a fast screen; above 120 is experimental. Cutscenes stay at 60.",
+      "choices": [
+        { "label": "30 FPS", "set": { "frame_rate": "\"30\"" } },
+        { "label": "60 FPS", "set": { "frame_rate": "\"60\"" } },
+        { "label": "120 FPS", "set": { "frame_rate": "\"120\"" } },
+        { "label": "144 FPS", "set": { "frame_rate": "\"144\"" } },
+        { "label": "165 FPS", "set": { "frame_rate": "\"165\"" } },
+        { "label": "240 FPS", "set": { "frame_rate": "\"240\"" } }
+      ],
+      "defaults": { "frame_rate": "\"60\"" }
+    },
+    {
+      "id": "resolution",
+      "label": "Render resolution",
+      "help": "What the games draw at. 1080p is the PS4's own; higher needs a fast graphics card and more video memory.",
+      "choices": [
+        { "label": "1080p", "set": { "render_height": "\"1080\"" } },
+        { "label": "1440p", "set": { "render_height": "\"1440\"" } },
+        { "label": "1620p", "set": { "render_height": "\"1620\"" } }
+      ],
+      "defaults": { "render_height": "\"1080\"" }
+    },
+    {
+      "id": "anti_aliasing",
+      "label": "Anti-aliasing",
+      "help": "Smooths edges. FSR 3.1 works on any card, FSR 4 needs a recent AMD card, DLSS needs an NVIDIA RTX card.",
+      "choices": [
+        { "label": "Game's own", "set": { "anti_aliasing": "\"off\"" } },
+        { "label": "TAA", "set": { "anti_aliasing": "\"taa\"" } },
+        { "label": "FSR 3.1", "set": { "anti_aliasing": "\"fsr3\"" } },
+        { "label": "FSR 4", "set": { "anti_aliasing": "\"fsr4\"" } },
+        { "label": "DLSS", "set": { "anti_aliasing": "\"dlss\"" } }
+      ],
+      "defaults": { "anti_aliasing": "\"off\"" }
+    },
+    {
+      "id": "frame_generation",
+      "label": "Frame generation",
+      "help": "Adds frames between the game's own for a smoother picture. DLSS needs an NVIDIA RTX 40 or 50 card.",
+      "choices": [
+        { "label": "Off", "set": { "frame_generation": "\"off\"" } },
+        { "label": "FSR 3", "set": { "frame_generation": "\"fsr3\"" } },
+        { "label": "DLSS", "set": { "frame_generation": "\"dlss\"" } }
+      ],
+      "defaults": { "frame_generation": "\"off\"" }
+    },
+    {
+      "id": "speakers",
+      "label": "Sound",
+      "help": "The speaker layout the games are told about. Automatic follows your Windows setting.",
+      "choices": [
+        { "label": "Automatic", "set": { "speakers": "\"auto\"" } },
+        { "label": "Stereo", "set": { "speakers": "\"2\"" } },
+        { "label": "5.1", "set": { "speakers": "\"6\"" } },
+        { "label": "7.1", "set": { "speakers": "\"8\"" } }
+      ],
+      "defaults": { "speakers": "\"auto\"" }
+    },
+    {
+      "id": "fps",
+      "label": "Show FPS",
+      "help": "The frame rate in a corner of the game.",
+      "choices": [
+        { "label": "Off", "set": { "show_fps": "false" } },
+        { "label": "On", "set": { "show_fps": "true" } }
+      ],
+      "defaults": { "show_fps": "false" }
+    }
+  ],
+  "actions": [
+    { "id": "saves", "label": "Saves", "help": "The folder with your saves.", "open": "saves" },
+    { "id": "logs", "label": "Logs", "help": "last_run.log, the log of the last runs.", "open": "logs" }
+  ]
+}

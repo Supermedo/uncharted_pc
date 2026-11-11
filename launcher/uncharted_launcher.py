@@ -2611,6 +2611,24 @@ def play_without_window(settings):
         return process.wait()
 
 
+def option_value(args, name):
+    """The word after `name` on the command line, or None."""
+    if name not in args or args.index(name) + 1 >= len(args):
+        return None
+    return args[args.index(name) + 1]
+
+
+def apply_play_options(settings, args):
+    """--play --game <folder> [--start u1|u2|u3]: for front ends that pass the game in (RecompLauncher,
+    scripts, Steam shortcuts). The folder replaces the saved game folders for this run only; nothing is saved."""
+    folder = option_value(args, '--game')
+    if folder:
+        settings.update(game_dir=folder, **{f'game_dir_{key}': '' for key, _t, _s, _e in GAMES})
+    start = option_value(args, '--start')
+    if start in [key for key, _t, _s, _e in GAMES]:
+        settings['start'] = start
+
+
 def main():
     args = sys.argv[1:]
     if args and args[0] in ('--run', '--script'):
@@ -2620,6 +2638,8 @@ def main():
     if FROZEN and UPDATE_DIR not in PORT_DIR.parents:
         shutil.rmtree(UPDATE_DIR, ignore_errors=True)  # what a finished update left behind
     settings = {**APP_DEFAULTS, **load_json(CONFIG_FILE, {})}
+    if '--play' in args:
+        apply_play_options(settings, args)
     if '--play' in args and game_available(settings, settings['start']):
         sys.exit(play_without_window(settings))
     try:
