@@ -16,6 +16,8 @@ extern "C" [[noreturn]] void bb_longjmp(sigjmp_buf buffer, int value);
 #endif
 
 extern "C" std::uint64_t runtime_disabled_optimizations;
+/// bbport: the second number in BB_TOGGLE_FILE (BbToggle::Disabled2).
+extern "C" std::uint64_t runtime_disabled_optimizations2;
 /// Recovery point for speculative guest memory reads on this thread (runtime_memory.c).
 extern "C" __thread sigjmp_buf* runtime_fault_recover;
 
@@ -76,6 +78,14 @@ enum : std::uint64_t {
 };
 inline bool Disabled(std::uint64_t bit) {
     return (__atomic_load_n(&runtime_disabled_optimizations, __ATOMIC_RELAXED) & bit) != 0;
+}
+
+/// Toggles in the second number of BB_TOGGLE_FILE ("mask mask2"; the first 64 bits are used).
+enum : std::uint64_t {
+    TextureSetExact = 1, ///< memoized texture sets of exact images survive (un)registrations
+};
+inline bool Disabled2(std::uint64_t bit) {
+    return (__atomic_load_n(&runtime_disabled_optimizations2, __ATOMIC_RELAXED) & bit) != 0;
 }
 } // namespace BbToggle
 

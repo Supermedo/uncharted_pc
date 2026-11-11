@@ -288,6 +288,11 @@ private:
         const void* backing = nullptr;
         VideoCore::SubresourceRange range;
         bool proxy = false; ///< sampled from the scene proxy (view: SampleProxy on each use)
+        /// bbport: the image has exactly the T#'s address, size, extent and format (no view into
+        /// another image, no depth redirect): the same T# finds it again while it is registered
+        /// (as TextureCache::FindImage's exact matches). `uid` tells it from a reused slot.
+        bool exact = false;
+        u64 uid = 0;
     };
     struct TextureSet {
         u64 key = 0;
@@ -301,6 +306,7 @@ private:
     };
     std::array<TextureSet, 32768> texture_sets{};
     u64 texture_set_hits = 0, texture_set_misses = 0;
+    u64 texture_set_revalidated = 0; ///< bbport: generation changed, all images exact and still there
     std::array<u64, 4> texture_set_why{}; ///< misses: other key, generation, image check, new
     /// Returns true when the stage's images were bound from the memo.
     bool BindTexturesFromSet(const Shader::Info& stage, const PreparedStage* prepared,
