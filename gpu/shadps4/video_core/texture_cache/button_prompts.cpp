@@ -100,6 +100,7 @@ struct Picture {
     const char* name;
 };
 const Picture pictures[] = {
+    {0x2bf5d90eb864162full, 256, RoundButton, Cross, {137, 149, 239}, "Uncharted 1 cross prompt"},
     {0x5db884aa1bae54f9ull, 256, RoundButton, Triangle, {55, 216, 104}, "Uncharted 2 triangle prompt"},
     {0x7af1abf688d8c824ull, 256, RoundButton, Circle, {230, 58, 35}, "Uncharted 2 circle prompt"},
     {0x25d954ce23a8f5e2ull, 512, Puck, Triangle, {55, 216, 104}, "Uncharted 2 triangle tapping prompt"},
