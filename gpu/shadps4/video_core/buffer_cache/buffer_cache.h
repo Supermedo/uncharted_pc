@@ -117,6 +117,10 @@ public:
     /// guest copy): a GPU result the guest reads in place (Rasterizer::ReadBackSmallWrittenBuffers).
     bool DeferGuestCopy(VAddr src, VAddr dst, u64 size, bool guest_part = true, bool gated = true);
     u64 PendingLanding() const;
+    /// bbport: sequence number of the last gated landing registered (LandingGate::Registered).
+    u64 RegisteredLanding() const {
+        return landing_registered.load(std::memory_order_acquire);
+    }
     bool LandingGateActive() const;
     void WaitLanding(u64 seq);
     /// `off_caller`: never runs `fn` on the calling thread (LandingGate::Post).
@@ -137,6 +141,9 @@ public:
 
     /// Return true when a region is modified from the GPU
     [[nodiscard]] bool IsRegionGpuModified(VAddr addr, size_t size);
+
+    /// bbport: the scheduler tick of the latest GPU write into the range (0: none tracked).
+    [[nodiscard]] u64 LatestGpuWriteTick(VAddr addr, u64 size);
 
     /// bbport: whether buffers the GPU wrote cover any byte of the range. The page tracker
     /// (IsRegionGpuModified) flags whole 4 KiB pages, and so the bytes next to GPU data.

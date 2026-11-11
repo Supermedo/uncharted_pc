@@ -411,6 +411,104 @@ void RunWriteData(Vulkan::Rasterizer& rasterizer, const u8* data) {
                 (header->type3.count.Value() - 2) * sizeof(u32));
 }
 
+// bbport (AscLazyDrain, issue #764): a compute ring's WriteData, in order with the work handed
+// to the draw recording thread instead of draining it first (~500 a frame in U1 "Sanctuary?").
+// There it joins the deferred fences without waiting: written once the copies before it are done
+// and the raycaster copies registered before it have landed.
+void RunAscWriteData(Vulkan::Rasterizer& rasterizer, const u8* data) {
+    const auto* header = reinterpret_cast<const PM4Header*>(data);
+    const auto* write_data = reinterpret_cast<const PM4CmdWriteData*>(data);
+    const u32 num_bytes = (header->type3.count.Value() - 2) * sizeof(u32);
+    auto* address = write_data->Address<u8*>();
+    if (Vulkan::DrawPipe::OnStageB() && !BbToggle::Disabled(BbToggle::RecorderFences)) {
+        const u64 landing_seq = VideoCore::LandingGate::Pending();
+        rasterizer.GetBufferCache().CheckStableBindings();
+        rasterizer.CheckConstants();
+        const auto* bytes = reinterpret_cast<const u8*>(write_data->data);
+        rasterizer.SignalAfterHostCopies(
+            [address, value = std::vector<u8>(bytes, bytes + num_bytes)] {
+                BbWriteLog::Note(reinterpret_cast<u64>(address), value.data(),
+                                 static_cast<u32>(value.size()), BbWriteLog::WriteData);
+                if (!Core::Memory::Instance()->TryWriteBacking(address, value.data(),
+                                                               value.size())) {
+                    std::memcpy(address, value.data(), value.size());
+                }
+            },
+            landing_seq);
+        return;
+    }
+    rasterizer.WaitHostCopies();
+    rasterizer.WaitDeferredSignals();
+    VideoCore::LandingGate::Wait(VideoCore::LandingGate::Pending());
+    rasterizer.GetBufferCache().CheckStableBindings();
+    rasterizer.CheckConstants();
+    BbWriteLog::Note(reinterpret_cast<u64>(address), write_data->data, num_bytes,
+                     BbWriteLog::WriteData);
+    std::memcpy(address, write_data->data, num_bytes);
+}
+
+// bbport (AscLazyDrain): a compute ring's ReleaseMem (~33000 a second in U1 "Sanctuary?", each
+// draining the draw pipe before), likewise in order on the draw recording thread. The fence and
+// its interrupt follow the copies before it there; GDS stores copy on the GPU at once, as before.
+struct AscReleaseMem {
+    PM4CmdReleaseMem packet;
+    u32 pipe_id;
+};
+
+void RunAscReleaseMem(Vulkan::Rasterizer& rasterizer, const u8* data) {
+    const auto release = *reinterpret_cast<const AscReleaseMem*>(data);
+    rasterizer.ProcessDownloadImages();
+    rasterizer.GetBufferCache().CheckStableBindings();
+    rasterizer.CheckConstants();
+    const auto irq = [pipe_id = release.pipe_id] {
+        Platform::IrqC::Instance()->Signal(static_cast<Platform::InterruptId>(pipe_id));
+    };
+    if (release.packet.data_sel.Value() != DataSelect::GdsMemStore &&
+        Vulkan::DrawPipe::OnStageB() && !BbToggle::Disabled(BbToggle::RecorderFences)) {
+        // As SignalFence, but written like the deferred graphics fences (this may run on the
+        // landing or a copy thread: no raw store into write-tracked guest memory).
+        rasterizer.SignalAfterHostCopies(
+            [packet = release.packet, irq] {
+                u64 value = 0;
+                u32 num_bytes = 8;
+                switch (packet.data_sel.Value()) {
+                case DataSelect::Data32Low:
+                    value = packet.DataDWord();
+                    num_bytes = 4;
+                    break;
+                case DataSelect::Data64:
+                    value = packet.DataQWord();
+                    break;
+                case DataSelect::GpuClock64:
+                    value = GetGpuClock64();
+                    break;
+                case DataSelect::PerfCounter:
+                    value = GetGpuPerfCounter();
+                    break;
+                default:
+                    UNREACHABLE();
+                }
+                auto* address = packet.Address<void*>();
+                BbWriteLog::Note(reinterpret_cast<u64>(address), &value, num_bytes,
+                                 BbWriteLog::Fence);
+                if (!Core::Memory::Instance()->TryWriteBacking(address, &value, num_bytes)) {
+                    std::memcpy(address, &value, num_bytes);
+                }
+                if (packet.int_sel.Value() != InterruptSelect::None) {
+                    irq();
+                }
+            },
+            VideoCore::LandingGate::Pending());
+        return;
+    }
+    rasterizer.WaitHostCopies();
+    rasterizer.WaitDeferredSignals();
+    VideoCore::LandingGate::Wait(VideoCore::LandingGate::Pending());
+    release.packet.SignalFence(irq, [&rasterizer](VAddr dst, u16 gds_index, u16 num_dwords) {
+        rasterizer.CopyBuffer(dst, gds_index, num_dwords * sizeof(u32), false, true);
+    });
+}
+
 void RunEventWriteEos(Vulkan::Rasterizer& rasterizer, const u8* data) {
     const auto event_eos = *reinterpret_cast<const PM4CmdEventWriteEos*>(data);
     // Raycaster copies deferred before this packet land before its label shows (landing_gate.h).
@@ -1479,10 +1577,44 @@ Liverpool::Task Liverpool::ProcessCompute(std::span<const u32> acb, u32 vqid) {
 
     auto base_addr = reinterpret_cast<VAddr>(acb.data());
     size_t acb_size = acb.size_bytes();
-    while (!acb.empty()) {
-        ProcessCommands();
+    // bbport (AscSkipGfxWaits): host copies and landings registered since the previous packet
+    // of this ring began are its own (or, after a yield, possibly the graphics ring's: waited
+    // for too, which is only slower). Its fences wait for these marks, not for everything.
+    u64 own_copies_from = rasterizer ? rasterizer->HostCopiesIssued() : 0;
+    u64 own_landings_from = VideoCore::LandingGate::Registered();
+    const auto mark_own = [&] {
+        if (!rasterizer) {
+            return;
+        }
+        if (const u64 issued = rasterizer->HostCopiesIssued(); issued != own_copies_from) {
+            asc_host_copy_mark = std::max(asc_host_copy_mark, issued);
+        }
+        if (const u64 registered = VideoCore::LandingGate::Registered();
+            registered != own_landings_from) {
+            asc_landing_mark = std::max(asc_landing_mark, registered);
+        }
+    };
+    // bbport: compute work uses the caches; the draw recording thread must be done first.
+    // What the recording thread issued while draining (this ring's dispatches among it) is marked
+    // before the next packet starts counting.
+    const auto drain = [&] {
         if (rasterizer) {
-            rasterizer->DrainDrawPipe(Vulkan::DrawPipe::ReasonCompute); // bbport: compute work uses the caches
+            rasterizer->DrainDrawPipe(Vulkan::DrawPipe::ReasonCompute);
+            mark_own();
+            own_copies_from = rasterizer->HostCopiesIssued();
+            own_landings_from = VideoCore::LandingGate::Registered();
+        }
+    };
+    // AscLazyDrain (issue #764): only before the packets that write or wait on memory the guest
+    // sees. Register writes go to this ring's own state (copied into the draw pipe with each
+    // dispatch), dispatches and DMA drain by themselves where needed (rasterizer).
+    // Read per packet: the ring's task lives as long as the game (toggled live).
+    while (!acb.empty()) {
+        const bool lazy_drain = !BbToggle::Disabled(BbToggle::AscLazyDrain);
+        mark_own();
+        ProcessCommands();
+        if (!lazy_drain) {
+            drain();
         }
 
         auto* header = reinterpret_cast<const PM4Header*>(acb.data());
@@ -1525,6 +1657,17 @@ Liverpool::Task Liverpool::ProcessCompute(std::span<const u32> acb, u32 vqid) {
         }
 
         const PM4ItOpcode opcode = header->type3.opcode;
+        if (lazy_drain) {
+            switch (opcode) {
+            case PM4ItOpcode::WaitRegMem:
+            case PM4ItOpcode::MemSemaphore:
+            case PM4ItOpcode::Rewind:
+                drain();
+                break;
+            default:
+                break;
+            }
+        }
 
         const auto* it_body = reinterpret_cast<const u32*>(header) + 1;
         switch (opcode) {
@@ -1677,12 +1820,33 @@ Liverpool::Task Liverpool::ProcessCompute(std::span<const u32> acb, u32 vqid) {
             break;
         }
         case PM4ItOpcode::WriteData: {
+            // AscLazyDrain: in order with the work handed to the draw recording thread.
+            if (lazy_drain && rasterizer) {
+                const auto* write_data = reinterpret_cast<const PM4CmdWriteData*>(header);
+                ASSERT(write_data->dst_sel.Value() == 2 || write_data->dst_sel.Value() == 5);
+                ASSERT(!write_data->wr_one_addr.Value());
+                const u32 count = header->type3.count.Value();
+                if (rasterizer->RunInOrder(&RunAscWriteData, header, (count + 1) * sizeof(u32),
+                                           BbToggle::PipelinedMemoryWrites)) {
+                    NotePendingWrite(*write_data, (count - 2) * sizeof(u32));
+                    rasterizer->NotePendingGpuWrite(write_data->Address<VAddr>(),
+                                                    (count - 2) * sizeof(u32));
+                }
+                break;
+            }
             // bbport: copies deferred to the recording thread precede writes the guest sees, and
             // so do graphics fences deferred to it (the pipe was drained before this packet).
             if (rasterizer) {
-                rasterizer->WaitHostCopies();
-                rasterizer->WaitDeferredSignals();
-                VideoCore::LandingGate::Wait(VideoCore::LandingGate::Pending());
+                if (!BbToggle::Disabled(BbToggle::AscSkipGfxWaits)) {
+                    mark_own();
+                    rasterizer->WaitHostCopiesUpTo(asc_host_copy_mark);
+                    rasterizer->WaitDeferredSignals();
+                    VideoCore::LandingGate::Wait(asc_landing_mark);
+                } else {
+                    rasterizer->WaitHostCopies();
+                    rasterizer->WaitDeferredSignals();
+                    VideoCore::LandingGate::Wait(VideoCore::LandingGate::Pending());
+                }
             }
             const auto* write_data = reinterpret_cast<const PM4CmdWriteData*>(header);
             ASSERT(write_data->dst_sel.Value() == 2 || write_data->dst_sel.Value() == 5);
@@ -1715,12 +1879,39 @@ Liverpool::Task Liverpool::ProcessCompute(std::span<const u32> acb, u32 vqid) {
             break;
         }
         case PM4ItOpcode::ReleaseMem: {
+            // AscLazyDrain: in order with the work handed to the draw recording thread.
+            if (lazy_drain && rasterizer) {
+                const AscReleaseMem release{*reinterpret_cast<const PM4CmdReleaseMem*>(header),
+                                            queue.pipe_id};
+                if (rasterizer->RunInOrder(&RunAscReleaseMem, &release, sizeof(release),
+                                           BbToggle::PipelinedMemoryWrites)) {
+                    // A WaitRegMem on this label waits for the recording thread while unmet.
+                    const auto& packet = release.packet;
+                    const bool dword = packet.data_sel.Value() == DataSelect::Data32Low;
+                    if (dword || packet.data_sel.Value() == DataSelect::Data64) {
+                        const u32 num_bytes = dword ? 4 : 8;
+                        pending_fences.push_back({packet.Address<VAddr>(),
+                                                  dword ? packet.DataDWord() : packet.DataQWord(),
+                                                  num_bytes, rasterizer->DrawPipeHead()});
+                        rasterizer->NotePendingGpuWrite(packet.Address<VAddr>(), num_bytes);
+                    }
+                }
+                break;
+            }
             // bbport: copies deferred to the recording thread precede writes the guest sees, and
             // so do graphics fences deferred to it (the pipe was drained before this packet).
             if (rasterizer) {
-                rasterizer->WaitHostCopies();
-                rasterizer->WaitDeferredSignals();
-                VideoCore::LandingGate::Wait(VideoCore::LandingGate::Pending());
+                // AscSkipGfxWaits (issue #764): this ring's own copies and landings only.
+                if (!BbToggle::Disabled(BbToggle::AscSkipGfxWaits)) {
+                    mark_own();
+                    rasterizer->WaitHostCopiesUpTo(asc_host_copy_mark);
+                    rasterizer->WaitDeferredSignals();
+                    VideoCore::LandingGate::Wait(asc_landing_mark);
+                } else {
+                    rasterizer->WaitHostCopies();
+                    rasterizer->WaitDeferredSignals();
+                    VideoCore::LandingGate::Wait(VideoCore::LandingGate::Pending());
+                }
                 rasterizer->GetBufferCache().CheckStableBindings();
                 rasterizer->CheckConstants();
             }
@@ -1753,6 +1944,7 @@ Liverpool::Task Liverpool::ProcessCompute(std::span<const u32> acb, u32 vqid) {
             *queue.read_addr %= queue.ring_size_dw;
         }
     }
+    mark_own();
 
     FIBER_EXIT;
 }

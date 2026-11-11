@@ -18,6 +18,10 @@ namespace VideoCore::LandingGate {
 /// Taken when a guest-visible write is executed: it follows the copies registered before it.
 u64 Pending();
 
+/// The sequence number of the last deferred copy registered (landed or not); 0 before any.
+/// A ring that marks it after its own packets waits for its own copies only (Wait(mark)).
+u64 Registered();
+
 /// Whether guest-visible signals must go through Run (a copy is pending or labels are waiting
 /// behind one): signals that skip it would overtake the ones waiting.
 bool Active();

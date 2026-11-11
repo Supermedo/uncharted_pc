@@ -101,6 +101,12 @@ public:
         return side_queue_family_index;
     }
 
+    /// bbport (issue #764): a further graphics-family queue for compute chains submitted beside
+    /// the frame (Scheduler::BeginChainDispatch); null when BB_ASYNC_CHAIN=0 or not available.
+    vk::Queue GetChainQueue() const {
+        return chain_queue;
+    }
+
     vk::Queue GetPresentQueue() const {
         return present_queue;
     }
@@ -578,6 +584,8 @@ private:
     vk::Queue present_queue;
     vk::Queue side_queue;
     u32 side_queue_family_index{};
+    vk::Queue chain_queue;
+    u32 chain_queue_index{};
     vk::Queue graphics_queue;
     std::vector<vk::PhysicalDevice> physical_devices;
     std::vector<std::string> available_extensions;

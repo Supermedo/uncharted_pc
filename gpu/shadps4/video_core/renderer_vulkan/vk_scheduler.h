@@ -15,6 +15,7 @@
 #include <span>
 #include <utility>
 #include <vector>
+#include <tuple>
 #include <mutex>
 #include <thread>
 #include <queue>
@@ -731,6 +732,11 @@ public:
     /// records directly (Record() included, so callers may mix both) until the next
     /// KickRecording() or submission.
     [[gnu::noinline]] vk::CommandBuffer CommandBuffer() {
+        // The caller holds the command buffer: the chain must not be submitted under it (a render
+        // pass begun later would close it; the flip crashed NVIDIA's driver that way).
+        if (chain_open && !chain_recording) [[unlikely]] {
+            CloseChain(ChainCloseDirect);
+        }
         if (recording_threaded && !direct_mode) {
             SyncRecording();
             direct_mode = true;
@@ -831,7 +837,22 @@ public:
     /// copy threads (BbCopy::Async) must be done before the guest learns the GPU is past them
     /// (it may then rewrite the memory, e.g. UI vertices: flickering) and before the
     /// submission that reads them. Waits for all.
-    void WaitHostCopies();
+    /// `line`/`function`: the caller, for the wait statistics (TakeHostWaitSites).
+    void WaitHostCopies(u32 line = __builtin_LINE(), const char* function = __builtin_FUNCTION());
+
+    /// bbport: the host copies recorded so far (RecordHostCopy), for WaitHostCopiesUpTo.
+    [[nodiscard]] u64 HostCopiesIssued() const noexcept {
+        return host_copies_issued;
+    }
+
+    /// bbport: like WaitHostCopies, but only for the host copies up to `seq` (a compute ring
+    /// waits for its own copies, not for the graphics ring's: rings do not order each other).
+    void WaitHostCopiesUpTo(u64 seq, u32 line = __builtin_LINE(),
+                            const char* function = __builtin_FUNCTION());
+
+    /// bbport (BB_FRAME_STATS): cycles waited in WaitHostCopies (key: line) and
+    /// WaitDeferredSignals (key: line | 1 << 31) per caller since the last call; clears them.
+    static std::vector<std::tuple<const char*, u32, u64>> TakeHostWaitSites();
 
     /// Runs `copy` on the recording thread in order with the commands (the thread spins for
     /// work anyway, so small copies cost no wakeup); WaitHostCopies() covers it.
@@ -858,7 +879,8 @@ public:
     /// fences, flip): waits until every signal handed to SignalAfterHostCopies ran, so that
     /// the write cannot overtake an earlier fence. Otherwise the guest, seeing the later value,
     /// may free memory the earlier fence then writes into (corrupted heap, guest fault).
-    void WaitDeferredSignals();
+    void WaitDeferredSignals(u32 line = __builtin_LINE(),
+                             const char* function = __builtin_FUNCTION());
 
     /// Whether a render pass with exactly this state is open.
     [[nodiscard]] bool IsRenderingWith(const RenderState& state) const {
@@ -912,8 +934,50 @@ public:
 
     static std::mutex submit_mutex;
 
+    /// bbport (issue #764, toggle AsyncChain; BB_ASYNC_CHAIN=0: no queue): a run of compute
+    /// dispatches (the mesh raycaster's) goes into a command buffer of its own, submitted on a
+    /// further graphics-family queue, so its results do not wait behind the frame being rendered (issue #764). The chain
+    /// signals its tick on the chain semaphore; an empty batch on the graphics queue waits for it
+    /// and signals the same tick on the work timeline, so every wait on the timeline stays right.
+    /// The commands between its dispatches (the raycaster's GDS counter copies among them) go
+    /// into it as well; a draw, a render pass, another dispatch, direct recording or a submission
+    /// closes it.
+    enum ChainCloseReason : u32 {
+        ChainCloseRender,  ///< a render pass begins
+        ChainCloseDraw,    ///< a draw is recorded (before it binds its resources)
+        ChainCloseDirect,  ///< the command buffer is recorded directly (CommandBuffer())
+        ChainCloseDispatch, ///< a dispatch of another shader
+        ChainCloseSubmit,  ///< a submission
+        ChainCloseEnd,     ///< the chain's last dispatch
+        ChainCloseReasons,
+    };
+    [[nodiscard]] bool ChainAvailable() const noexcept {
+        return static_cast<bool>(chain_queue);
+    }
+    [[nodiscard]] bool ChainOpen() const noexcept {
+        return chain_open;
+    }
+    /// Opens the chain unless open (the work recorded so far is submitted on the graphics queue
+    /// first); what is recorded until EndChainDispatch() goes into it. `wait_tick`: a work
+    /// timeline tick its inputs need, 0 for none.
+    void BeginChainDispatch(u64 wait_tick);
+    void EndChainDispatch() noexcept {
+        chain_recording = false;
+    }
+    /// Submits the open chain, if any.
+    void CloseChain(u32 reason);
+    /// Whether `tick` was submitted as a chain (it is then on ChainSemaphore() first).
+    [[nodiscard]] bool IsChainTick(u64 tick) const noexcept {
+        return tick && chain_ticks[tick % chain_ticks.size()].load(std::memory_order_acquire) == tick;
+    }
+    [[nodiscard]] vk::Semaphore ChainSemaphore() const noexcept {
+        return chain_semaphore.Handle();
+    }
+
 private:
     void AllocateWorkerCommandBuffers();
+
+    void SubmitChainLocked(u32 reason);
 
     std::unique_ptr<RecordChunk> AcquireChunk();
 
@@ -965,6 +1029,14 @@ private:
     // bbport: whether recorder_thread runs, read on every Record(). std::jthread::joinable()
     // compares thread ids, which on Windows (libc++ over winpthreads) costs two system calls.
     bool recording_threaded{false};
+    // bbport: async chain (BeginChainDispatch). Used by the GPU command thread only.
+    Semaphore chain_semaphore;
+    vk::Queue chain_queue;
+    bool chain_open = false;
+    bool chain_recording = false; ///< recording the chain's own commands: Record() keeps it open
+    u64 chain_wait_tick = 0;
+    u32 chain_dispatches = 0;
+    std::array<std::atomic<u64>, 256> chain_ticks{};
     std::jthread recorder_thread;
     tracy::VkCtxScope* profiler_scope{};
 };

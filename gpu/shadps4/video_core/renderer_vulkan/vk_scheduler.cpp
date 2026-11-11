@@ -82,7 +82,9 @@ void Scheduler::ReportStall() {
 }
 
 Scheduler::Scheduler(const Instance& instance, bool threaded_recording)
-    : instance{instance}, work_semaphore{instance}, command_pool{instance, &work_semaphore} {
+    : instance{instance}, work_semaphore{instance}, command_pool{instance, &work_semaphore},
+      chain_semaphore{instance} {
+    chain_queue = instance.GetChainQueue();
     {
         std::scoped_lock lk{g_recent_mutex};
         g_schedulers.emplace_back(this, &instance);
@@ -120,6 +122,9 @@ Scheduler::~Scheduler() {
 }
 
 void Scheduler::BeginRendering(const RenderState& new_state) {
+    if (chain_open) [[unlikely]] {
+        CloseChain(ChainCloseRender);
+    }
     if (is_rendering && render_state == new_state) {
         return;
     }
@@ -277,12 +282,48 @@ void Scheduler::SignalAfterHostCopies(std::function<void()> signal, u64 landing_
     KickRecording(true);
 }
 
-void Scheduler::WaitDeferredSignals() {
+namespace {
+std::mutex host_wait_mutex;
+std::unordered_map<const char*, std::unordered_map<u32, u64>> host_wait_sites;
+
+/// Adds the time since its creation to the caller's entry (BB_FRAME_STATS only).
+struct HostWaitSite {
+    const char* function;
+    u32 key;
+    std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
+    ~HostWaitSite() {
+        static const bool stats = std::getenv("BB_FRAME_STATS") != nullptr;
+        if (!stats) {
+            return;
+        }
+        const auto ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                            std::chrono::steady_clock::now() - start)
+                            .count();
+        std::scoped_lock lk{host_wait_mutex};
+        host_wait_sites[function][key] += static_cast<u64>(ns);
+    }
+};
+} // namespace
+
+std::vector<std::tuple<const char*, u32, u64>> Scheduler::TakeHostWaitSites() {
+    std::vector<std::tuple<const char*, u32, u64>> sites;
+    std::scoped_lock lk{host_wait_mutex};
+    for (const auto& [function, lines] : host_wait_sites) {
+        for (const auto& [key, ns] : lines) {
+            sites.emplace_back(function, key, ns);
+        }
+    }
+    host_wait_sites.clear();
+    return sites;
+}
+
+void Scheduler::WaitDeferredSignals(u32 line, const char* function) {
     const u64 issued = deferred_signals_issued.load(std::memory_order_relaxed);
     if (deferred_signals_done->load(std::memory_order_acquire) >= issued ||
         BbToggle::Disabled(BbToggle::OrderedGuestWrites)) {
         return;
     }
+    HostWaitSite site{function, line | 1u << 31};
     BbStats::WaitTimer timer{BbStats::host_copies_wait_ns};
     KickRecording(true);
     while (deferred_signals_done->load(std::memory_order_acquire) < issued) {
@@ -295,12 +336,28 @@ void Scheduler::WaitDeferredSignals() {
     }
 }
 
-void Scheduler::WaitHostCopies() {
+void Scheduler::WaitHostCopies(u32 line, const char* function) {
     if (host_copies_done.load(std::memory_order_acquire) < host_copies_issued) {
+        HostWaitSite site{function, line};
         BbStats::WaitTimer timer{BbStats::host_copies_wait_ns};
         BbStats::host_copy_waits.fetch_add(1, std::memory_order_relaxed);
         KickRecording(true);
         while (host_copies_done.load(std::memory_order_acquire) < host_copies_issued) {
+            std::this_thread::yield();
+        }
+    }
+    BbStats::WaitTimer timer{BbStats::copy_threads_wait_ns};
+    BbCopy::WaitAsync();
+}
+
+void Scheduler::WaitHostCopiesUpTo(u64 seq, u32 line, const char* function) {
+    seq = std::min(seq, host_copies_issued);
+    if (host_copies_done.load(std::memory_order_acquire) < seq) {
+        HostWaitSite site{function, line};
+        BbStats::WaitTimer timer{BbStats::host_copies_wait_ns};
+        BbStats::host_copy_waits.fetch_add(1, std::memory_order_relaxed);
+        KickRecording(true);
+        while (host_copies_done.load(std::memory_order_acquire) < seq) {
             std::this_thread::yield();
         }
     }
@@ -478,8 +535,158 @@ void Scheduler::AllocateWorkerCommandBuffers() {
 #endif
 }
 
+namespace {
+/// bbport (BB_FRAME_STATS): async chain statistics, printed every 2 s by the GPU command thread.
+struct ChainStats {
+    u64 chains = 0, dispatches = 0, waited = 0;
+    std::array<u64, Scheduler::ChainCloseReasons> closes{};
+    std::chrono::steady_clock::time_point window = std::chrono::steady_clock::now();
+};
+ChainStats chain_stats;
+} // namespace
+
+void Scheduler::BeginChainDispatch(u64 wait_tick) {
+    if (!chain_open) {
+        // What was recorded before goes first, on the graphics queue: the chain gets a command
+        // buffer (and a tick) of its own.
+        Flush();
+        chain_recording = true;
+        chain_open = true;
+        chain_dispatches = 0;
+        chain_wait_tick = 0;
+        // Earlier chains on the same queue wrote what this one reads.
+        Record([](vk::CommandBuffer cmdbuf) {
+            const vk::MemoryBarrier2 barrier = {
+                .srcStageMask = vk::PipelineStageFlagBits2::eAllCommands,
+                .srcAccessMask = vk::AccessFlagBits2::eMemoryWrite,
+                .dstStageMask = vk::PipelineStageFlagBits2::eAllCommands,
+                .dstAccessMask = vk::AccessFlagBits2::eMemoryRead | vk::AccessFlagBits2::eMemoryWrite,
+            };
+            cmdbuf.pipelineBarrier2({.memoryBarrierCount = 1, .pMemoryBarriers = &barrier});
+        });
+    }
+    chain_recording = true;
+    chain_wait_tick = std::max(chain_wait_tick, wait_tick);
+    ++chain_dispatches;
+}
+
+void Scheduler::CloseChain(u32 reason) {
+    if (!chain_open) {
+        return;
+    }
+    std::scoped_lock lk{submit_mutex};
+    SubmitChainLocked(reason);
+}
+
+void Scheduler::SubmitChainLocked(u32 reason) {
+    // Recording the chain's last commands (render pass end, barriers) must not close it again.
+    const bool was_recording = chain_recording;
+    chain_recording = true;
+    const u64 tick = work_semaphore.NextTick();
+    SubmitInfo info{};
+    if (on_submit) {
+        on_submit(info);
+    }
+    EndRendering();
+    SyncRecording();
+    WaitHostCopies();
+    Check(current_cmdbuf.end());
+    // Waiting for its own tick (or later) would never end: the timeline reaches it after the chain.
+    chain_wait_tick = std::min(chain_wait_tick, tick - 1);
+    if (chain_wait_tick) {
+        info.AddWait(work_semaphore.Handle(), chain_wait_tick);
+    }
+    const vk::Semaphore chain_handle = chain_semaphore.Handle();
+    info.AddSignal(chain_handle, tick);
+    static constexpr std::array<vk::PipelineStageFlags, 4> all_commands = {
+        vk::PipelineStageFlagBits::eAllCommands, vk::PipelineStageFlagBits::eAllCommands,
+        vk::PipelineStageFlagBits::eAllCommands, vk::PipelineStageFlagBits::eAllCommands};
+    const vk::TimelineSemaphoreSubmitInfo chain_timeline = {
+        .waitSemaphoreValueCount = info.num_wait_semas,
+        .pWaitSemaphoreValues = info.wait_ticks.data(),
+        .signalSemaphoreValueCount = info.num_signal_semas,
+        .pSignalSemaphoreValues = info.signal_ticks.data(),
+    };
+    const vk::SubmitInfo chain_submit = {
+        .pNext = &chain_timeline,
+        .waitSemaphoreCount = info.num_wait_semas,
+        .pWaitSemaphores = info.wait_semas.data(),
+        .pWaitDstStageMask = all_commands.data(),
+        .commandBufferCount = 1U,
+        .pCommandBuffers = &current_cmdbuf,
+        .signalSemaphoreCount = info.num_signal_semas,
+        .pSignalSemaphores = info.signal_semas.data(),
+    };
+    // Before the submission: a landing registered for this tick finds it.
+    chain_ticks[tick % chain_ticks.size()].store(tick, std::memory_order_release);
+    if (chain_queue.submit(chain_submit) == vk::Result::eErrorDeviceLost) {
+        std::printf("Device lost during the chain submit\n");
+        DeviceLost(instance.GetDevice());
+    }
+    // The work timeline reaches the tick once the chain is done (and the graphics work before).
+    const vk::Semaphore timeline = work_semaphore.Handle();
+    const vk::PipelineStageFlags wait_stage = vk::PipelineStageFlagBits::eAllCommands;
+    const vk::TimelineSemaphoreSubmitInfo join_timeline = {
+        .waitSemaphoreValueCount = 1,
+        .pWaitSemaphoreValues = &tick,
+        .signalSemaphoreValueCount = 1,
+        .pSignalSemaphoreValues = &tick,
+    };
+    const vk::SubmitInfo join_submit = {
+        .pNext = &join_timeline,
+        .waitSemaphoreCount = 1,
+        .pWaitSemaphores = &chain_handle,
+        .pWaitDstStageMask = &wait_stage,
+        .signalSemaphoreCount = 1,
+        .pSignalSemaphores = &timeline,
+    };
+    {
+        std::scoped_lock lk{g_recent_mutex};
+        auto& record = g_recent[g_recent_count++ % g_recent.size()];
+        record = {this, timeline, tick, 1, {}, {}};
+        record.wait_semaphore[0] = chain_handle;
+        record.wait_value[0] = tick;
+    }
+    if (instance.GetGraphicsQueue().submit(join_submit) == vk::Result::eErrorDeviceLost) {
+        std::printf("Device lost during the chain join submit\n");
+        DeviceLost(instance.GetDevice());
+    }
+    work_semaphore.Refresh();
+    AllocateWorkerCommandBuffers();
+    if (BbStats::enabled) {
+        ++chain_stats.chains;
+        chain_stats.dispatches += chain_dispatches;
+        chain_stats.waited += chain_wait_tick != 0;
+        ++chain_stats.closes[std::min<u32>(reason, ChainCloseReasons - 1)];
+        const auto now = std::chrono::steady_clock::now();
+        if (now - chain_stats.window >= std::chrono::seconds(2)) {
+            const double seconds = std::chrono::duration<double>(now - chain_stats.window).count();
+            std::printf("Async chain: %.0f/s, %.1f dispatches each, %llu waited for graphics "
+                        "work; closed by draw %llu, render pass %llu, direct recording %llu, "
+                        "other dispatch %llu, submission %llu, its end %llu\n",
+                        double(chain_stats.chains) / seconds,
+                        double(chain_stats.dispatches) / double(chain_stats.chains),
+                        static_cast<unsigned long long>(chain_stats.waited),
+                        static_cast<unsigned long long>(chain_stats.closes[ChainCloseDraw]),
+                        static_cast<unsigned long long>(chain_stats.closes[ChainCloseRender]),
+                        static_cast<unsigned long long>(chain_stats.closes[ChainCloseDirect]),
+                        static_cast<unsigned long long>(chain_stats.closes[ChainCloseDispatch]),
+                        static_cast<unsigned long long>(chain_stats.closes[ChainCloseSubmit]),
+                        static_cast<unsigned long long>(chain_stats.closes[ChainCloseEnd]));
+            chain_stats = {};
+            chain_stats.window = now;
+        }
+    }
+    chain_open = false;
+    chain_wait_tick = 0;
+    chain_recording = was_recording;
+}
+
 void Scheduler::SubmitExecution(SubmitInfo& info) {
     std::scoped_lock lk{submit_mutex};
+    if (chain_open) {
+        SubmitChainLocked(ChainCloseSubmit);
+    }
     // bbport: BB_SUBMIT_THREADS=1 names each thread that submits through this scheduler (once).
     static const bool submit_threads = std::getenv("BB_SUBMIT_THREADS") != nullptr;
 #ifdef _WIN32
