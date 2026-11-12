@@ -61,6 +61,9 @@ enum : std::uint64_t {
     OrderedGuestWrites = 1ull << 49,
     SceneHalfRes = 1ull << 50, ///< live scaling also reduces the 960x540 post targets
     UpdateImageFastPath = 1u << 30,
+    /// A guest constant range copied into the stream buffer earlier in the same submission is
+    /// bound again instead of copied again (BufferCache::ObtainBuffer). On by default.
+    StreamCopyReuse = 1ull << 31,
     // TAA A/B in one run: optional techniques, off by default (no measured gain, 2026-10-02).
     TaaTonemapBlend = 1ull << 51,
     TaaClip = 1ull << 52,
