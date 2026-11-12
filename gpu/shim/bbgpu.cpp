@@ -367,11 +367,15 @@ static void KernelServiceThread(std::stop_token stoken) {
         {
             std::unique_lock lock{m_asio_req};
             cv_asio_req.wait(lock, stoken, [] { return asio_requests != 0; });
+            // bbport (from iannitram/Uncharted-Universal #35, 6c42c4d6): the requests are taken here, before the
+            // timers run. Cleared after run() as before, a request (a timer armed) landing between run() returning
+            // and the clear was lost: its timer waited for the next request (U3's Load Game hung on a handheld).
+            // One that lands while run() works keeps the count above 0, and the loop runs again.
+            asio_requests = 0;
         }
         if (stoken.stop_requested()) break;
         io_context.run();
         io_context.restart();
-        asio_requests = 0;
     }
 }
 
