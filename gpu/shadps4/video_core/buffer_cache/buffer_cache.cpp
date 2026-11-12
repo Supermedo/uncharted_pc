@@ -1264,7 +1264,29 @@ std::pair<const Buffer*, u64> BufferCache::ObtainBuffer(VAddr device_addr, u32 s
         // guest-visible fences wait for it (Scheduler::WaitHostCopies).
         if (!stream_buffer.mapped_data.empty() &&
             !BbToggle::Disabled(BbToggle::DeferredStreamCopies)) {
+            // bbport (StreamCopyReuse): a range copied earlier in the same submission is bound
+            // again instead of copied again. U1: ~680k copies a second (2.1 GB/s through the
+            // BAR, ~30% of the recording thread), half of them repeats within a submission,
+            // and none of those had other bytes (measured, "Stream copies" diagnostics). The
+            // earlier region is reserved at this tick, so the ring keeps it until the GPU is
+            // past it; its copy is recorded before this binding.
+            struct Reuse {
+                VAddr address;
+                u32 size;
+                u64 tick;
+                u64 offset;
+            };
+            static thread_local std::array<Reuse, 4096> reuse{};
+            const bool reusing = !BbToggle::Disabled(BbToggle::StreamCopyReuse);
+            const u64 tick = scheduler.CurrentTick();
+            auto& slot = reuse[((device_addr >> 4) ^ (device_addr >> 17) ^ size) % reuse.size()];
+            if (reusing && slot.tick == tick && slot.address == device_addr && slot.size == size) {
+                return {&stream_buffer, slot.offset};
+            }
             if (const auto offset = stream_buffer.Reserve(size, instance.UniformMinAlignment())) {
+                if (reusing) {
+                    slot = {device_addr, size, tick, *offset};
+                }
                 SmallGuestCopy({
                     .run = &RunGuestCopy,
                     .context = this,
