@@ -90,9 +90,20 @@ public:
     u32 ReadDataFromGds(u32 gsd_offset);
     bool InvalidateMemory(VAddr addr, u64 size, bool assume_locks = false);
     /// GPU thread, before a write the guest can observe (see Scheduler::WaitHostCopies).
-    void WaitHostCopies() {
-        DrainDrawPipe();
-        scheduler.WaitHostCopies();
+    /// `line`/`function`: the caller, for the statistics of where stage A waits.
+    void WaitHostCopies(u32 line = __builtin_LINE(), const char* function = __builtin_FUNCTION()) {
+        DrainDrawPipe(DrawPipe::ReasonRasterizer, line, function);
+        TimedHostWait(false, line, function);
+    }
+
+    /// bbport: a compute ring's own host copies (Scheduler::WaitHostCopiesUpTo); no drain: the
+    /// ring drained the draw pipe before each of its packets.
+    [[nodiscard]] u64 HostCopiesIssued() const {
+        return scheduler.HostCopiesIssued();
+    }
+    void WaitHostCopiesUpTo(u64 seq, u32 line = __builtin_LINE(),
+                            const char* function = __builtin_FUNCTION()) {
+        scheduler.WaitHostCopiesUpTo(seq, line, function);
     }
 
     /// bbport: GPU command thread: waits until the draw recording thread has recorded every
@@ -136,11 +147,18 @@ public:
     /// event, and that event's label waits for them. True when the dispatch noted such a range
     /// (it is then submitted at once).
     bool NoteCopy64Readback(const Shader::Info& stage);
+    /// bbport (issue #764, AsyncChain): opens or continues the raycaster's chain for this
+    /// dispatch; true when it goes into the chain.
+    bool BeginAsyncChain(const Shader::Info& cs, VAddr extra, u64 extra_size);
     void ReadBackSmallWrittenBuffers();
     /// Before a guest-visible write: fences deferred earlier are written first.
-    void WaitDeferredSignals() {
-        scheduler.WaitDeferredSignals();
+    void WaitDeferredSignals(u32 line = __builtin_LINE(),
+                             const char* function = __builtin_FUNCTION()) {
+        TimedHostWait(true, line, function);
     }
+    /// bbport: Scheduler::WaitHostCopies (or WaitDeferredSignals), with the cycles waited per
+    /// call site in the BB_FRAME_STATS draw pipe line.
+    void TimedHostWait(bool deferred_signals, u32 line, const char* function);
     /// Runs `signal` after the guest memory copies issued so far, without waiting here.
     void SignalAfterHostCopies(std::function<void()> signal, u64 landing_seq = 0,
                                bool off_recorder = false) {

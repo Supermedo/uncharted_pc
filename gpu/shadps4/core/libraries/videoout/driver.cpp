@@ -607,7 +607,11 @@ bool VideoOutDriver::SubmitFlip(VideoOutPort* port, s32 index, s64 flip_arg,
     if (!is_eop) {
         // Non EOP flips can arrive from any thread so ask GPU thread to perform them
         liverpool->SendCommand([=, this]() { SubmitFlipInternal(port, index, flip_arg, is_eop); });
-    } else if (Vulkan::Scheduler::OnRecorderThread()) {
+    } else if (Vulkan::Scheduler::OnRecorderThread() ||
+               (!BbToggle::Disabled(BbToggle::AsyncChain) &&
+                !AmdGpu::Liverpool::OnProcessorThread())) {
+        // bbport (AsyncChain): an end-of-pipe flip released on the landing thread would record
+        // into the GPU thread's command buffer beside it while a chain may be open there.
         // bbport: the end-of-pipe label of this flip was signalled by the Vulkan recording
         // thread (RecorderFences). PrepareFrame there waits in SyncRecording for that thread to
         // go idle, i.e. for itself: the game froze (U1 jeep chase). The GPU thread makes it.

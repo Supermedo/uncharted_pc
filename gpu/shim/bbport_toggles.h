@@ -72,6 +72,19 @@ enum : std::uint64_t {
     SceneMipBias = 1ull << 57, ///< negative LOD bias of G-buffer samplers at reduced scene sizes
     /// One upscaler frame start per frame (Uncharted draws twice into its display buffer).
     OneFrameStart = 1ull << 59,
+    // Issue #764 (U1 "Sanctuary?" with bodies on the ground, 60 Hz): on by default (bit set: off).
+    /// A compute ring's fences (ReleaseMem, WriteData) wait for the host copies and raycaster
+    /// landings of compute rings only, not the graphics ring's (rings do not order each other on a
+    /// PS4). 46 -> 51 FPS.
+    AscSkipGfxWaits = 1ull << 60,
+    /// The mesh raycaster's compute chain and the body skinning it reads are submitted on another
+    /// queue of the graphics family, so its results no longer wait behind the frame being rendered
+    /// (Scheduler::BeginChainDispatch; BB_ASYNC_CHAIN=0: no such queue). 52 -> 58 FPS.
+    AsyncChain = 1ull << 61,
+    /// A compute ring drains the draw pipe only before the packets that wait on memory the guest
+    /// sees (WaitRegMem, MemSemaphore, Rewind); its ReleaseMem and WriteData run in order on the
+    /// draw recording thread like the graphics ring's (~33000 drains a second before). 56 -> 60 FPS.
+    AscLazyDrain = 1ull << 62,
     // Bits 20-29 are used as raw debug toggles by the camera/object motion and the upscaler.
 };
 inline bool Disabled(std::uint64_t bit) {

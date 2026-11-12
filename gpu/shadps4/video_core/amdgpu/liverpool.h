@@ -290,6 +290,10 @@ private:
     /// decrements num_submits once it has decoded a submission, before that). Under
     /// submit_mutex with num_submits.
     std::atomic<bool> work_retired{true};
+    /// bbport (AscSkipGfxWaits): the last host copy and landing registered by compute rings'
+    /// packets; their fences wait for these instead of everything (ProcessCompute).
+    u64 asc_host_copy_mark{};
+    u64 asc_landing_mark{};
     std::atomic<u32> num_commands{};
     std::atomic<bool> submit_done{};
     std::mutex submit_mutex;

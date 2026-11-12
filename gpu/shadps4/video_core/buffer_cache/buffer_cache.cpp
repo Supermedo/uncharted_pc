@@ -326,9 +326,33 @@ bool BufferCache::DownloadOnSideQueue(VAddr page, u64 length) {
 // bbport: deferred raycaster copies (see landing_gate.h). The guest part of the copy is made at
 // the dispatch; the GPU-written bytes of the source land in the destination on a worker thread
 // once the GPU work that wrote them has completed, in registration order.
+namespace {
+/// bbport (BB_FRAME_STATS): where the landings' time goes, printed by the landing thread.
+struct LandingStats {
+    u64 landings = 0, gated = 0, flushes = 0;
+    u64 to_tick_ns = 0;  ///< registered -> the GPU reached the tick
+    u64 side_ns = 0;     ///< side queue copy, submit to fence
+    u64 total_ns = 0;    ///< registered -> landed
+    u64 max_total_ns = 0;
+    std::chrono::steady_clock::time_point window = std::chrono::steady_clock::now();
+};
+LandingStats landing_stats;
+std::mutex landing_stats_mutex;
+bool LandingStatsOn() {
+    static const bool on = std::getenv("BB_FRAME_STATS") != nullptr;
+    return on;
+}
+u64 NsSince(std::chrono::steady_clock::time_point from) {
+    return static_cast<u64>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                std::chrono::steady_clock::now() - from)
+                                .count());
+}
+} // namespace
+
 struct BufferCache::Landing {
     u64 seq{};
     u64 tick{};
+    std::chrono::steady_clock::time_point registered = std::chrono::steady_clock::now();
     vk::Buffer buffer;
     boost::container::small_vector<vk::BufferCopy, 4> copies; ///< dstOffset: in the side staging
     boost::container::small_vector<VAddr, 4> targets;         ///< guest address of each copy
@@ -374,10 +398,19 @@ bool BufferCache::DeferGuestCopy(VAddr src, VAddr dst, u64 size, bool guest_part
     // command buffer; that one is submitted here, so the tick completes without anybody waiting
     // for something else to submit it.
     u64 tick = memory_tracker->LatestGpuWriteTick(src, size);
+    // Write ticks are the writing command buffer's + 1. A chain on its own queue
+    // (Scheduler::BeginChainDispatch) is waited for by its own tick, on its semaphore.
+    if (tick > 1 && scheduler.IsChainTick(tick - 1)) {
+        --tick;
+    }
     if (tick != 0) {
         tick = std::min(tick, scheduler.CurrentTick());
         if (tick >= scheduler.CurrentTick()) {
             scheduler.Flush();
+            if (LandingStatsOn()) {
+                std::scoped_lock lk{landing_stats_mutex};
+                ++landing_stats.flushes;
+            }
         }
     }
     if (tick == 0) {
@@ -421,7 +454,10 @@ bool BufferCache::WaitLandingTick(u64 tick) {
         return true;
     }
     const vk::Device device = instance.GetDevice();
-    const vk::Semaphore handle = semaphore.Handle();
+    // A chain on its own queue (Scheduler::BeginChainDispatch) is done before the work timeline
+    // learns of it, behind the frame.
+    const vk::Semaphore handle =
+        scheduler.IsChainTick(tick) ? scheduler.ChainSemaphore() : semaphore.Handle();
     const vk::SemaphoreWaitInfo wait_info = {
         .semaphoreCount = 1,
         .pSemaphores = &handle,
@@ -457,6 +493,8 @@ bool BufferCache::ExecuteLanding(Landing& landing) {
     if (!WaitLandingTick(landing.tick)) {
         return false;
     }
+    const u64 to_tick_ns = NsSince(landing.registered);
+    const auto side_begin = std::chrono::steady_clock::now();
     u64 total = 0;
     for (const auto& copy : landing.copies) {
         total = std::max(total, copy.dstOffset + copy.size);
@@ -474,7 +512,9 @@ bool BufferCache::ExecuteLanding(Landing& landing) {
         };
         side.cmdbuf.pipelineBarrier2({.memoryBarrierCount = 1, .pMemoryBarriers = &to_host});
         Vulkan::Check(side.cmdbuf.end());
-        const vk::Semaphore timeline = scheduler.GetWorkSemaphore()->Handle();
+        const vk::Semaphore timeline = scheduler.IsChainTick(landing.tick)
+                                           ? scheduler.ChainSemaphore()
+                                           : scheduler.GetWorkSemaphore()->Handle();
         const vk::PipelineStageFlags wait_stage = vk::PipelineStageFlagBits::eTransfer;
         const u64 wait_value = landing.tick;
         const vk::TimelineSemaphoreSubmitInfo timeline_info = {
@@ -509,6 +549,30 @@ bool BufferCache::ExecuteLanding(Landing& landing) {
             }
         }
         Vulkan::Check(side.device.resetFences(*side.fence));
+        if (LandingStatsOn()) {
+            const u64 side_ns = NsSince(side_begin);
+            const u64 total_ns = NsSince(landing.registered);
+            std::scoped_lock stats_lk{landing_stats_mutex};
+            auto& s = landing_stats;
+            ++s.landings;
+            s.gated += landing.seq != 0;
+            s.to_tick_ns += to_tick_ns;
+            s.side_ns += side_ns;
+            s.total_ns += total_ns;
+            s.max_total_ns = std::max(s.max_total_ns, total_ns);
+            const double seconds =
+                std::chrono::duration<double>(std::chrono::steady_clock::now() - s.window).count();
+            if (seconds >= 5.0 && s.landings) {
+                std::printf("Landing: %.0f/s (%.0f/s forced a submission), registered -> GPU done "
+                            "%.0f us, side copy %.0f us, total %.0f us avg / %.0f us max; "
+                            "side copies %.1f%% of the time\n",
+                            s.landings / seconds, s.flushes / seconds,
+                            s.to_tick_ns / 1e3 / s.landings, s.side_ns / 1e3 / s.landings,
+                            s.total_ns / 1e3 / s.landings, s.max_total_ns / 1e3,
+                            100.0 * s.side_ns / (seconds * 1e9));
+                s = LandingStats{};
+            }
+        }
         side.staging.Invalidate(0, total);
         for (size_t i = 0; i < landing.copies.size(); ++i) {
             memory->TryWriteBacking(reinterpret_cast<void*>(landing.targets[i]),
@@ -662,6 +726,10 @@ namespace LandingGate {
 u64 Pending() {
     auto* cache = land_instance.load(std::memory_order_acquire);
     return cache ? cache->PendingLanding() : 0;
+}
+u64 Registered() {
+    auto* cache = land_instance.load(std::memory_order_acquire);
+    return cache ? cache->RegisteredLanding() : 0;
 }
 bool Active() {
     auto* cache = land_instance.load(std::memory_order_acquire);
@@ -1344,6 +1412,10 @@ bool BufferCache::IsRegionCpuModified(VAddr addr, size_t size) {
 
 bool BufferCache::IsRegionGpuModified(VAddr addr, size_t size) {
     return memory_tracker->IsRegionGpuModified(addr, size);
+}
+
+u64 BufferCache::LatestGpuWriteTick(VAddr addr, u64 size) {
+    return memory_tracker->LatestGpuWriteTick(addr, size);
 }
 
 void BufferCache::ProcessFaultBuffer() {

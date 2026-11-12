@@ -577,6 +577,11 @@ namespace {
 std::unordered_map<const char*, std::unordered_map<u32, u64>> drain_sites;
 } // namespace
 
+void Rasterizer::TimedHostWait(bool deferred_signals, u32 line, const char* function) {
+    deferred_signals ? scheduler.WaitDeferredSignals(line, function)
+                     : scheduler.WaitHostCopies(line, function);
+}
+
 void Rasterizer::DrainDrawPipe(u32 reason, u32 line, const char* function) {
     if (!draw_pipe || !OnStageA()) {
         return;
@@ -905,6 +910,13 @@ void Rasterizer::RunDrawPacket(void* context, const u8* data, u32 size) {
         return;
     }
     const auto& packet = *reinterpret_cast<const DrawPacket*>(data);
+    // A draw binds its resources (vertex buffers, descriptors) into the command buffer before its
+    // render pass: the chain closes first, or those bindings stay in the chain's command buffer
+    // and the draw reads garbage addresses (device lost picking up a treasure, U1, 2026-11-10).
+    if (packet.kind != PacketKind::Dispatch && packet.kind != PacketKind::IndirectDispatch &&
+        self.scheduler.ChainOpen()) [[unlikely]] {
+        self.scheduler.CloseChain(Vulkan::Scheduler::ChainCloseDraw);
+    }
     const u8* in = data + sizeof(DrawPacket);
     const auto* blocks = reinterpret_cast<const u16*>(in);
     in += AlignPacket(packet.num_blocks * sizeof(u16));
@@ -1074,6 +1086,14 @@ void Rasterizer::PrintPipeStats() {
             if (waited * 200 > cycles) {
                 std::printf(" %s:%u %.1f%%", function, line, 100.0 * waited / cycles);
             }
+        }
+    }
+    std::printf("\n  host copy waits over 0.5%% (signals: deferred fences):");
+    for (const auto& [function, key, ns] : Scheduler::TakeHostWaitSites()) {
+        const double share = 100.0 * double(ns) / (seconds * 1e9);
+        if (share > 0.5) {
+            std::printf(" %s:%u%s %.1f%%", function, key & 0x7fffffffu,
+                        key >> 31 ? " signals" : "", share);
         }
     }
     std::printf("\n");
@@ -1443,6 +1463,10 @@ static bool SkipShader(u64 hash) {
 
 void Rasterizer::DrawRecord(const GraphicsPipeline* pipeline, const PreparedDraw* used_prepared,
                             bool is_indexed, u32 index_offset) {
+    // Before any binding (see RunDrawPacket): drawn on the GPU command thread as well.
+    if (scheduler.ChainOpen()) [[unlikely]] {
+        scheduler.CloseChain(Vulkan::Scheduler::ChainCloseDraw);
+    }
     if (DrawPipe::OnStageB()) {
         FrameCapture::Poll();
         scheduler.PopPendingOperations();
@@ -1870,6 +1894,9 @@ void Rasterizer::DrawIndirect(bool is_indexed, VAddr arg_address, u32 offset, u3
 
 void Rasterizer::DrawIndirectRecord(const GraphicsPipeline* pipeline, bool is_indexed,
                                     const IndirectDraw& indirect) {
+    if (scheduler.ChainOpen()) [[unlikely]] {
+        scheduler.CloseChain(Vulkan::Scheduler::ChainCloseDraw);
+    }
     if (DrawPipe::OnStageB()) {
         FrameCapture::Poll();
         scheduler.PopPendingOperations();
@@ -2036,6 +2063,109 @@ bool Copy64Gated() {
     }();
     return on;
 }
+
+/// bbport (issue #764, toggle AsyncChain): Uncharted 1's mesh raycaster compute chain,
+/// 308607aa -> c92150ba -> the 64-dword copy 6a6422a9 (traced in "Sanctuary?" with bodies on
+/// the ground), submitted on a queue of its own: its results no longer wait for the frame.
+constexpr u32 ChainStartHash = 0x308607aa;
+constexpr u32 ChainMidHash = 0xc92150ba;
+/// Writes the meshes the raycaster tests (the skinned bodies). On the graphics queue the chain
+/// waited for it, and so for the frame.
+constexpr u32 ChainSkinHash = 0x8f067540;
+
+/// More compute shaders that open the chain. In U1 before "Sanctuary?" 67921bad runs right
+/// before each 308607aa and writes 1 KiB next to its 8 KiB output, in the same 4 KiB page:
+/// write ticks are per page, so on the graphics queue it made the chain wait for the whole
+/// command buffer (7.8 ms of an 8 ms landing). BB_CHAIN_PREP=<hash>,... replaces the list
+/// (BB_CHAIN_PREP=0: none).
+constexpr u32 ChainPrepDefaultHash = 0x67921bad;
+bool ChainPrepHash(u32 h) {
+    static const std::vector<u32> hashes = [] {
+        std::vector<u32> list;
+        const char* env = std::getenv("BB_CHAIN_PREP");
+        if (!env) {
+            list.push_back(ChainPrepDefaultHash);
+        } else {
+            for (const char* p = env; *p;) {
+                char* end;
+                const u64 value = std::strtoull(p, &end, 16);
+                if (end == p) {
+                    break;
+                }
+                list.push_back(u32(value));
+                p = *end == ',' ? end + 1 : end;
+            }
+        }
+        return list;
+    }();
+    return std::find(hashes.begin(), hashes.end(), h) != hashes.end();
+}
+
+/// A 64-dword copy writing what the chain's first dispatch read before opens the chain itself.
+/// U1 before "Sanctuary?": the raycaster's 512-byte inputs are copied from CPU-written guest
+/// memory (never GPU-written) on the graphics queue right before the chain, which then waited
+/// ~8 ms for that command buffer. On by default (BB_CHAIN_FEED_COPY=0: off).
+bool ChainFeedCopyOn() {
+    static const bool on = [] {
+        const char* env = std::getenv("BB_CHAIN_FEED_COPY");
+        return !(env && env[0] == '0');
+    }();
+    return on;
+}
+
+/// The latest 256 distinct ranges the chain's first dispatch read, oldest replaced first: the
+/// raycaster's buffers move as the game goes on (a list that only filled up stopped learning
+/// after a while of play).
+std::mutex chain_input_mutex;
+std::array<std::pair<VAddr, u64>, 256> chain_inputs{};
+u32 chain_input_next = 0;
+
+void NoteChainInput(VAddr address, u64 size) {
+    if (!ChainFeedCopyOn() || !address || !size) {
+        return;
+    }
+    std::scoped_lock lk{chain_input_mutex};
+    for (const auto& [a, s] : chain_inputs) {
+        if (a == address && s == size) {
+            return;
+        }
+    }
+    chain_inputs[chain_input_next++ % chain_inputs.size()] = {address, size};
+}
+
+bool FeedsChain(VAddr address, u64 size) {
+    std::scoped_lock lk{chain_input_mutex};
+    for (const auto& [a, s] : chain_inputs) {
+        if (s && address < a + s && a < address + size) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool AsyncChainDispatch(Vulkan::Scheduler& scheduler, u64 hash) {
+    if (!scheduler.ChainAvailable() || BbToggle::Disabled(BbToggle::AsyncChain)) {
+        return false;
+    }
+    const u32 h = static_cast<u32>(hash);
+    return h == ChainStartHash || h == ChainSkinHash || ChainPrepHash(h) ||
+           (scheduler.ChainOpen() && (h == ChainMidHash || h == u32(Copy64ShaderHash)));
+}
+
+/// Ends a chain dispatch (BeginAsyncChain) when it goes out of scope; the copy closes the chain.
+struct ChainScope {
+    Vulkan::Scheduler* scheduler;
+    u32 hash;
+    ~ChainScope() {
+        if (!scheduler) {
+            return;
+        }
+        scheduler->EndChainDispatch();
+        if (hash == u32(Copy64ShaderHash)) {
+            scheduler->CloseChain(Vulkan::Scheduler::ChainCloseEnd);
+        }
+    }
+};
 } // namespace
 
 bool Rasterizer::NoteCopy64Readback(const Shader::Info& stage) {
@@ -2123,6 +2253,65 @@ void Rasterizer::ReadBackSmallWrittenBuffers() {
     }
 }
 
+/// bbport (AsyncChainDispatch): opens or continues the chain for this dispatch, recorded into a
+/// command buffer submitted on a queue of its own; true then. Inputs written by graphics work
+/// still running are waited for; what an earlier dispatch of the same chain wrote is ordered
+/// inside it. Any other dispatch closes an open chain. `extra`/`extra_size`: a further input
+/// (indirect arguments).
+/// The thread recording opens, fills and closes it: the draw recording thread for pipelined
+/// dispatches, in order with the draws, or the GPU command thread once the pipe is drained
+/// (never both at once), so its dispatches do not drain the pipe.
+bool Rasterizer::BeginAsyncChain(const Shader::Info& cs, VAddr extra, u64 extra_size) {
+    // A copy feeding the chain opens it (ChainFeedCopyOn; the copy closes it again,
+    // ChainScope), so the chain's first dispatch finds its input on the chain queue.
+    const auto feeds_chain = [&] {
+        if (!ChainFeedCopyOn() || u32(cs.pgm_hash) != u32(Copy64ShaderHash) ||
+            cs.buffers.size() != 2 || scheduler.ChainOpen() || !scheduler.ChainAvailable() ||
+            BbToggle::Disabled(BbToggle::AsyncChain)) {
+            return false;
+        }
+        const auto src = cs.buffers[0].GetSharp(cs);
+        const auto dst = cs.buffers[1].GetSharp(cs);
+        const u64 bytes = std::min<u64>(src.GetSize(), dst.GetSize());
+        return bytes && FeedsChain(dst.base_address, bytes);
+    };
+    if (!IsGpuSideThread() || !cs.images.empty() ||
+        (!AsyncChainDispatch(scheduler, cs.pgm_hash) && !feeds_chain())) {
+        if (scheduler.ChainOpen()) {
+            scheduler.CloseChain(Vulkan::Scheduler::ChainCloseDispatch);
+        }
+        return false;
+    }
+    // Write ticks are the timeline value once done: the writing command buffer's + 1. Ticks of
+    // the open chain itself are ordered inside it; those of earlier chains on its queue.
+    const u64 own_tick = scheduler.ChainOpen() ? scheduler.CurrentTick() : ~u64{0};
+    u64 wait_tick = 0;
+    const auto input = [&](VAddr address, u64 size) {
+        const u64 done = buffer_cache.LatestGpuWriteTick(address, size);
+        const u64 tick = done ? done - 1 : 0;
+        if (tick && tick < own_tick && !scheduler.IsChainTick(tick) && !scheduler.IsFree(tick)) {
+            wait_tick = std::max(wait_tick, tick);
+        }
+    };
+    if (extra_size) {
+        input(extra, extra_size);
+    }
+    for (const auto& desc : cs.buffers) {
+        if (desc.IsSpecial()) {
+            continue;
+        }
+        const auto sharp = desc.GetSharp(cs);
+        if (sharp.base_address && sharp.GetSize() != 0) {
+            if (!desc.is_written && u32(cs.pgm_hash) == ChainStartHash) {
+                NoteChainInput(sharp.base_address, sharp.GetSize());
+            }
+            input(sharp.base_address, sharp.GetSize());
+        }
+    }
+    scheduler.BeginChainDispatch(wait_tick);
+    return true;
+}
+
 void Rasterizer::DispatchDirect() {
     RENDERER_TRACE;
     BbStats::dispatches.fetch_add(1, std::memory_order_relaxed);
@@ -2165,6 +2354,9 @@ void Rasterizer::DispatchRecord(const ComputePipeline* pipeline) {
             });
         }
     };
+    // bbport (AsyncChainDispatch): the raycaster's chain on a queue of its own.
+    ChainScope chain_scope{BeginAsyncChain(cs, 0, 0) ? &scheduler : nullptr,
+                           static_cast<u32>(cs.pgm_hash)};
     if (upscaler->Enabled()) {
         upscaler->OnDispatch(cs.pgm_hash);
     }
@@ -2413,6 +2605,9 @@ void Rasterizer::DispatchIndirect(VAddr address, u32 offset, u32 size) {
 
 void Rasterizer::DispatchIndirectRecord(const ComputePipeline* pipeline, VAddr address,
                                         u32 size) {
+    const auto& cs = pipeline->GetStage(Shader::SwStage::Compute);
+    ChainScope chain_scope{BeginAsyncChain(cs, address, size) ? &scheduler : nullptr,
+                           static_cast<u32>(cs.pgm_hash)};
     scheduler.PopPendingOperations();
     const u32 offset = 0;
 

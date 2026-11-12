@@ -431,7 +431,7 @@ bool Instance::CreateDevice() {
     // bbport: a side queue (BufferCache reads GPU data back there, past the work queued for
     // graphics): a transfer-only family, a copy engine that runs beside graphics work; else a
     // second queue of the graphics family.
-    static constexpr std::array queue_priorities = {1.0f, 1.0f};
+    static constexpr std::array queue_priorities = {1.0f, 1.0f, 1.0f};
     side_queue_family_index = queue_family_index;
     for (u32 i = 0; i < family_properties.size(); ++i) {
         const auto flags =
@@ -457,8 +457,16 @@ bool Instance::CreateDevice() {
         }
     }
     const bool side_family = side_queue_family_index != queue_family_index;
-    const u32 graphics_queues =
-        side_family ? 1u : std::min<u32>(2u, family_properties[queue_family_index].queueCount);
+    // bbport (issue #764): one more graphics-family queue for the compute chains the scheduler
+    // submits beside the frame (Scheduler::BeginChainDispatch), where the family has one to spare.
+    // BB_ASYNC_CHAIN=0: none.
+    const char* chain_env = std::getenv("BB_ASYNC_CHAIN");
+    const u32 chain_queues = chain_env && chain_env[0] == '0' ? 0u : 1u;
+    const u32 graphics_queues = std::min<u32>((side_family ? 1u : 2u) + chain_queues,
+                                              family_properties[queue_family_index].queueCount);
+    chain_queue_index = chain_queues && graphics_queues == (side_family ? 2u : 3u)
+                            ? graphics_queues - 1
+                            : 0u;
     const std::array queue_infos = {
         vk::DeviceQueueCreateInfo{
             .queueFamilyIndex = queue_family_index,
@@ -769,6 +777,11 @@ bool Instance::CreateDevice() {
         side_queue = device->getQueue(side_queue_family_index, 0);
     } else if (physical_device.getQueueFamilyProperties()[queue_family_index].queueCount > 1) {
         side_queue = device->getQueue(queue_family_index, 1);
+    }
+    if (chain_queue_index) {
+        chain_queue = device->getQueue(queue_family_index, chain_queue_index);
+        std::printf("Async chain: graphics-family queue %u for the compute chains\n",
+                    chain_queue_index);
     }
 
     if (calibrated_timestamps) {
