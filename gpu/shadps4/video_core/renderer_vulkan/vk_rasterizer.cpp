@@ -2073,12 +2073,82 @@ constexpr u32 ChainMidHash = 0xc92150ba;
 /// waited for it, and so for the frame.
 constexpr u32 ChainSkinHash = 0x8f067540;
 
+/// More compute shaders that open the chain. In U1 before "Sanctuary?" 67921bad runs right
+/// before each 308607aa and writes 1 KiB next to its 8 KiB output, in the same 4 KiB page:
+/// write ticks are per page, so on the graphics queue it made the chain wait for the whole
+/// command buffer (7.8 ms of an 8 ms landing). BB_CHAIN_PREP=<hash>,... replaces the list
+/// (BB_CHAIN_PREP=0: none).
+constexpr u32 ChainPrepDefaultHash = 0x67921bad;
+bool ChainPrepHash(u32 h) {
+    static const std::vector<u32> hashes = [] {
+        std::vector<u32> list;
+        const char* env = std::getenv("BB_CHAIN_PREP");
+        if (!env) {
+            list.push_back(ChainPrepDefaultHash);
+        } else {
+            for (const char* p = env; *p;) {
+                char* end;
+                const u64 value = std::strtoull(p, &end, 16);
+                if (end == p) {
+                    break;
+                }
+                list.push_back(u32(value));
+                p = *end == ',' ? end + 1 : end;
+            }
+        }
+        return list;
+    }();
+    return std::find(hashes.begin(), hashes.end(), h) != hashes.end();
+}
+
+/// A 64-dword copy writing what the chain's first dispatch read before opens the chain itself.
+/// U1 before "Sanctuary?": the raycaster's 512-byte inputs are copied from CPU-written guest
+/// memory (never GPU-written) on the graphics queue right before the chain, which then waited
+/// ~8 ms for that command buffer. On by default (BB_CHAIN_FEED_COPY=0: off).
+bool ChainFeedCopyOn() {
+    static const bool on = [] {
+        const char* env = std::getenv("BB_CHAIN_FEED_COPY");
+        return !(env && env[0] == '0');
+    }();
+    return on;
+}
+
+/// The latest 256 distinct ranges the chain's first dispatch read, oldest replaced first: the
+/// raycaster's buffers move as the game goes on (a list that only filled up stopped learning
+/// after a while of play).
+std::mutex chain_input_mutex;
+std::array<std::pair<VAddr, u64>, 256> chain_inputs{};
+u32 chain_input_next = 0;
+
+void NoteChainInput(VAddr address, u64 size) {
+    if (!ChainFeedCopyOn() || !address || !size) {
+        return;
+    }
+    std::scoped_lock lk{chain_input_mutex};
+    for (const auto& [a, s] : chain_inputs) {
+        if (a == address && s == size) {
+            return;
+        }
+    }
+    chain_inputs[chain_input_next++ % chain_inputs.size()] = {address, size};
+}
+
+bool FeedsChain(VAddr address, u64 size) {
+    std::scoped_lock lk{chain_input_mutex};
+    for (const auto& [a, s] : chain_inputs) {
+        if (s && address < a + s && a < address + size) {
+            return true;
+        }
+    }
+    return false;
+}
+
 bool AsyncChainDispatch(Vulkan::Scheduler& scheduler, u64 hash) {
     if (!scheduler.ChainAvailable() || BbToggle::Disabled(BbToggle::AsyncChain)) {
         return false;
     }
     const u32 h = static_cast<u32>(hash);
-    return h == ChainStartHash || h == ChainSkinHash ||
+    return h == ChainStartHash || h == ChainSkinHash || ChainPrepHash(h) ||
            (scheduler.ChainOpen() && (h == ChainMidHash || h == u32(Copy64ShaderHash)));
 }
 
@@ -2192,7 +2262,21 @@ void Rasterizer::ReadBackSmallWrittenBuffers() {
 /// dispatches, in order with the draws, or the GPU command thread once the pipe is drained
 /// (never both at once), so its dispatches do not drain the pipe.
 bool Rasterizer::BeginAsyncChain(const Shader::Info& cs, VAddr extra, u64 extra_size) {
-    if (!IsGpuSideThread() || !cs.images.empty() || !AsyncChainDispatch(scheduler, cs.pgm_hash)) {
+    // A copy feeding the chain opens it (ChainFeedCopyOn; the copy closes it again,
+    // ChainScope), so the chain's first dispatch finds its input on the chain queue.
+    const auto feeds_chain = [&] {
+        if (!ChainFeedCopyOn() || u32(cs.pgm_hash) != u32(Copy64ShaderHash) ||
+            cs.buffers.size() != 2 || scheduler.ChainOpen() || !scheduler.ChainAvailable() ||
+            BbToggle::Disabled(BbToggle::AsyncChain)) {
+            return false;
+        }
+        const auto src = cs.buffers[0].GetSharp(cs);
+        const auto dst = cs.buffers[1].GetSharp(cs);
+        const u64 bytes = std::min<u64>(src.GetSize(), dst.GetSize());
+        return bytes && FeedsChain(dst.base_address, bytes);
+    };
+    if (!IsGpuSideThread() || !cs.images.empty() ||
+        (!AsyncChainDispatch(scheduler, cs.pgm_hash) && !feeds_chain())) {
         if (scheduler.ChainOpen()) {
             scheduler.CloseChain(Vulkan::Scheduler::ChainCloseDispatch);
         }
@@ -2218,6 +2302,9 @@ bool Rasterizer::BeginAsyncChain(const Shader::Info& cs, VAddr extra, u64 extra_
         }
         const auto sharp = desc.GetSharp(cs);
         if (sharp.base_address && sharp.GetSize() != 0) {
+            if (!desc.is_written && u32(cs.pgm_hash) == ChainStartHash) {
+                NoteChainInput(sharp.base_address, sharp.GetSize());
+            }
             input(sharp.base_address, sharp.GetSize());
         }
     }
