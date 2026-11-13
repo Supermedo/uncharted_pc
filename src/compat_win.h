@@ -53,6 +53,8 @@ static inline int compat_mkdir(const char *path, int mode) { (void)mode; return 
 ssize_t compat_pread(int fd, void *buffer, size_t size, int64_t offset);
 ssize_t compat_pwrite(int fd, const void *buffer, size_t size, int64_t offset);
 #define pread compat_pread
+/* close for descriptors that had positioned reads (runtime_file.c): drops their second handle (compat_win.c). */
+int compat_close(int fd);
 #define pwrite compat_pwrite
 static inline int compat_fsync(int fd) { return _commit(fd); }
 #define fsync compat_fsync

@@ -22,6 +22,8 @@ typedef struct _stat64 HostStat;
 #define host_stat(path,s) _stat64(path,s)
 #define host_fstat(fd,s) _fstat64(fd,s)
 #define host_lseek _lseeki64
+/* Every close here drops the descriptor's second handle for positioned reads (compat_win.c). */
+#define close(fd) compat_close(fd)
 #define O_DIRECTORY 0x40000000 /* bbport marker, removed before _open */
 #else
 typedef struct stat HostStat;

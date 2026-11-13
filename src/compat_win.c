@@ -5,7 +5,9 @@
 #endif
 #include <windows.h>
 #include <bcrypt.h>
+#include <io.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include "compat_win.h"
 
@@ -87,7 +89,72 @@ static ssize_t positioned(int fd, void *buffer, size_t size, int64_t offset, int
     SetFilePointerEx(h, saved, NULL, FILE_BEGIN);
     return (ssize_t)done;
 }
-ssize_t compat_pread(int fd, void *buffer, size_t size, int64_t offset) { return positioned(fd, buffer, size, offset, 0); }
+/* Positioned reads on a second handle of the file (ReOpenFile), one per descriptor, made at the first pread: its file
+ * pointer is nobody's, so reads never move the descriptor's own and need no save and restore. With the restore, two
+ * preads on one descriptor at once could leave the pointer at the other's position, and a read() at the same time took
+ * its data from the wrong place (the idea from iannitram's Uncharted Universal, 2026-11). Each slot keeps the handle it
+ * was made from: a descriptor number used again for another file gets a new second handle. compat_close drops it.
+ * BB_PREAD_SIDE=0, or a file ReOpenFile refuses: the restore as before. */
+#define SIDE_SLOTS 4096
+static struct { HANDLE main, side; SRWLOCK lock; } side_slots[SIDE_SLOTS];
+static int side_allowed(void) {
+    static int allowed = -1;
+    if (allowed < 0) { const char *e = getenv("BB_PREAD_SIDE"); allowed = !(e && e[0] == '0'); }
+    return allowed;
+}
+static HANDLE side_handle(int fd, HANDLE main) {
+    if (fd < 0 || fd >= SIDE_SLOTS || !side_allowed()) return NULL;
+    HANDLE found = NULL;
+    AcquireSRWLockShared(&side_slots[fd].lock);
+    if (side_slots[fd].main == main) found = side_slots[fd].side;
+    ReleaseSRWLockShared(&side_slots[fd].lock);
+    if (found) return found == INVALID_HANDLE_VALUE ? NULL : found;
+    AcquireSRWLockExclusive(&side_slots[fd].lock);
+    if (side_slots[fd].main != main) {
+        if (side_slots[fd].side && side_slots[fd].side != INVALID_HANDLE_VALUE) CloseHandle(side_slots[fd].side);
+        HANDLE side = ReOpenFile(main, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, 0);
+        side_slots[fd].main = main;
+        side_slots[fd].side = side; /* INVALID_HANDLE_VALUE: refused, remembered for this file */
+    }
+    found = side_slots[fd].side;
+    ReleaseSRWLockExclusive(&side_slots[fd].lock);
+    return found == INVALID_HANDLE_VALUE ? NULL : found;
+}
+int compat_close(int fd) {
+    if (fd >= 0 && fd < SIDE_SLOTS) {
+        AcquireSRWLockExclusive(&side_slots[fd].lock);
+        if (side_slots[fd].side && side_slots[fd].side != INVALID_HANDLE_VALUE) CloseHandle(side_slots[fd].side);
+        side_slots[fd].main = side_slots[fd].side = NULL;
+        ReleaseSRWLockExclusive(&side_slots[fd].lock);
+    }
+    return _close(fd);
+}
+static ssize_t side_read(HANDLE side, void *buffer, size_t size, int64_t offset) {
+    size_t done = 0;
+    while (done < size) {
+        DWORD chunk = size - done > 0x40000000u ? 0x40000000u : (DWORD)(size - done), n = 0;
+        OVERLAPPED at = {0};
+        uint64_t position = (uint64_t)offset + done;
+        at.Offset = (DWORD)position; at.OffsetHigh = (DWORD)(position >> 32);
+        if (!ReadFile(side, (char *)buffer + done, chunk, &n, &at)) {
+            DWORD e = GetLastError();
+            if (e == ERROR_HANDLE_EOF) break;
+            if (done) return (ssize_t)done;
+            errno = compat_errno_from_win32(e);
+            return -1;
+        }
+        done += n;
+        if (n < chunk) break;
+    }
+    return (ssize_t)done;
+}
+ssize_t compat_pread(int fd, void *buffer, size_t size, int64_t offset) {
+    HANDLE h = (HANDLE)_get_osfhandle(fd);
+    if (h == INVALID_HANDLE_VALUE) { errno = EBADF; return -1; }
+    if (offset < 0) { errno = EINVAL; return -1; }
+    HANDLE side = side_handle(fd, h);
+    return side ? side_read(side, buffer, size, offset) : positioned(fd, buffer, size, offset, 0);
+}
 ssize_t compat_pwrite(int fd, const void *buffer, size_t size, int64_t offset) { return positioned(fd, (void *)buffer, size, offset, 1); }
 
 long compat_utc_offset(time_t t) {
