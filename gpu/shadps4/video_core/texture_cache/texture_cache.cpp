@@ -17,6 +17,7 @@
 #include "core/memory.h"
 #include "video_core/buffer_cache/buffer_cache.h"
 #include "video_core/page_manager.h"
+#include "video_core/renderer_vulkan/liverpool_to_vk.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_vram.h"
 #include <vk_mem_alloc.h>
@@ -828,12 +829,19 @@ ImageView& TextureCache::FindDepthTarget(ImageId image_id, const ImageDesc& desc
     // If there is a stencil attachment, link depth and stencil.
     if (desc.info.stencil_addr != 0) {
         ImageId stencil_id{};
-        ForEachImageInRegion(desc.info.stencil_addr, desc.info.stencil_size,
-                             [&](ImageId image_id, Image& image) {
-                                 if (image.info.guest_address == desc.info.stencil_addr) {
-                                     stencil_id = image_id;
-                                 }
-                             });
+        // Only an image whose format can hold stencil (or one not given a format yet, as made below)
+        // is the stencil attachment, not another image the game keeps at that address. From
+        // iannitram's 98c08331 (#136, Pepin208's port of shadPS4 #4818 / #5118).
+        ForEachImageInRegion(
+            desc.info.stencil_addr, desc.info.stencil_size, [&](ImageId image_id, Image& image) {
+                if (image.info.guest_address != desc.info.stencil_addr) {
+                    return;
+                }
+                if (image.info.pixel_format == vk::Format::eUndefined ||
+                    Vulkan::LiverpoolToVK::IsFormatStencilCompatible(image.info.pixel_format)) {
+                    stencil_id = image_id;
+                }
+            });
         if (!stencil_id) {
             ImageInfo info{};
             info.guest_address = desc.info.stencil_addr;
