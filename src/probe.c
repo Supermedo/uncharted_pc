@@ -1312,6 +1312,24 @@ static void patch_job_sleep(uint64_t image_size) {
             printf("Job workers: %s at %#" PRIx64 " (idle workers sleep)\n",builds[b][i].name,
                    (uint64_t)at[i]+builds[b][i].offset);
         }
+        /* After the re-check an idle worker waits up to 10 ms (mov edx, 10: milliseconds; 10000 in
+         * code that takes microseconds) without looking at the queue again. A job resumed by a
+         * counter wakes nobody (on the PS4 the workers never sleep), so some of a frame's work
+         * waited for that timeout and frames started up to ~10 ms late, by a different amount each:
+         * uneven steps and drops on CPUs where the workers sleep. From Mevlock's dev builds
+         * (f4c3054d: U1 ch7, 8-thread laptop, step spread 5.1 ms at 10 ms, 1.1 ms at 1 ms). The
+         * wait is BB_JOB_SLEEP_MS (default 1; 10: the game's). */
+        unsigned char *wait=image+at[1]+builds[b][1].offset+13; /* the cmp is at offset-4, mov edx 17 after it */
+        const char *ms_env=getenv("BB_JOB_SLEEP_MS");
+        const int ms=ms_env ? atoi(ms_env) : 1;
+        int32_t wait_value=0;
+        if (wait[0]==0xba) memcpy(&wait_value,wait+1,4);
+        if (ms>0 && ms<128 && wait_value==10) { const int32_t v=ms; memcpy(wait+1,&v,4); }
+        else if (ms>0 && ms<128 && wait_value==10000) { const int32_t v=ms*1000; memcpy(wait+1,&v,4); }
+        if (wait_value==10 || wait_value==10000)
+            printf("Job workers: idle wait %d ms (the game's: 10 ms; BB_JOB_SLEEP_MS)\n",ms>0 && ms<128 ? ms : 10);
+        else
+            printf("Job workers: idle wait not found at %#" PRIx64 ", left at the game's\n",(uint64_t)(wait-image));
         return;
     }
 }
