@@ -2449,13 +2449,17 @@ void Rasterizer::MaybeSubmitEarly() {
     // work once, at its end, so the GPU began only after the whole frame was recorded, and the
     // read backs of Uncharted 2's fixes waited for all of it. Now what is recorded goes at least
     // every millisecond and 48 draws. Off on AMD, where it was slower in Bloodborne (RX 9070 XT:
-    // 106 -> 90 FPS); BB_EARLY_SUBMIT=force turns it on there too.
+    // 106 -> 90 FPS); BB_EARLY_SUBMIT=force turns it on there too, 0 off everywhere. On by
+    // default: U3 Cartagena square (RTX 5080) 94.7 -> 102.4 FPS median, slowest 5 s 59.7 -> 94.3;
+    // U2 on an RTX 4070 Laptop 56.3 -> 67.9 (mato215).
     static const bool enabled = [this] {
         const char* env = std::getenv("BB_EARLY_SUBMIT");
-        if (!env || (env[0] != '1' && std::strcmp(env, "force") != 0)) {
+        const bool force = env && std::strcmp(env, "force") == 0;
+        if (env && env[0] == '0') {
+            std::printf("Early submit: off (BB_EARLY_SUBMIT=0)\n");
             return false;
         }
-        if (instance.GetVendorID() == 0x1002 && std::strcmp(env, "force") != 0) {
+        if (instance.GetVendorID() == 0x1002 && !force) {
             std::printf("Early submit: off on AMD (slower there; BB_EARLY_SUBMIT=force turns it on)\n");
             return false;
         }
