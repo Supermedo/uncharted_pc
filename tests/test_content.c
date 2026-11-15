@@ -1,8 +1,15 @@
 #include "runtime.h"
+#ifdef NDEBUG
+#undef NDEBUG
+#endif
 #include <assert.h>
+#include <stdlib.h>
 #include <stdint.h>
 #include <string.h>
 #include <stdio.h>
+const char *runtime_file_user_dir(void) { return NULL; }
+__attribute__((noreturn)) void runtime_quit(int code) { exit(code); }
+
 typedef int32_t (ABI *Module)(uint16_t);
 typedef int32_t (ABI *Init)(const void *,void *);
 typedef int32_t (ABI *Param)(uint32_t,int32_t *);
