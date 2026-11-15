@@ -8,6 +8,8 @@ code runs directly on your PC and the graphics are translated to Vulkan. Unpack 
 
 **[Download the latest version](https://github.com/Supermedo/uncharted_pc/releases/latest)** · **[Join the Discord](https://discord.gg/s3RgH6cRfJ)**
 
+<a href="https://recomplauncher.com/game/uncharted-pc"><picture><source media="(prefers-color-scheme: dark)" srcset="https://recomplauncher.com/assets/press/launcher/badge-light.svg"><img alt="Get it on RecompLauncher" src="https://recomplauncher.com/assets/press/launcher/badge-dark.svg" height="48"></picture></a>
+
 > **No game files are included.** You need your own decrypted dump of the collection
 > (CUSA02343, CUSA02320, ...: the folder with eboot.bin, big2-ps4_Shipping.elf,
 > big3-ps4_Shipping.elf, sce_sys, u1data, u2data and u3data).
