@@ -1322,7 +1322,7 @@ static void patch_job_sleep(uint64_t image_size) {
  * (it keeps its int 0x41 first); a null pointer ends the job at the function's own exit, otherwise the
  * loads run and it jumps back. 1.02 code (US CUSA02320, EU/Russian CUSA02344, EU 1.02): the same bytes
  * in those dumps. Both sites are found by their exact bytes and patched only together, at the distance
- * the jumps were made for (1.00 is compiled differently and is left alone). BB_JOB_GUARD=0: off. */
+ * the jumps were made for (1.00 has its own sites, below). BB_JOB_GUARD=0: off. */
 static void patch_job_descriptor_guard(uint64_t image_size) {
     const char *env=getenv("BB_JOB_GUARD");
     if (env && env[0]=='0') return;
@@ -1353,6 +1353,39 @@ static void patch_job_descriptor_guard(uint64_t image_size) {
         memcpy(image+loads,builds[b].jump,sizeof(builds[b].jump));
         printf("Job descriptor guard: %s 1.02 job runner skips a job without its descriptor (%#" PRIx64 ", stub %#" PRIx64 ")\n",
                builds[b].game,(uint64_t)loads,(uint64_t)cave);
+        return;
+    }
+    /* 1.00 code (EU CUSA02343 and US CUSA02320 1.00, Mevlock 726f47db): the job function is not inlined
+     * there; the same two loads follow its descriptor copy (mov rax, [rbx+8]; mov rcx, [rax+0x20]) and
+     * jump to a stub in the dead assert path of a nearby job type check (int 0x41 kept first); a null
+     * pointer goes to the function's profiler scope pop and exit. */
+    static const struct {
+        const char *game, *loads, *cave;
+        unsigned char jump[21], stub[24];
+        int64_t distance;
+    } builds_100[]={
+        {"U1","48895348e870dcf0ff48894310488b4308488b4820","e85866e7ff4885c07427488d3dd8d03200488d35fad03200",
+         {0x48,0x89,0x53,0x48,0xe8,0x70,0xdc,0xf0,0xff,0x48,0x89,0x43,0x10,0xe9,0x8c,0x05,0x00,0x00,0x90,0x90,0x90},
+         {0xcd,0x41,0x48,0x8b,0x43,0x08,0x48,0x85,0xc0,0x0f,0x84,0xc8,0xfb,0xff,0xff,0x48,0x8b,0x48,0x20,0xe9,0x61,0xfa,0xff,0xff},0x59c},
+        {"U2","48895348e8109ef0ff48894310488b4308488b4820","e858d6e6ff4885c07427488d3df8fd5600488d351afe5600",
+         {0x48,0x89,0x53,0x48,0xe8,0x10,0x9e,0xf0,0xff,0x48,0x89,0x43,0x10,0xe9,0x9c,0x05,0x00,0x00,0x90,0x90,0x90},
+         {0xcd,0x41,0x48,0x8b,0x43,0x08,0x48,0x85,0xc0,0x0f,0x84,0xb8,0xfb,0xff,0xff,0x48,0x8b,0x48,0x20,0xe9,0x51,0xfa,0xff,0xff},0x5ac},
+        {"U3","48895348e8306cf0ff48894310488b4308488b4820","e8c824e7ff4885c07427488d3dd8df9c00488d35fadf9c00",
+         {0x48,0x89,0x53,0x48,0xe8,0x30,0x6c,0xf0,0xff,0x48,0x89,0x43,0x10,0xe9,0x8c,0x05,0x00,0x00,0x90,0x90,0x90},
+         {0xcd,0x41,0x48,0x8b,0x43,0x08,0x48,0x85,0xc0,0x0f,0x84,0xc8,0xfb,0xff,0xff,0x48,0x8b,0x48,0x20,0xe9,0x61,0xfa,0xff,0xff},0x59c},
+    };
+    for (size_t b=0;b<sizeof(builds_100)/sizeof(*builds_100);++b) {
+        const int64_t loads=find_unique_pattern(image_size,builds_100[b].loads);
+        if (loads<0) continue;
+        const int64_t cave=find_unique_pattern(image_size,builds_100[b].cave);
+        if (cave-loads!=builds_100[b].distance) {
+            printf("Job descriptor guard: %s 1.00 loads found, its stub site not where expected; not patched\n",builds_100[b].game);
+            return;
+        }
+        memcpy(image+cave,builds_100[b].stub,sizeof(builds_100[b].stub));
+        memcpy(image+loads,builds_100[b].jump,sizeof(builds_100[b].jump));
+        printf("Job descriptor guard: %s 1.00 job runner skips a job without its descriptor (%#" PRIx64 ", stub %#" PRIx64 ")\n",
+               builds_100[b].game,(uint64_t)loads,(uint64_t)cave);
         return;
     }
 }
