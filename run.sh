@@ -12,10 +12,13 @@ case "$EXE_NAME" in
     *)  EXE="$EXE_NAME" ;;
 esac
 
-USER_DIR="${BB_USER_DIR:-$PORT/user}"
-OUT_ROOT="$PORT/out"
+# Pacote (AppImage): PORT é somente leitura; arquivos gerados e saves vão para BB_DATA_DIR.
+DATA="${BB_DATA_DIR:-$PORT}"
+USER_DIR="${BB_USER_DIR:-$DATA/user}"
+OUT_ROOT="$DATA/out"
 OUT="$OUT_ROOT/${EXE%.*}"
-PROBE="$PORT/out/bb-probe"
+# Pacote: bin/bb-probe (packaging/default.nix); árvore de build: out/bb-probe.
+if [ -x "$PORT/bin/bb-probe" ]; then PROBE="$PORT/bin/bb-probe"; else PROBE="$PORT/out/bb-probe"; fi
 
 if [ ! -f "$GAME/eboot.bin" ]; then
     echo "ERRO: não achei eboot.bin em $GAME" >&2
@@ -30,13 +33,15 @@ mkdir -p "$OUT" "$USER_DIR"
 
 export PYTHONUTF8=1
 export PYTHONIOENCODING=utf-8
-export BB_CONFIG="${BB_CONFIG:-$PORT/bbport.ini}"
-export BB_INPUT_CONFIG="${BB_INPUT_CONFIG:-$PORT/input.ini}"
+export BB_CONFIG="${BB_CONFIG:-$DATA/bbport.ini}"
+export BB_INPUT_CONFIG="${BB_INPUT_CONFIG:-$DATA/input.ini}"
 export BB_GPU_USER_DIR="$USER_DIR"
 export BB_VBLANK_HZ="${BB_VBLANK_HZ:-60}"
 export BB_VELOCITY_PS="${BB_VELOCITY_PS:-f4b18264}"
 export BB_UPSCALE_BEFORE_CS="${BB_UPSCALE_BEFORE_CS:-aec539f0}"
 export BB_HUDLESS_PS="${BB_HUDLESS_PS:-484cdbf5}"
+# Como run.py: a passagem de sombra do sol recebe o jitter do upscaler.
+export BB_JITTER_PS="${BB_JITTER_PS:-f614041e}"
 export BB_LOADEXEC_FILE="$OUT_ROOT/loadexec.txt"
 
 prepare_all() {

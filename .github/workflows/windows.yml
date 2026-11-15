@@ -1,0 +1,72 @@
+# Windows package (uncharted-windows.zip: Uncharted.exe, Play Uncharted.exe, bb-probe.exe and DLLs),
+# built the way packaging/windows/README.md describes: MSYS2 CLANG64 for the game, a python.org
+# Python for the PyInstaller launcher. DLSS needs MSVC and NVIDIA's SDK, so CI packages ship without
+# it (package.sh already treats it as optional). Tags (v*) attach the zip to their GitHub release.
+name: Windows build
+
+on:
+  push:
+    branches: [main, steam-deck]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: actions/setup-python@v5
+        id: python
+        with:
+          python-version: '3.12'
+      - uses: msys2/setup-msys2@v2
+        id: msys2
+        with:
+          msystem: CLANG64
+          update: true
+          install: >-
+            git patch
+            mingw-w64-clang-x86_64-toolchain mingw-w64-clang-x86_64-cmake mingw-w64-clang-x86_64-ninja
+            mingw-w64-clang-x86_64-pkgconf mingw-w64-clang-x86_64-python
+            mingw-w64-clang-x86_64-vulkan-headers mingw-w64-clang-x86_64-vulkan-loader
+            mingw-w64-clang-x86_64-vulkan-memory-allocator mingw-w64-clang-x86_64-glslang
+            mingw-w64-clang-x86_64-sdl3 mingw-w64-clang-x86_64-fmt mingw-w64-clang-x86_64-boost
+            mingw-w64-clang-x86_64-robin-map mingw-w64-clang-x86_64-xxhash mingw-w64-clang-x86_64-ffmpeg
+            mingw-w64-clang-x86_64-zydis mingw-w64-clang-x86_64-spirv-tools mingw-w64-clang-x86_64-spirv-headers
+            mingw-w64-clang-x86_64-spirv-cross mingw-w64-clang-x86_64-protobuf mingw-w64-clang-x86_64-openssl
+            mingw-w64-clang-x86_64-zlib mingw-w64-clang-x86_64-miniupnpc mingw-w64-clang-x86_64-nlohmann-json
+      # The runner image has its own MSYS2 in C:\msys64, which msys2-env.sh would put first on PATH:
+      # point it at the one set up above, where the packages are.
+      - name: Use this MSYS2 in msys2-env.sh
+        run: echo "MSYS2_ROOT=$(cygpath -u '${{ steps.msys2.outputs.msys2-location }}')" >> "$GITHUB_ENV"
+      - name: Build bb-probe.exe
+        run: bash build.sh
+      - name: Optional assets (FSR 4 model, Intel XeSS)
+        continue-on-error: true
+        run: |
+          bash tools/fetch_fsr4_assets.sh
+          bash packaging/windows/fetch_xess.sh
+      - name: Launcher icon (launcher/uncharted.png is generated, *.png is git-ignored)
+        run: |
+          python=$(cygpath -u '${{ steps.python.outputs.python-path }}')
+          "$python" -m pip install -q --disable-pip-version-check pillow
+          "$python" packaging/windows/make_uncharted_icon.py out/uncharted-ci.ico launcher/uncharted.png
+      - name: Package
+        run: WINPYTHON="$(cygpath -u '${{ steps.python.outputs.python-path }}')" bash packaging/windows/package.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: uncharted-windows
+          path: dist/uncharted-windows.zip
+      - if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/uncharted-windows.zip

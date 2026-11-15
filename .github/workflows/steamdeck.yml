@@ -1,0 +1,47 @@
+# Steam Deck version: the native Linux build packaged as an AppImage that starts the game directly
+# (BB_APPIMAGE_GAME=1, packaging/default.nix), with its whole Nix closure so it runs on SteamOS
+# without extra packages. docs/STEAM_DECK.md shows how to add it to Steam.
+# Tags (v*) attach it to their GitHub release.
+name: Steam Deck AppImage
+
+on:
+  push:
+    branches: [main, steam-deck]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  appimage:
+    runs-on: ubuntu-latest
+    env:
+      NIX_PATH: nixpkgs=channel:nixos-unstable
+      BB_PGO: 'off'
+      BB_APPIMAGE_GAME: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+      - name: Build (Nix shell)
+        run: nix-shell shell.nix --run "BB_IN_NIX_SHELL=1 bash build.sh"
+      - name: FSR 4 model assets (1080p tier)
+        run: BB_FSR4_TIERS=1080 bash tools/fetch_fsr4_assets.sh
+      - name: AppImage
+        run: |
+          nix-shell shell.nix --run "bash packaging/appimage.sh"
+          mv dist/Bloodborne-bbport-x86_64.AppImage dist/Uncharted-SteamDeck-x86_64.AppImage
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Uncharted-SteamDeck-AppImage
+          path: dist/Uncharted-SteamDeck-x86_64.AppImage
+      - if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/Uncharted-SteamDeck-x86_64.AppImage

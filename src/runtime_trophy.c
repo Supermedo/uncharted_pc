@@ -257,7 +257,7 @@ static ABI int32_t trophy_game_info(int32_t ctx,int32_t handle,void *details,voi
         v[0]=(uint32_t)set.groups; v[1]=all; v[2]=total[0]; v[3]=total[1]; v[4]=total[2]; v[5]=total[3];
         char *text=(char *)details+32;
         memset(text,0,128+1024);
-        snprintf(text,128,"%s",set.title); snprintf(text+128,1024,"%s",set.detail);
+        snprintf(text,128,"%.127s",set.title); snprintf(text+128,1024,"%s",set.detail);
     }
     if (data) {
         uint64_t size; memcpy(&size,data,8);
