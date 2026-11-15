@@ -69,7 +69,7 @@ code runs directly on your PC and the graphics are translated to Vulkan. Unpack 
 ## Building
 
 MSYS2 CLANG64 on Windows: `bash build.sh` builds `out\bb-probe.exe`, and
-`bash packaging/windows/package.sh` makes `dist\uncharted-windows` and the zip.
+`bash packaging/windows/package.sh` makes `dist\uncharted-windows` and a versioned ZIP. See the [GitHub build guide](docs/MANUAL_BUILDS.md) for manual test artifacts and tag-triggered draft releases, including the Linux AppImage.
 
 ## Credits
 

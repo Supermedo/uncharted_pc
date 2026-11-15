@@ -10,7 +10,8 @@ sdk=${DLSS_SDK_ROOT:?Set DLSS_SDK_ROOT to a checkout of github.com/NVIDIA/DLSS}
 cmake=${CMAKE_EXE:-cmake}
 # Only the Vulkan headers: MSYS2's C headers must not reach MSVC.
 rm -rf out/vkinclude && mkdir -p out/vkinclude
-cp -r /c/msys64/clang64/include/vulkan /c/msys64/clang64/include/vk_video out/vkinclude/
+clang_include=$(dirname "$(command -v clang)")/../include
+cp -r "$clang_include/vulkan" "$clang_include/vk_video" out/vkinclude/
 "$cmake" -S gpu/dlss_bridge -B out/dlss-bridge -G "Visual Studio 17 2022" -A x64 \
     -DDLSS_SDK_ROOT="$(cygpath -m "$sdk")" -DVULKAN_INCLUDE="$(cygpath -m "$PWD/out/vkinclude")"
 "$cmake" --build out/dlss-bridge --config Release

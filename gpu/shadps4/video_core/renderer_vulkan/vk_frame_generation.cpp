@@ -97,7 +97,7 @@ FrameGenerator::FrameGenerator(const Instance& instance_, Scheduler& scheduler_)
     if (settings.frame_gen == BbSettings::FrameGenDlss && dlss_max < 1) {
         const Dlss* dlss = Dlss::Get();
         std::printf("Frame generation: DLSS Frame Generation unavailable (%s); using FSR 3.1\n",
-                    !dlss ? "bbport_dlss.dll and nvngx_dlss.dll are not installed"
+                    !dlss ? Dlss::MissingFilesText()
                     : !dlss->Available() ? "DLSS is unavailable on this system"
                                          : "GeForce RTX 40 or newer, nvngx_dlssg.dll and a "
                                            "current driver are needed");

@@ -1,0 +1,20 @@
+#!/bin/sh
+# AppImage entry point: the launcher, with its writable data outside the read-only image.
+here=$(dirname "$(readlink -f "$0")")
+
+# The package is built on Debian 13 and needs glibc 2.38 or newer (Ubuntu 24.04, Linux Mint 22,
+# Debian 13, Fedora 39 and later). On an older system say so instead of a loader error.
+glibc=$(getconf GNU_LIBC_VERSION 2>/dev/null | awk '{print $2}')
+if [ -n "$glibc" ] && [ "$(printf '%s\n2.38\n' "$glibc" | sort -V | head -1)" != 2.38 ]; then
+    message="Uncharted needs a newer Linux system (glibc 2.38 or later; this one has $glibc).
+Ubuntu 24.04, Linux Mint 22, Debian 13, Fedora 39 and newer releases work."
+    echo "$message" >&2
+    if command -v zenity >/dev/null 2>&1; then zenity --error --title=Uncharted --text="$message" 2>/dev/null
+    elif command -v kdialog >/dev/null 2>&1; then kdialog --title Uncharted --error "$message" 2>/dev/null
+    fi
+    exit 1
+fi
+
+export BB_DATA_DIR="${BB_DATA_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/uncharted}"
+mkdir -p "$BB_DATA_DIR"
+exec "$here/Uncharted" "$@"

@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Name=Uncharted
+Comment=Uncharted: The Nathan Drake Collection for Linux
+Exec=AppRun
+Icon=uncharted-linux
+Terminal=false
+Categories=Game;
+Actions=report;
+
+[Desktop Action report]
+Name=Create bug report
+Exec=AppRun --report

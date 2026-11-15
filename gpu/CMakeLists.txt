@@ -121,7 +121,8 @@ add_subdirectory(third_party/sirit EXCLUDE_FROM_ALL)
 # bbport: FSR 3.1 temporal upscaling / frame generation, native Vulkan (MIT, FireBurn/FSR-Vulkan).
 set(FFX_VK_PORTABLE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(FFX_VK_PORTABLE_BUILD_PROBE OFF CACHE BOOL "" FORCE)
-add_subdirectory(third_party/fsr-vulkan EXCLUDE_FROM_ALL)
+set(BB_FSR_VULKAN_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/third_party/fsr-vulkan" CACHE PATH "FSR-Vulkan source directory")
+add_subdirectory("${BB_FSR_VULKAN_SOURCE}" "${CMAKE_CURRENT_BINARY_DIR}/fsr-vulkan" EXCLUDE_FROM_ALL)
 
 # Host shaders -> headers (same scheme as shadPS4's host_shaders/CMakeLists.txt).
 set(SHADER_SRC ${CMAKE_CURRENT_SOURCE_DIR}/shadps4/video_core/host_shaders)
@@ -227,13 +228,19 @@ if (WIN32)
     target_sources(bbnet PRIVATE third_party/wepoll/wepoll.c)
     target_include_directories(bbnet PRIVATE third_party/wepoll)
 endif()
-    find_path(MINIUPNPC_INCLUDE miniupnpc.h PATH_SUFFIXES miniupnpc REQUIRED)
+find_path(MINIUPNPC_INCLUDE miniupnpc.h PATH_SUFFIXES miniupnpc REQUIRED)
+# The Linux shared bbgpu library must not pull in a non-PIC static miniupnpc archive.
+# Windows packages the static library to avoid another runtime DLL.
+if (WIN32)
     find_library(MINIUPNPC_LIBRARY NAMES libminiupnpc.a miniupnpc REQUIRED)
-    target_include_directories(bbnet PRIVATE "${MINIUPNPC_INCLUDE}")
+else()
+    find_library(MINIUPNPC_LIBRARY NAMES miniupnpc REQUIRED)
+endif()
+target_include_directories(bbnet PRIVATE "${MINIUPNPC_INCLUDE}")
 if (WIN32)
     target_compile_definitions(bbnet PRIVATE MINIUPNP_STATICLIB)
 endif()
-    target_link_libraries(bbnet PRIVATE "${MINIUPNPC_LIBRARY}")
+target_link_libraries(bbnet PRIVATE "${MINIUPNPC_LIBRARY}")
 target_compile_definitions(bbnet PRIVATE BOOST_ASIO_STANDALONE NDEBUG)
 target_compile_options(bbnet PRIVATE -Wno-deprecated-declarations -Wno-missing-field-initializers)
 target_link_libraries(bbnet PUBLIC Vulkan::Headers fmt::fmt Boost::headers magic_enum::magic_enum
