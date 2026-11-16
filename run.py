@@ -32,12 +32,26 @@ def fail(message):
 
 
 def wait_for(pid):
-    kernel32 = ctypes.windll.kernel32
-    SYNCHRONIZE = 0x00100000
-    handle = kernel32.OpenProcess(SYNCHRONIZE, False, pid)
-    if handle:
-        kernel32.WaitForSingleObject(handle, 30000)
-        kernel32.CloseHandle(handle)
+    import _winapi
+
+    if not 0 < pid <= 0xffffffff:
+        fail(f'Invalid previous game process ID: {pid}.')
+    try:
+        handle = _winapi.OpenProcess(_winapi.SYNCHRONIZE, False, pid)
+    except OSError as error:
+        if error.winerror == 87:  # ERROR_INVALID_PARAMETER: the PID no longer exists.
+            return
+        fail(f'Cannot open previous game process {pid}: {error}')
+    try:
+        result = _winapi.WaitForSingleObject(handle, 30000)
+    except OSError as error:
+        fail(f'Cannot wait for previous game process {pid}: {error}')
+    finally:
+        _winapi.CloseHandle(handle)
+    if result == _winapi.WAIT_TIMEOUT:
+        fail(f'Previous game process {pid} did not exit within 30 seconds.')
+    if result != _winapi.WAIT_OBJECT_0:
+        fail(f'Unexpected wait status {result} for previous game process {pid}.')
 
 
 def no_console():
@@ -155,8 +169,12 @@ def game_res(env):
 
 def main():
     args = sys.argv[1:]
-    if len(args) >= 2 and args[0] == '--after':
-        wait_for(int(args[1]))
+    if args[:1] == ['--after']:
+        try:
+            pid = int(args[1])
+        except (IndexError, ValueError):
+            fail('--after requires a Windows process ID.')
+        wait_for(pid)
         args = args[2:]
     os.chdir(PORT)
     # Paths and titles can hold characters the console code page (GBK, ...) lacks: never fail on a print.
