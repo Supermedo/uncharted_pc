@@ -6,8 +6,10 @@
   whole scene, banner_scene blurs it into a wide header. If a file is missing, card_scene falls
   back to a simpler painted scene;
 - cover(): the collection's box art from the player's own game folder (sce_sys/icon0.png);
-- steam_artwork(): Steam library pictures for the non-Steam shortcut, made from the same files of
-  the player's game folder (cover, wide header, hero banner).
+- steam_game_art(): one game's Steam library pictures (cover, header, hero, logo, icon): the
+  player's own art/<u1|u2|u3>_<kind> files (e.g. the box art as art/u2_cover.jpg), otherwise made
+  from the game's poster and its title;
+- steam_artwork(): the collection's Steam pictures from the box art of the player's game folder.
 """
 import math
 import random
@@ -437,9 +439,128 @@ def _framed(art, size):
     return background
 
 
-def steam_artwork(game_dir, grid_dir, appid, custom_art='', crops=None):
-    """Steam library pictures for the shortcut with this id: cover (p), header, hero.
-    Returns the files written; nothing when the game folder has no art."""
+# Steam library pictures of one game: kind -> (grid file name with {appid}, size).
+STEAM_KINDS = {'cover': ('{}p.png', (600, 900)), 'header': ('{}.png', (920, 430)),
+               'hero': ('{}_hero.png', (1920, 620)), 'logo': ('{}_logo.png', (1280, 400)),
+               'icon': ('{}_icon.png', (256, 256))}
+STEAM_TITLES = {'u1': ('UNCHARTED', "DRAKE'S FORTUNE"), 'u2': ('UNCHARTED 2', 'AMONG THIEVES'),
+                'u3': ('UNCHARTED 3', "DRAKE'S DECEPTION")}
+GOLD, CREAM = (231, 195, 106), (246, 241, 230)
+
+
+def own_art(key, kind):
+    """The player's own picture art/<key>_<kind>.png (or .jpg, .jpeg, .webp), or None."""
+    for directory in art_directories():
+        if directory.name != 'art':
+            continue
+        for suffix in ('.png', '.jpg', '.jpeg', '.webp'):
+            try:
+                with Image.open(directory / f'{key}_{kind}{suffix}') as image:
+                    return image.convert('RGBA' if kind in ('logo', 'icon') else 'RGB')
+            except OSError:
+                continue
+    return None
+
+
+def _fit_blurred(image, size):
+    """A picture of another shape (box art is not Steam's 2:3) whole within size, on a blurred,
+    darkened copy of itself; one of nearly the same shape is only scaled."""
+    w, h = size
+    if abs(image.width / image.height - w / h) < 0.03 * w / h:
+        return image.resize(size, Image.LANCZOS)
+    background = _fill(image, size).filter(ImageFilter.GaussianBlur(max(size) / 30))
+    background = Image.blend(background, Image.new('RGB', size, (10, 8, 6)), 0.35)
+    scale = min(w / image.width, h / image.height)
+    fitted = image.resize((max(1, round(image.width * scale)), max(1, round(image.height * scale))), Image.LANCZOS)
+    background.paste(fitted, ((w - fitted.width) // 2, (h - fitted.height) // 2))
+    return background
+
+
+def _scene(key, size):
+    """The game's poster filling size, or its painted scene when the poster is missing."""
+    image = _load_scene(key)
+    if image is None:
+        image = SCENES[key](size[0], size[1])
+    return _cover(image, size)
+
+
+def title_logo(key, width, height):
+    """The game's title on transparency: UNCHARTED n in gold capitals over the subtitle, with a
+    soft shadow so it reads on any picture."""
+    try:
+        from uncharted_fonts import font_path
+        bold, regular = font_path('Cinzel-Bold.ttf'), font_path('Cinzel-Regular.ttf')
+    except OSError:
+        bold = regular = None
+    name, subtitle = STEAM_TITLES[key]
+    name_font = _fit_font(bold, name, int(width * 0.92), int(height * 0.48))
+    sub_font = _fit_font(regular or bold, subtitle, int(width * 0.8), int(height * 0.2))
+    (nw, nh), (sw, sh) = _ink(name_font, name), _ink(sub_font, subtitle)
+    gap = int(height * 0.06)
+    top = (height - nh - gap - sh) // 2
+    text = Image.new('RGBA', (width, height), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(text)
+    for text_, font, y, w, fill in ((name, name_font, top, nw, GOLD), (subtitle, sub_font, top + nh + gap, sw, CREAM)):
+        left, ink_top = font.getbbox(text_)[:2]  # place the letters themselves, not the font's box
+        draw.text(((width - w) // 2 - left, y - ink_top), text_, font=font, fill=fill + (255,), anchor='lt')
+    shadow = Image.new('RGBA', (width, height), (0, 0, 0, 0))
+    shadow.putalpha(text.getchannel('A').filter(ImageFilter.GaussianBlur(max(3, height // 40))))
+    shadow = Image.merge('RGBA', (*Image.new('RGB', (width, height), (0, 0, 0)).split(),
+                                  shadow.getchannel('A').point(lambda a: min(255, a * 2))))
+    shadow.alpha_composite(text)
+    return shadow
+
+
+def _titled(key, size, title_height):
+    """The game's scene darkened towards the bottom, with its title across the bottom."""
+    w, h = size
+    image = _scene(key, size).convert('RGBA')
+    shade = Image.linear_gradient('L').resize((w, h)).point(lambda v: 0 if v < 110 else int((v - 110) * 1.4))
+    image.alpha_composite(Image.merge('RGBA', (*Image.new('RGB', size, (8, 6, 4)).split(), shade)))
+    logo = title_logo(key, int(w * 0.94), title_height)
+    image.alpha_composite(logo, ((w - logo.width) // 2, h - title_height - h // 24))
+    return image.convert('RGB')
+
+
+def generated_steam_art(key, kind):
+    """A Steam picture of one game made from its poster (or painted scene) and its title."""
+    size = STEAM_KINDS[kind][1]
+    if kind == 'cover':
+        return _titled(key, size, size[1] // 4)
+    if kind == 'header':
+        return _titled(key, size, int(size[1] * 0.42))
+    if kind == 'hero':
+        return hero_backdrop(key, *size)
+    if kind == 'logo':
+        return title_logo(key, *size)
+    return _scene(key, size)  # icon
+
+
+def steam_game_art(grid_dir, appid, key):
+    """The five Steam pictures of one game (cover, header, hero, logo, icon) in grid_dir: the
+    player's own art/<key>_<kind> files where present, made from the game's poster otherwise.
+    Returns {kind: path}."""
+    grid_dir = Path(grid_dir)
+    grid_dir.mkdir(parents=True, exist_ok=True)
+    written = {}
+    for kind, (name, size) in STEAM_KINDS.items():
+        picture = own_art(key, kind)
+        if picture is None:
+            picture = generated_steam_art(key, kind)
+        elif kind == 'icon':
+            picture = picture.resize(size, Image.LANCZOS)
+        elif kind != 'logo':
+            picture = _fit_blurred(picture, size)
+        path = grid_dir / name.format(appid)
+        picture.save(path)
+        written[kind] = path
+    return written
+
+
+def steam_artwork(game_dir, grid_dir, appid, key=None, custom_art='', crops=None):
+    """Steam library pictures for the shortcut with this id: cover (p), header, hero. With a
+    game key the cover is that game's poster (load_art: the player's art folder first, then the
+    port's covers); a custom image replaces both. Returns the files written; nothing when the game folder has no art."""
     art = None
     if custom_art:
         try:
@@ -451,6 +572,7 @@ def steam_artwork(game_dir, grid_dir, appid, custom_art='', crops=None):
     art = art or cover(game_dir)
     if art is None:
         return []
+    poster = load_art(POSTERS[key]) if key in POSTERS else None
     grid_dir = Path(grid_dir)
     grid_dir.mkdir(parents=True, exist_ok=True)
     if custom:
@@ -459,7 +581,7 @@ def steam_artwork(game_dir, grid_dir, appid, custom_art='', crops=None):
                     f'{appid}.png': crop_image(art, (920, 430), crops.get('header')),
                     f'{appid}_hero.png': crop_image(art, (1920, 620), crops.get('hero'))}
     else:
-        pictures = {f'{appid}p.png': _framed(art, (600, 900)), f'{appid}.png': _framed(art, (920, 430))}
+        pictures = {f'{appid}p.png': _framed(poster or art, (600, 900)), f'{appid}.png': _framed(art, (920, 430))}
         try:
             with Image.open(Path(game_dir) / 'sce_sys' / 'pic1.png') as wide:
                 pictures[f'{appid}_hero.png'] = _fill(wide.convert('RGB'), (1920, 620))
