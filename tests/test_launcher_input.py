@@ -2,7 +2,9 @@
 import importlib.util
 from pathlib import Path
 import tempfile
+from types import SimpleNamespace
 import unittest
+from unittest.mock import Mock, patch
 
 from paths import ROOT
 
@@ -14,6 +16,24 @@ SPEC.loader.exec_module(LAUNCHER)
 
 
 class InputConfigTests(unittest.TestCase):
+    def test_capture_menu_and_brackets_in_both_binding_slots(self):
+        window = LAUNCHER.Launcher.__new__(LAUNCHER.Launcher)
+        window.root = Mock()
+        window.key_buttons = {}
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'input.ini'
+            for sym, code, binding in [('Menu', 93, 'Application'),
+                                       ('[', 219, '['), (']', 221, ']'),
+                                       ('bracketleft', 219, '['), ('bracketright', 221, ']')]:
+                for slot, expected in enumerate((binding, f'Space|{binding}')):
+                    with self.subTest(keysym=sym, slot=slot):
+                        window.app = {}
+                        window.capturing = ('cross', slot)
+                        window.captured_key(SimpleNamespace(keysym=sym, keycode=code))
+                        with patch.object(LAUNCHER, 'input_ini_path', return_value=path):
+                            LAUNCHER.write_input_ini(window.app)
+                        self.assertIn(f'key.cross={expected}', path.read_text().splitlines())
+
     def test_controller_vibration_defaults_on_and_can_be_disabled(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / 'input.ini'
