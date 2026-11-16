@@ -861,8 +861,15 @@ std::atomic<u32> shadow_claim_reports{0};
 
 template <typename Shadow, typename Fn>
 void ForEachShadowRun(const Shadow& shadow, Fn&& fn) {
-    const auto* guest = reinterpret_cast<const u8*>(shadow.start);
     const size_t count = shadow.bytes.size();
+    // Through the backing view: callers hold shadow_mutex, and a fault on a read-protected GPU
+    // page would take it again (ShadowGpuData).
+    const auto* direct = reinterpret_cast<const u8*>(shadow.start);
+    thread_local std::vector<u8> backing;
+    backing.resize(count);
+    const u8* guest =
+        Core::Memory::Instance()->TryReadBacking(direct, backing.data(), count) ? backing.data()
+                                                                                : direct;
     size_t run_begin = 0;
     bool run_owned = false;
     u64 equal_claimed = 0;
@@ -907,8 +914,17 @@ void BufferCache::ShadowGpuData(VAddr page, u64 length) {
         }
         std::vector<ShadowRange> list;
         gpu_modified_ranges.ForEachInRange(at, TRACKER_BYTES_PER_PAGE, [&](VAddr start, VAddr end) {
-            const auto* bytes = reinterpret_cast<const u8*>(start);
-            list.push_back({start, std::vector<u8>(bytes, bytes + (end - start))});
+            // bbport: read through the backing view. A GPU page can be read-protected
+            // (precise readbacks); reading it here faulted, and the fault handler's
+            // DownloadMemory took shadow_mutex again: the GPU command thread deadlocked
+            // on itself (2026-11-15, U1).
+            std::vector<u8> bytes(end - start);
+            if (!memory->TryReadBacking(reinterpret_cast<const void*>(start), bytes.data(),
+                                        bytes.size())) {
+                const auto* guest = reinterpret_cast<const u8*>(start);
+                bytes.assign(guest, guest + (end - start));
+            }
+            list.push_back({start, std::move(bytes)});
         });
         if (!list.empty()) {
             shadows.emplace(at, std::move(list));
@@ -1030,7 +1046,13 @@ void BufferCache::DownloadMemory(const Buffer* arena, VAddr device_addr, u64 siz
                 continue;
             }
             for (const auto& shadow : it->second) {
-                const auto* guest = reinterpret_cast<const u8*>(shadow.start);
+                // Through the backing view (shadow_mutex is held: see ShadowGpuData).
+                std::vector<u8> current(shadow.bytes.size());
+                const auto* guest =
+                    memory->TryReadBacking(reinterpret_cast<const void*>(shadow.start),
+                                           current.data(), current.size())
+                        ? current.data()
+                        : reinterpret_cast<const u8*>(shadow.start);
                 ForEachShadowRun(shadow, [&](size_t begin, size_t end, bool guest_owned) {
                     if (guest_owned) {
                         guest_bytes.emplace_back(shadow.start + begin,
