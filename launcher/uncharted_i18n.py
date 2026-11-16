@@ -27,6 +27,7 @@ def language_code(value=''):
 
 TRANSLATIONS = {
     'es': {
+        'Could not save settings: {}': 'No se pudo guardar la configuración: {}',
         'Automatic (Windows)': 'Automático (Windows)', 'Play': 'Jugar', 'Stop': 'Detener',
         'Game': 'Juego', 'Display': 'Pantalla', 'Controls': 'Controles', 'Advanced': 'Avanzado',
         'Log': 'Registro', 'Library': 'Biblioteca', 'Double-click a cover to launch':
@@ -142,6 +143,7 @@ TRANSLATIONS = {
         'by {}': 'por {}', 'see the Log page': 'consulta la página Registro',
     },
     'pt': {
+        'Could not save settings: {}': 'Não foi possível salvar as configurações: {}',
         'Automatic (Windows)': 'Automático (Windows)', 'Play': 'Jogar', 'Stop': 'Parar',
         'Game': 'Jogo', 'Display': 'Tela', 'Controls': 'Controles', 'Advanced': 'Avançado',
         'Log': 'Registro', 'Library': 'Biblioteca', 'Double-click a cover to launch':
@@ -256,6 +258,7 @@ TRANSLATIONS = {
         'by {}': 'por {}', 'see the Log page': 'consulte a página Registro',
     },
     'fr': {
+        'Could not save settings: {}': 'Impossible d’enregistrer les paramètres : {}',
         'Automatic (Windows)': 'Automatique (Windows)', 'Play': 'Jouer', 'Stop': 'Arrêter',
         'Game': 'Jeu', 'Display': 'Affichage', 'Controls': 'Commandes', 'Advanced': 'Avancé',
         'Log': 'Journal', 'Library': 'Bibliothèque', 'Double-click a cover to launch':
