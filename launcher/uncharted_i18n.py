@@ -375,5 +375,52 @@ for _code, _translations in EXTRA_TRANSLATIONS.items():
     TRANSLATIONS[_code] = {**shared_translations(_code), **_translations}
 
 
+_MOUSE_TEXTS = (
+    'Mouse settings apply immediately. Other controls apply when the game starts.',
+    'Mouse settings apply immediately, including while the game is running.',
+    'Could not save mouse settings: {}',
+    'Look horizontal', 'Look vertical', 'Aim horizontal', 'Aim vertical',
+)
+for _code, _values in {
+    'es': (
+        'Los ajustes del ratón se aplican al instante. Los demás controles se aplican al iniciar el juego.',
+        'Los ajustes del ratón se aplican al instante, incluso con el juego en ejecución.',
+        'No se pudieron guardar los ajustes del ratón: {}',
+        'Vista horizontal', 'Vista vertical', 'Apuntado horizontal', 'Apuntado vertical',
+    ),
+    'pt': (
+        'Os ajustes do mouse são aplicados imediatamente. Os outros controles são aplicados ao iniciar o jogo.',
+        'Os ajustes do mouse são aplicados imediatamente, inclusive durante o jogo.',
+        'Não foi possível salvar os ajustes do mouse: {}',
+        'Visão horizontal', 'Visão vertical', 'Mira horizontal', 'Mira vertical',
+    ),
+    'fr': (
+        'Les réglages de la souris prennent effet immédiatement. Les autres commandes sont appliquées au lancement du jeu.',
+        'Les réglages de la souris prennent effet immédiatement, même pendant le jeu.',
+        'Impossible d’enregistrer les réglages de la souris : {}',
+        'Vue horizontale', 'Vue verticale', 'Visée horizontale', 'Visée verticale',
+    ),
+    'de': (
+        'Mauseinstellungen gelten sofort. Andere Steuerungsänderungen gelten beim Spielstart.',
+        'Mauseinstellungen gelten sofort, auch während das Spiel läuft.',
+        'Mauseinstellungen konnten nicht gespeichert werden: {}',
+        'Blick horizontal', 'Blick vertikal', 'Zielen horizontal', 'Zielen vertikal',
+    ),
+    'it': (
+        'Le impostazioni del mouse si applicano subito. Gli altri comandi si applicano all’avvio del gioco.',
+        'Le impostazioni del mouse si applicano subito, anche durante il gioco.',
+        'Impossibile salvare le impostazioni del mouse: {}',
+        'Visuale orizzontale', 'Visuale verticale', 'Mira orizzontale', 'Mira verticale',
+    ),
+    'ja': (
+        'マウス設定はすぐに反映されます。他の操作設定はゲーム起動時に反映されます。',
+        'ゲームの実行中でも、マウス設定はすぐに反映されます。',
+        'マウス設定を保存できませんでした: {}',
+        '視点の水平感度', '視点の垂直感度', '照準の水平感度', '照準の垂直感度',
+    ),
+}.items():
+    TRANSLATIONS[_code].update(zip(_MOUSE_TEXTS, _values))
+
+
 def translate(language, text):
     return TRANSLATIONS.get(language, {}).get(text, text)
