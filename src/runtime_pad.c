@@ -71,6 +71,67 @@ static SDL_Gamepad *gamepad;
 static size_t reads;
 static uint8_t connected_count;
 
+enum ControllerProfile { PROFILE_GENERIC, PROFILE_PLAYSTATION, PROFILE_XBOX, PROFILE_NINTENDO, PROFILE_STEAM, PROFILE_GAMECUBE };
+
+static enum ControllerProfile controller_profile_for(SDL_GamepadType type,
+                                                       SDL_GamepadButtonLabel south,
+                                                       SDL_GamepadButtonLabel east) {
+    if (type==SDL_GAMEPAD_TYPE_GAMECUBE) return PROFILE_GAMECUBE;
+    if (type==SDL_GAMEPAD_TYPE_PS3 || type==SDL_GAMEPAD_TYPE_PS4 || type==SDL_GAMEPAD_TYPE_PS5 ||
+        south==SDL_GAMEPAD_BUTTON_LABEL_CROSS) return PROFILE_PLAYSTATION;
+    if (type==SDL_GAMEPAD_TYPE_XBOX360 || type==SDL_GAMEPAD_TYPE_XBOXONE) return PROFILE_XBOX;
+    if (type==SDL_GAMEPAD_TYPE_NINTENDO_SWITCH_PRO ||
+        type==SDL_GAMEPAD_TYPE_NINTENDO_SWITCH_JOYCON_LEFT ||
+        type==SDL_GAMEPAD_TYPE_NINTENDO_SWITCH_JOYCON_RIGHT ||
+        type==SDL_GAMEPAD_TYPE_NINTENDO_SWITCH_JOYCON_PAIR ||
+        (south==SDL_GAMEPAD_BUTTON_LABEL_B && east==SDL_GAMEPAD_BUTTON_LABEL_A)) return PROFILE_NINTENDO;
+    if (type==SDL_GAMEPAD_TYPE_STEAM) return PROFILE_STEAM;
+    return PROFILE_GENERIC;
+}
+
+static enum ControllerProfile controller_profile(SDL_Gamepad *pad) {
+    return controller_profile_for(SDL_GetGamepadType(pad),
+                                  SDL_GetGamepadButtonLabel(pad,SDL_GAMEPAD_BUTTON_SOUTH),
+                                  SDL_GetGamepadButtonLabel(pad,SDL_GAMEPAD_BUTTON_EAST));
+}
+
+static const char *controller_profile_name(enum ControllerProfile profile) {
+    static const char *names[]={"generic","playstation","xbox","nintendo","steam","gamecube"};
+    return names[profile];
+}
+
+static const char *button_label_name(SDL_GamepadButtonLabel label) {
+    switch (label) {
+    case SDL_GAMEPAD_BUTTON_LABEL_A: return "A";
+    case SDL_GAMEPAD_BUTTON_LABEL_B: return "B";
+    case SDL_GAMEPAD_BUTTON_LABEL_X: return "X";
+    case SDL_GAMEPAD_BUTTON_LABEL_Y: return "Y";
+    case SDL_GAMEPAD_BUTTON_LABEL_CROSS: return "Cross";
+    case SDL_GAMEPAD_BUTTON_LABEL_CIRCLE: return "Circle";
+    case SDL_GAMEPAD_BUTTON_LABEL_SQUARE: return "Square";
+    case SDL_GAMEPAD_BUTTON_LABEL_TRIANGLE: return "Triangle";
+    default: return "Unknown";
+    }
+}
+
+/* SDL instance IDs change between the probe and the game. The device path is stable for the
+ * connection, so a small hash lets the launcher select a controller without exposing that path. */
+static uint64_t controller_key(SDL_JoystickID id) {
+    const char *text=SDL_GetGamepadPathForID(id);
+    char guid[33];
+    if (!text || !*text) {
+        SDL_GUIDToString(SDL_GetGamepadGUIDForID(id),guid,sizeof(guid));
+        text=guid;
+    }
+    uint64_t hash=1469598103934665603ull;
+    for (const unsigned char *p=(const unsigned char *)text; *p; ++p) hash=(hash^*p)*1099511628211ull;
+    return hash;
+}
+
+static void controller_key_text(SDL_JoystickID id, char out[17]) {
+    snprintf(out,17,"%016llx",(unsigned long long)controller_key(id));
+}
+
 static uint64_t now_us(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC,&t); return (uint64_t)t.tv_sec*1000000u+(uint64_t)t.tv_nsec/1000u; }
 static uint8_t axis(int16_t v) { int x=(v+32768)>>8; return (uint8_t)(x<0 ? 0 : x>255 ? 255 : x); }
 static uint8_t trigger(int16_t v) { int x=v>>7; return (uint8_t)(x<0 ? 0 : x>255 ? 255 : x); }
@@ -83,7 +144,7 @@ static void touch_click(PadData *d, int right) {
     d->touches[0]=(PadTouch){.x=right ? 1440 : 480,.y=471,.id=0};
 }
 
-/* Opens the first gamepad SDL knows about; called under lock. */
+/* Opens the selected gamepad (or the first one in automatic mode); called under lock. */
 static SDL_Gamepad *current_gamepad(void) {
     if (!sdl_ready) sdl_ready = SDL_WasInit(SDL_INIT_GAMEPAD) ? 1 : SDL_InitSubSystem(SDL_INIT_GAMEPAD) ? 1 : -1;
     if (sdl_ready<0) return NULL;
@@ -92,7 +153,17 @@ static SDL_Gamepad *current_gamepad(void) {
         int count=0;
         SDL_JoystickID *ids=SDL_GetGamepads(&count);
         if (ids && count>0) {
-            gamepad=SDL_OpenGamepad(ids[0]);
+            const char *wanted=getenv("BB_PAD_DEVICE");
+            int selected=0;
+            if (wanted && *wanted && strcmp(wanted,"auto")) {
+                selected=-1;
+                for (int i=0;i<count;++i) {
+                    char key[17];
+                    controller_key_text(ids[i],key);
+                    if (!strcmp(wanted,key)) { selected=i; break; }
+                }
+            }
+            if (selected>=0) gamepad=SDL_OpenGamepad(ids[selected]);
             if (gamepad) { ++connected_count; printf("Runtime: gamepad connected: %s\n",SDL_GetGamepadName(gamepad)); }
         }
         SDL_free(ids);
@@ -126,7 +197,8 @@ static const Action actions[ACTIONS]={
 #define PAD_TRIGGER_RIGHT (-3)
 static struct {
     Bind keys[ACTIONS][2];
-    int pad[16];               /* SDL_GamepadButton, PAD_TRIGGER_*, or -1 */
+    int pad[16][2];            /* Primary and secondary SDL buttons/axes, or -1. */
+    int native_touchpad;
     int mouse_look, mouse_invert_y, pad_invert_y, pad_vibration, pad_vibration_strength;
     float mouse_sensitivity;
 } input;
@@ -171,10 +243,26 @@ static int parse_pad(const char *value) {
     const SDL_GamepadButton button=SDL_GetGamepadButtonFromString(value);
     return button==SDL_GAMEPAD_BUTTON_INVALID ? -1 : (int)button;
 }
+static void set_pad(int action, const char *value) {
+    char text[128];
+    snprintf(text,sizeof(text),"%s",value);
+    char *second=strchr(text,'|');
+    if (second) *second++=0;
+    input.pad[action][0]=parse_pad(text);
+    input.pad[action][1]=second ? parse_pad(second) : -1;
+}
+
+static void configure_native_touchpad(void) {
+    /* Keep the native click for the default Back binding, but never bypass a remap. */
+    input.native_touchpad=input.pad[11][0]==SDL_GAMEPAD_BUTTON_BACK && input.pad[11][1]==-1;
+    for (int a=0;a<16;++a)
+        for (int slot=0;slot<2;++slot)
+            if (input.pad[a][slot]==SDL_GAMEPAD_BUTTON_TOUCHPAD) input.native_touchpad=0;
+}
 static void load_input(void) {
     for (int a=0;a<ACTIONS;++a) {
         set_keys(a,actions[a].keys);
-        if (a<16) input.pad[a]=parse_pad(actions[a].pad);
+        if (a<16) set_pad(a,actions[a].pad);
     }
     input.mouse_look=1; input.mouse_sensitivity=1.0f;
     input.pad_vibration=1; input.pad_vibration_strength=100;
@@ -196,13 +284,14 @@ static void load_input(void) {
             else if (!strcmp(key,"pad_vibration_strength")) input.pad_vibration_strength=atoi(value);
             else for (int a=0;a<ACTIONS;++a) {
                 if (!strncmp(key,"key.",4) && !strcmp(key+4,actions[a].name)) set_keys(a,value);
-                else if (a<16 && !strncmp(key,"pad.",4) && !strcmp(key+4,actions[a].name)) input.pad[a]=parse_pad(value);
+                else if (a<16 && !strncmp(key,"pad.",4) && !strcmp(key+4,actions[a].name)) set_pad(a,value);
             }
         }
         fclose(f);
         printf("Runtime: controls from %s (mouse look %s, sensitivity %.2f)\n",path,
                input.mouse_look ? "on" : "off",input.mouse_sensitivity);
     }
+    configure_native_touchpad();
     if (input.mouse_sensitivity<=0.0f) input.mouse_sensitivity=1.0f;
     if (input.pad_vibration_strength<0) input.pad_vibration_strength=0;
     if (input.pad_vibration_strength>100) input.pad_vibration_strength=100;
@@ -931,13 +1020,18 @@ const RuntimeGuestCallback *runtime_guest_callbacks(size_t *count) {
     return guest_callbacks;
 }
 
-/* The button pictures for this controller: 1 PlayStation (DualShock, DualSense: the game's own),
- * 2 Xbox (everything else; the buttons are named by position, so a Switch pad is shown as the
- * Xbox layout). */
+/* Button pictures: 1 PlayStation, 2 Xbox/generic, 3 Switch, 4 GameCube. */
 static int prompts_pad_device(SDL_Gamepad *g) {
-    const SDL_GamepadType type=SDL_GetGamepadType(g);
-    if (type==SDL_GAMEPAD_TYPE_PS3 || type==SDL_GAMEPAD_TYPE_PS4 || type==SDL_GAMEPAD_TYPE_PS5) return 1;
-    return SDL_GetGamepadButtonLabel(g,SDL_GAMEPAD_BUTTON_SOUTH)==SDL_GAMEPAD_BUTTON_LABEL_CROSS ? 1 : 2;
+    const char *forced=getenv("BB_PAD_PROFILE");
+    if (forced && *forced && strcmp(forced,"auto")) {
+        if (!strcmp(forced,"playstation")) return 1;
+        if (!strcmp(forced,"nintendo")) return 3;
+        if (!strcmp(forced,"gamecube")) return 4;
+        return 2;
+    }
+    const enum ControllerProfile profile=controller_profile(g);
+    return profile==PROFILE_PLAYSTATION ? 1 : profile==PROFILE_NINTENDO ? 3 :
+           profile==PROFILE_GAMECUBE ? 4 : 2;
 }
 
 static void sample_host(PadData *d) {
@@ -968,9 +1062,13 @@ static void sample_host(PadData *d) {
     static int layout_logged;
     if (k && !layout_logged) { layout_logged=1; log_layout_keys(); }
     if (g) {
-        for (int a=0;a<16;++a) {
-            const int b=input.pad[a];
-            if (b>=0 && SDL_GetGamepadButton(g,(SDL_GamepadButton)b)) d->buttons|=actions[a].ps;
+        for (int a=0;a<16;++a) for (int slot=0;slot<2;++slot) {
+            const int b=input.pad[a][slot];
+            if (b>=0 && SDL_GetGamepadButton(g,(SDL_GamepadButton)b)) {
+                d->buttons|=actions[a].ps;
+                if (actions[a].ps==BTN_L2) d->l2=255;
+                if (actions[a].ps==BTN_R2) d->r2=255;
+            }
             else if (b==PAD_TRIGGER_LEFT || b==PAD_TRIGGER_RIGHT) {
                 const uint8_t v=trigger(SDL_GetGamepadAxis(g,b==PAD_TRIGGER_LEFT ? SDL_GAMEPAD_AXIS_LEFT_TRIGGER
                                                                               : SDL_GAMEPAD_AXIS_RIGHT_TRIGGER));
@@ -979,7 +1077,8 @@ static void sample_host(PadData *d) {
                 if (actions[a].ps==BTN_R2 && v>d->r2) d->r2=v;
             }
         }
-        if (SDL_GetGamepadButton(g,SDL_GAMEPAD_BUTTON_TOUCHPAD)) d->buttons|=BTN_TOUCHPAD; /* DualSense/DS4 click */
+        if (input.native_touchpad && SDL_GetGamepadButton(g,SDL_GAMEPAD_BUTTON_TOUCHPAD))
+            d->buttons|=BTN_TOUCHPAD;
         if ((d->buttons & BTN_L2) && !d->l2) d->l2=255;
         if ((d->buttons & BTN_R2) && !d->r2) d->r2=255;
         d->left_x=axis(SDL_GetGamepadAxis(g,SDL_GAMEPAD_AXIS_LEFTX)); d->left_y=axis(SDL_GetGamepadAxis(g,SDL_GAMEPAD_AXIS_LEFTY));
@@ -1319,8 +1418,20 @@ static const RuntimeExport exports[]={
 uintptr_t runtime_pad_resolve(const char *name) { return RUNTIME_LOOKUP(exports,name); }
 void runtime_pad_report(void) { printf("Runtime: pad reads=%zu, gamepad=%s\n",reads,gamepad ? SDL_GetGamepadName(gamepad) : "none"); }
 
+static void controller_pressed(SDL_Gamepad *pad, FILE *output) {
+    fputs("pressed=",output);
+    for (int b=0;b<SDL_GAMEPAD_BUTTON_COUNT;++b)
+        if (SDL_GetGamepadButton(pad,(SDL_GamepadButton)b))
+            fprintf(output,"%s,",SDL_GetGamepadStringForButton((SDL_GamepadButton)b));
+    if (SDL_GetGamepadAxis(pad,SDL_GAMEPAD_AXIS_LEFT_TRIGGER)>8000) fputs("lefttrigger,",output);
+    if (SDL_GetGamepadAxis(pad,SDL_GAMEPAD_AXIS_RIGHT_TRIGGER)>8000) fputs("righttrigger,",output);
+    fputs("\n",output);
+    fflush(output);
+}
+
 /* A loader command used by the launcher before the game starts: no Vulkan or guest memory. */
-int runtime_pad_tool(int test, int strength) {
+int runtime_pad_tool(int test, const char *selected, int strength) {
+    if (test==2) SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS,"1");
     const int already_ready=SDL_WasInit(SDL_INIT_GAMEPAD)!=0;
     if (!already_ready && !SDL_InitSubSystem(SDL_INIT_GAMEPAD)) {
         fprintf(stderr,"Controller detection failed: %s\n",SDL_GetError());
@@ -1328,29 +1439,80 @@ int runtime_pad_tool(int test, int strength) {
     }
     int count=0;
     SDL_JoystickID *ids=SDL_GetGamepads(&count);
-    SDL_Gamepad *pad=ids && count>0 ? SDL_OpenGamepad(ids[0]) : NULL;
-    SDL_free(ids);
-    if (!pad) {
-        puts("connected=0\nrumble=0");
+    if (!ids || count<=0) {
+        SDL_free(ids);
+        puts("connected=0\ncount=0\nrumble=0");
         if (!already_ready) SDL_QuitSubSystem(SDL_INIT_GAMEPAD);
         return 0;
     }
-    const char *name=SDL_GetGamepadName(pad);
-    const bool rumble=SDL_GetBooleanProperty(SDL_GetGamepadProperties(pad),
-                                             SDL_PROP_GAMEPAD_CAP_RUMBLE_BOOLEAN,false);
     puts("connected=1");
-    printf("name=%s\n",name ? name : "Game controller");
-    printf("rumble=%d\n",rumble ? 1 : 0);
-    if (test) {
+    printf("count=%d\n",count);
+    SDL_Gamepad *test_pad=NULL;
+    bool test_rumble=false;
+    for (int i=0;i<count;++i) {
+        SDL_Gamepad *pad=SDL_OpenGamepad(ids[i]);
+        if (!pad) continue;
+        char key[17];
+        controller_key_text(ids[i],key);
+        const char *name=SDL_GetGamepadName(pad);
+        const char *type=SDL_GetGamepadStringForType(SDL_GetGamepadType(pad));
+        const bool rumble=SDL_GetBooleanProperty(SDL_GetGamepadProperties(pad),
+                                                 SDL_PROP_GAMEPAD_CAP_RUMBLE_BOOLEAN,false);
+        if (i==0) printf("name=%s\n",name ? name : "Game controller");
+        printf("controller.%d.id=%s\n",i,key);
+        printf("controller.%d.name=%s\n",i,name ? name : "Game controller");
+        printf("controller.%d.type=%s\n",i,type ? type : "unknown");
+        printf("controller.%d.profile=%s\n",i,controller_profile_name(controller_profile(pad)));
+        printf("controller.%d.south=%s\n",i,button_label_name(SDL_GetGamepadButtonLabel(pad,SDL_GAMEPAD_BUTTON_SOUTH)));
+        printf("controller.%d.east=%s\n",i,button_label_name(SDL_GetGamepadButtonLabel(pad,SDL_GAMEPAD_BUTTON_EAST)));
+        printf("controller.%d.west=%s\n",i,button_label_name(SDL_GetGamepadButtonLabel(pad,SDL_GAMEPAD_BUTTON_WEST)));
+        printf("controller.%d.north=%s\n",i,button_label_name(SDL_GetGamepadButtonLabel(pad,SDL_GAMEPAD_BUTTON_NORTH)));
+        printf("controller.%d.rumble=%d\n",i,rumble ? 1 : 0);
+        printf("controller.%d.touchpad=%d\n",i,SDL_GetNumGamepadTouchpads(pad)>0 ? 1 : 0);
+        printf("controller.%d.touchpads=%d\n",i,SDL_GetNumGamepadTouchpads(pad));
+        printf("controller.%d.vendor=%u\ncontroller.%d.product=%u\n",i,SDL_GetGamepadVendor(pad),i,SDL_GetGamepadProduct(pad));
+        printf("controller.%d.buttons=",i);
+        for (int b=0;b<SDL_GAMEPAD_BUTTON_COUNT;++b)
+            if (SDL_GamepadHasButton(pad,(SDL_GamepadButton)b))
+                printf("%s,",SDL_GetGamepadStringForButton((SDL_GamepadButton)b));
+        puts("");
+        printf("controller.%d.axes=",i);
+        for (int a=0;a<SDL_GAMEPAD_AXIS_COUNT;++a)
+            if (SDL_GamepadHasAxis(pad,(SDL_GamepadAxis)a))
+                printf("%s,",SDL_GetGamepadStringForAxis((SDL_GamepadAxis)a));
+        puts("");
+        if (!test_pad && (!selected || !*selected || !strcmp(selected,"auto") || !strcmp(selected,key))) {
+            test_pad=pad;
+            test_rumble=rumble;
+        } else {
+            SDL_CloseGamepad(pad);
+        }
+    }
+    SDL_free(ids);
+    printf("rumble=%d\n",test_rumble ? 1 : 0);
+    if (test==2) {
+        if (!test_pad) puts("watch_error=Selected controller is not connected");
+        const Uint64 end=SDL_GetTicks()+10000;
+        while (test_pad && SDL_GetTicks()<end) {
+            SDL_PumpEvents();
+            SDL_UpdateGamepads();
+            if (!SDL_GamepadConnected(test_pad)) {
+                puts("watch_error=Controller disconnected");
+                break;
+            }
+            controller_pressed(test_pad,stdout);
+            SDL_Delay(50);
+        }
+    } else if (test==1) {
         if (strength<0) strength=0;
         if (strength>100) strength=100;
         const uint16_t amount=(uint16_t)((65535u*(unsigned)strength+50u)/100u);
-        const bool started=rumble && SDL_RumbleGamepad(pad,amount,amount,500);
+        const bool started=test_pad && test_rumble && SDL_RumbleGamepad(test_pad,amount,amount,500);
         if (started) SDL_Delay(500);
-        SDL_RumbleGamepad(pad,0,0,0);
+        if (test_pad) SDL_RumbleGamepad(test_pad,0,0,0);
         printf("tested=%d\n",started ? 1 : 0);
     }
-    SDL_CloseGamepad(pad);
+    if (test_pad) SDL_CloseGamepad(test_pad);
     if (!already_ready) SDL_QuitSubSystem(SDL_INIT_GAMEPAD);
     return 0;
 }
