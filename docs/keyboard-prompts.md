@@ -132,3 +132,71 @@ The two tools are for development and off by default.
 | `src/runtime_pad.c` | last device, layout-aware bindings |
 | `texture_cache/button_prompts_xbox.inc`, `tools/make_xbox_prompts.py` | the Xbox pictures and the script that packs them |
 | `tools/dds_view.py` | collected pictures to PNG |
+
+## Visual controller editor
+
+The Controllers page separates the physical illustration from the runtime button-prompt
+profile. Automatic illustrations distinguish SDL PS3/PS4/PS5 types, Xbox and Switch Pro.
+GameCube is detected by SDL's `gamecube` type, with its own manual profile, illustration
+and physical button labels. Its SDL face order is A/X/B/Y, distinct from
+Switch's B/A/Y/X. L/R are trigger axes, Z is the right shoulder, and Start is the menu
+button. Trigger clicks can be assigned as `misc3`/`misc4` when the adapter exposes them.
+The illustration includes a small optional L1 below L for third-party variants;
+it can only be newly assigned on a connected device that exposes `leftshoulder`.
+The original controller has no stick clicks, left shoulder or Back/touchpad button;
+use Custom bindings or the keyboard for those game actions. A visual override does
+not add missing inputs or rumble. Generic adapters may need a manual profile and
+their own SDL mapping; hardware compatibility still requires testing the adapter.
+
+Steam's SDL type alone does not identify a Deck or a particular Steam Controller: choose
+the model manually when necessary. Choosing an illustration never enables hardware inputs.
+
+The page orders its blocks as saved profiles, active device, vibration, layout/assignments,
+and in-game icons. Click a control, navigate the diagram with the arrow keys, or expand
+the grouped assignment list. Selection updates a fixed editor without opening a dialog.
+The editor stays beside the drawing, which scales with the available width. The expanded
+assignment table shows controller inputs and game actions in separate columns, with
+two groups side by side when space permits. Choose inputs and use Apply change in Custom mode.
+Changing in-game icons never changes the selected model or bindings; Automatic remains
+the default. Each action accepts a primary and a secondary source, serialized as
+`pad.cross=a|paddle2` in `input.ini`. Both sources are ORed; releasing one does not release
+the action while the other remains held. Older single-source settings still work.
+Default mode uses the defaults without overwriting the saved custom assignments
+(the persisted mode key remains `recommended` for compatibility).
+
+The probe reports SDL's exposed buttons, trigger axes and touchpad count. Unavailable
+buttons remain visible but cannot be newly assigned to a connected device. Existing
+assignments are retained when changing devices. Without a device (or with an older probe),
+capabilities are explicitly unchecked and offline editing remains available. Steam Input
+may expose only a virtual Xbox controller; selecting a Steam drawing cannot expose its
+rear buttons. Trackpad gestures and gyro remapping are outside this editor's scope.
+
+Rear-view labels retain their physical handedness: R4/R5 appear on the left when the
+controller is turned over. An explicitly remapped touchpad click no longer also emits
+the original PS4 touchpad action; the legacy passthrough remains for default bindings.
+
+Saved profiles are stored separately in `%APPDATA%/uncharted-launcher/controller_profiles.json`.
+They contain controller bindings, model/profile preferences, icon style and vibration settings.
+They do not change device selection, game folders, keyboard bindings or saves. Writes use a
+temporary file and atomic replacement; failed writes preserve the previous file. Profiles can
+be created, loaded, updated, renamed or deleted. Unapplied editor changes require an explicit
+discard before loading a profile or starting the game.
+
+Test buttons samples the selected controller for ten seconds without starting the game.
+Blue rings indicate held inputs; gold marks the control selected for editing. Controller
+detection and tests run outside Tk, with timeouts and UI results delivered through its queue.
+Changes to bindings, device selection and forced prompt style apply on the next game start.
+
+Controller IDs use a hash of SDL's device path and fall back to its GUID when no path is
+available. Reconnecting through another port or driver can change the ID. Identical devices
+without distinct paths cannot be distinguished by the GUID fallback. Steam Input and adapters
+may report a virtual device rather than the physical controller; manual artwork/profile
+choices do not bypass those drivers or expose missing controls.
+
+The controller workflow has localized labels in all launcher languages. Prompt styles describe
+the default positional layout; custom controller bindings do not redraw each prompt to its new source.
+
+Nintendo and GameCube currently use Xbox-style in-game icons. Dedicated styles are
+introduced by the complementary button-prompts PR; their physical diagrams and mappings
+are already available here. `BB_PAD_DEVICE` selects a reported connection key, and
+`BB_PAD_PROFILE` overrides the family without inventing device capabilities.
