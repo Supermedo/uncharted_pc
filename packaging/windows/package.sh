@@ -29,6 +29,13 @@ for module in argparse base64 collections hashlib json re shutil struct tempfile
               uncharted_art uncharted_fonts uncharted_i18n uncharted_widgets bbport_steam PIL.ImageTk; do
     hidden+=(--hidden-import "$module")
 done
+# launcher/covers/emblem.png (the sidebar's compass) is gitignored (*.png): draw it on a clean checkout,
+# only it (the covers stay as committed).
+if [[ ! -f launcher/covers/emblem.png ]]; then
+    (cd packaging/windows && ../../out/pyenv/Scripts/python.exe -c \
+        "import sys, make_uncharted_art as art; art.emblem(256).save(sys.argv[1])" \
+        "$(cygpath -w "$OLDPWD/launcher/covers/emblem.png")")
+fi
 out/pyenv/Scripts/python.exe -m PyInstaller --noconfirm --clean --log-level WARN --windowed \
     --name Uncharted --icon "$(cygpath -w "$PWD/launcher/uncharted.ico")" --distpath out/pyi-dist \
     --workpath out/pyi-work --specpath out/pyi-work --paths "$(cygpath -w "$PWD/scripts")" \
@@ -45,6 +52,12 @@ rm -rf -- out/stage
 mkdir -p "$dest/bin" "$dest/launcher" "$dest/scripts"
 cp -r out/pyi-dist/Uncharted/. "$dest/"
 llvm-strip -o "$dest/Play Uncharted.exe" out/bb-play.exe
+# launcher/uncharted.png is gitignored (*.png): draw it on a clean checkout. The tracked .ico stays
+# as it is; the icon script's .ico output goes to a scratch file.
+if [[ ! -f launcher/uncharted.png ]]; then
+    out/pyenv/Scripts/python.exe packaging/windows/make_uncharted_icon.py \
+        "$(cygpath -w "$PWD/out/uncharted-scratch.ico")" "$(cygpath -w "$PWD/launcher/uncharted.png")"
+fi
 cp launcher/uncharted.ico launcher/uncharted.png "$dest/launcher/"
 # The executables without debug information (out/ keeps the symbols for crash reports).
 for exe in bb-probe.exe bb-gpu-capabilities.exe; do
