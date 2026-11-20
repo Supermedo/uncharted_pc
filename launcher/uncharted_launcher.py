@@ -1465,7 +1465,7 @@ class Launcher:
                  _('How far the camera turns for a mouse movement; 1.00 is the default. Drag the slider or '
                    'type a number (0.1 to 10) for a faster turn.'))
         self.check(f, 'mouse_invert_y', _('Invert the mouse vertically'))
-        self.check(f, 'mouse_raw', _('Raw mouse aiming and cover camera (Uncharted 1 and 2)'),
+        self.check(f, 'mouse_raw', _('Raw mouse aiming and cover camera (Uncharted 1, 2 and 3)'),
                    _('Aiming, the camera in cover and fast turns follow the mouse directly, not through the right '
                      'stick and its top speed. For the US 1.02 version of the games; other versions keep the stick. '
                      'Turn it off if the camera misbehaves.'))

@@ -36,7 +36,7 @@ Starting
   C Circle, F Square, E Triangle, Q/G L1/R1, Left Shift/V L3/R3, arrows and wheel d-pad,
   Escape/Enter Options, Tab touchpad. The cursor stays in the game window; hold Left Alt to
   free it. Insert opens the in-game settings menu. Bindings are saved in input.ini.
-  Raw mouse (Uncharted 1 and 2, US 1.02): aiming, the camera in cover and fast turns follow the
+  Raw mouse (Uncharted 1, 2 and 3, US 1.02): aiming, the camera in cover and fast turns follow the
   mouse directly, not through the right stick's top speed. It has its own switch and aim
   sensitivity on the Controls page; switch it off if the camera misbehaves.
 - Trophies: the three games' trophy lists are read from sce_sys\trophy\trophy01-03.trp in the game

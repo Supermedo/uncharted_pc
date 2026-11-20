@@ -10,7 +10,7 @@
  *       lefttrigger righttrigger leftstick rightstick back start dpup dpdown dpleft dpright
  *       touchpad misc1 paddle1..paddle4) or "none", for the button actions above.
  *   mouse_look=1  mouse_sensitivity=1.0  mouse_invert_y=0  pad_invert_y=0
- *   mouse_raw=0  mouse_aim_sensitivity=1.0   (raw mouse, Uncharted 1 and 2: see "Raw mouse" below)
+ *   mouse_raw=0  mouse_aim_sensitivity=1.0   (raw mouse, Uncharted 1, 2 and 3: see "Raw mouse" below)
  *   pad_vibration=1  pad_vibration_strength=100
  *
  * Defaults (no file): WASD move, mouse look, left button R2 (fire), right button L2 (aim),
@@ -130,7 +130,7 @@ static struct {
     int pad[16];               /* SDL_GamepadButton, PAD_TRIGGER_*, or -1 */
     int mouse_look, mouse_invert_y, pad_invert_y, pad_vibration, pad_vibration_strength;
     float mouse_sensitivity;
-    int mouse_raw;               /* raw mouse (Uncharted 1 and 2): aiming, cover and blending cameras turn 1:1 */
+    int mouse_raw;               /* raw mouse (Uncharted 1, 2 and 3): aiming, cover and blending cameras turn 1:1 */
     float mouse_aim_sensitivity; /* raw aiming: times mouse_sensitivity */
 } input;
 
@@ -270,7 +270,7 @@ static pthread_mutex_t camera_lock=PTHREAD_MUTEX_INITIALIZER;
  * gets all of it (the follow camera does not read the joypad's right stick values, the other
  * cameras do not use the follow camera's direction). */
 static float camera_dx[2], camera_dy[2];
-/* Raw mouse (input.ini mouse_raw=1, Uncharted 1 and 2 US 1.02; from Umar-Qayyum-dev's pull request
+/* Raw mouse (input.ini mouse_raw=1, Uncharted 1, 2 and 3 US 1.02; from Umar-Qayyum-dev's pull request
  * #561). Without it the mouse reaches the aiming camera and the cover camera only as a right stick
  * value, held to the stick's top speed (about 46 degrees/s while aiming). With it:
  * - aiming: the mouse turns the aiming camera's remembered aim direction itself (raw_aim);
@@ -505,7 +505,7 @@ static void follow_camera(uint64_t camera, uint32_t dir_offset, uint32_t arc_off
         float *arc=(float *)(uintptr_t)(camera+arc_offset);
         const float pitch=arc_to_pitch(arc_table,*arc)-(input.mouse_invert_y ? -dy : dy)*MOUSE_DEGREES_PER_PIXEL*input.mouse_sensitivity;
         const float v=pitch_to_arc(arc_table,pitch);
-        /* Raw mouse stops below the top of the arc (U2: 0.75): at the top the camera looks straight
+        /* Raw mouse stops below the top of the arc (U2 and U3: 0.75): at the top the camera looks straight
          * down and a small sideways move spins the whole view around Drake. Where the game itself
          * has the camera higher, the mouse only lowers it. */
         const float top=!raw ? 1.0f : *arc>raw_arc_max ? *arc : raw_arc_max;
@@ -562,6 +562,14 @@ static void __attribute__((ms_abi)) u2_cover_camera(uint64_t output, uint64_t ca
     (void)output; (void)image; (void)r14; (void)regs;
     cover_camera_settings(camera,0x1c0,0x1b0,0x1290);
 }
+/* U3: rdi = the camera, which holds its own limits (+0x218 up, +0x21c down). */
+static void __attribute__((ms_abi)) u3_cover_camera(uint64_t camera, uint64_t unused, uint64_t image, uint64_t r14,
+                                                    const RuntimeGuestRegs *regs) {
+    (void)unused; (void)image; (void)r14; (void)regs;
+    if (!input.mouse_raw) return;
+    cover_camera(camera,(float *)(uintptr_t)(camera+0x2f0),(float *)(uintptr_t)(camera+0x2e0),
+                 (const float *)(uintptr_t)(camera+0x218));
+}
 /* Turns an aim direction (x, y, z) by yaw and pitch (degrees), keeping its length; pitch stays
  * within +-70 degrees. Same yaw sense as the follow camera: a positive yaw is a turn right. */
 static void aim_turn(float *v, float yaw, float pitch) {
@@ -575,13 +583,13 @@ static void aim_turn(float *v, float yaw, float pitch) {
     if (p<-1.2217f) p=-1.2217f;
     v[0]=hx*SDL_cosf(p)*len; v[1]=SDL_sinf(p)*len; v[2]=hz*SDL_cosf(p)*len;
 }
-/* Raw mouse, aiming (U1 and U2, US 1.02). The aim controller (U1 0x276a10, U2 0x71a1b0; rsi = the
+/* Raw mouse, aiming (US 1.02). The aim controller (U1 0x276a10, U2 0x71a1b0, U3 0x9285c0; rsi = the
  * controller) gets the aiming camera's remembered aim direction as its 4th argument (rcx): it turns
  * it by the stick, the camera saves it back, and the shown direction adds aim assist and recoil on
- * top. Called from the aiming camera's own call site (return address main_return, the only direct
- * call in these builds), the mouse turns that direction itself: 0.15 degrees per pixel times the
- * sensitivities, at any frame rate. Another caller (another build) is left alone and aiming stays
- * with the stick, as without raw mouse. The hook sits at the function's first instruction, so the
+ * top. Called from the aiming camera's own call site (return address main_return), the mouse turns
+ * that direction itself: 0.15 degrees per pixel times the sensitivities, at any frame rate. Other
+ * callers are left alone and take no mouse motion (U3 also calls it at 0x4d09ce for a temporary
+ * direction; in another build the return address differs and aiming stays with the stick). The hook sits at the function's first instruction, so the
  * return address lies right above the saved registers. */
 static void raw_aim(const char *game, uint64_t controller, const RuntimeGuestRegs *regs, uint64_t image,
                     uint64_t main_return) {
@@ -667,6 +675,12 @@ static void __attribute__((ms_abi)) u2_aim_controller(uint64_t output, uint64_t 
     (void)output; (void)r14;
     raw_aim("U2",controller,regs,image,0x451250); /* the aiming camera calls it at 0x45124b */
 }
+static void __attribute__((ms_abi)) u3_aim_controller(uint64_t output, uint64_t controller, uint64_t image, uint64_t r14,
+                                                      const RuntimeGuestRegs *regs) {
+    (void)output; (void)r14;
+    /* the aiming camera calls it at 0x51188f (controller camera+0x1b0, direction +0x11e0) */
+    raw_aim("U3",controller,regs,image,0x511894);
+}
 static void __attribute__((ms_abi)) u1_follow_camera(uint64_t camera, uint64_t unused, uint64_t image, uint64_t r14, const RuntimeGuestRegs *regs) {
     (void)regs;
     (void)unused; (void)image; (void)r14;
@@ -680,7 +694,7 @@ static void __attribute__((ms_abi)) u2_follow_camera(uint64_t camera, uint64_t u
 static void __attribute__((ms_abi)) u3_follow_camera(uint64_t camera, uint64_t unused, uint64_t image, uint64_t r14, const RuntimeGuestRegs *regs) {
     (void)regs;
     (void)unused; (void)image; (void)r14;
-    follow_camera(camera,0x78c0,0x7874,&u3_arc,0,1.0f);
+    follow_camera(camera,0x78c0,0x7874,&u3_arc,input.mouse_raw,0.75f);
 }
 /* U1: the game's pad update (image+0x117200) fills the caller's joypad state (its first argument):
  * the sticks as floats lx ly rx ry at +0 and again at +0x10, converted from the pad's bytes. Cameras
@@ -1046,6 +1060,17 @@ static const RuntimeGuestCallback guest_callbacks[]={
       "49 89 d7 48 89 f3 49 89 fe 4c 8b 2d ?? ?? ?? ?? 49 8b 45 00 "
       "48 89 45 d0 8a 8b 74 01 00 00",
       0x0, 6, u2_cover_camera, NULL},
+    /* Raw mouse (mouse_raw=1), build 102: U3 aim controller and cover camera update */
+    {"U3 aim controller (raw mouse)",
+      "55 48 89 e5 41 57 41 56 41 55 41 54 53 48 81 ec d8 00 00 00 "
+      "c5 fa 11 85 40 ff ff ff 4c 89 4d a0 45 89 c4 49 89 ce 48 89 "
+      "95 60 ff ff ff 49 89 f7 49 89 fd 41 8b 47 30",
+      0x0, 6, u3_aim_controller, NULL},
+    {"U3 cover camera (raw mouse)",
+      "55 48 89 e5 41 57 41 56 41 55 41 54 53 48 81 ec f8 00 00 00 "
+      "49 89 f6 49 89 ff 4c 8d 25 ?? ?? ?? ?? 49 8b 04 24 48 89 45 d0 "
+      "49 63 8f e4 00 00 00",
+      0x0, 6, u3_cover_camera, NULL},
     /* U2 follow camera, build 100 */
     {"U2 follow camera (mouse)",
       "55 48 89 e5 41 57 41 56 41 55 41 54 53 48 81 ec 48 01 00 00 "
