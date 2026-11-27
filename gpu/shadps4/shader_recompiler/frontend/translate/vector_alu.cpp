@@ -1,6 +1,9 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <cstdlib>
+#include <vector>
+
 #include "shader_recompiler/frontend/opcodes.h"
 #include "shader_recompiler/frontend/translate/translate.h"
 #include "shader_recompiler/ir/attribute.h"
@@ -2025,10 +2028,69 @@ void Translator::SetCarryOut(const GcnInst& inst, const IR::U1& carry) {
 // TODO: add range analysis pass to hopefully put an upper bound on m0, and only select one of
 // [src_vgprno, src_vgprno + max_m0]. Same for dst regs we may write back to
 
+namespace {
+// bbport: until that range analysis exists, the bound of m0 for shaders whose index was read off
+// their code. The translation selects among (and for V_MOVRELD rewrites) every allocated VGPR
+// from the base up; inside a loop that is paid on every iteration.
+//
+// U2's tiled deferred lighting (cs 43b8ee5e, one full-screen dispatch per frame) walks each
+// pixel's lights through a 128-bit mask that DS_READ2_B64 loads into v3..v6. The dword is picked
+// by m0 = a scalar counter that starts at 3 and counts down to 0 (s_mov s6, 3 ... s_add s6, -1),
+// so the V_MOVRELS/V_MOVRELD on v3 reach v3..v6 only. With ~30 registers selected per access the
+// light loop cost 8.0 ms per frame in a dense U2 scene (RTX 4060 Laptop), 47 FPS; bounded to 4,
+// 4.1 ms and 55 FPS.
+//
+// BB_MOVREL_WINDOW=<hash>:<count>,... adds or overrides entries (a wrong count reads or writes
+// the wrong register: diagnosis only); BB_MOVREL_WINDOW=0 turns the list off. Translated shaders
+// are cached: changes here need ShaderBinaryVersion bumped (vk_pipeline_serialization.cpp).
+constexpr std::pair<u32, u32> DefaultMovRelWindows[] = {
+    {0x43b8ee5eu, 4u}, // U2 tiled lighting: 4-dword light mask
+};
+
+u32 MovRelWindow(u64 hash) {
+    static const std::vector<std::pair<u32, u32>> windows = [] {
+        std::vector<std::pair<u32, u32>> list;
+        const char* env = std::getenv("BB_MOVREL_WINDOW");
+        if (env && env[0] == '0' && env[1] == '\0') {
+            return list;
+        }
+        if (env) {
+            for (const char* p = env; *p;) {
+                char* end;
+                const u32 h = static_cast<u32>(std::strtoull(p, &end, 16));
+                if (end == p || *end != ':') {
+                    break;
+                }
+                const u32 count = static_cast<u32>(std::strtoul(end + 1, &end, 10));
+                list.emplace_back(h, count);
+                p = *end == ',' ? end + 1 : end;
+            }
+        }
+        // The environment's entries come first: they override the defaults.
+        list.insert(list.end(), std::begin(DefaultMovRelWindows), std::end(DefaultMovRelWindows));
+        return list;
+    }();
+    for (const auto& [h, count] : windows) {
+        if (h == u32(hash)) {
+            return count;
+        }
+    }
+    return 0;
+}
+} // namespace
+
+u32 Translator::MovRelEnd(u32 base_vgprno) const {
+    const u32 end = runtime_info.props.num_allocated_vgprs;
+    if (const u32 window = MovRelWindow(info.pgm_hash)) {
+        return std::min(end, base_vgprno + window);
+    }
+    return end;
+}
+
 IR::U32 Translator::VMovRelSHelper(u32 src_vgprno, const IR::U32 m0) {
     // Read from VGPR0 by default when src_vgprno + m0 > num_allocated_vgprs
     IR::U32 src_val = ir.GetVectorReg<IR::U32>(IR::VectorReg::V0);
-    for (u32 i = src_vgprno; i < runtime_info.props.num_allocated_vgprs; i++) {
+    for (u32 i = src_vgprno; i < MovRelEnd(src_vgprno); i++) {
         const IR::U1 cond = ir.IEqual(m0, ir.Imm32(i - src_vgprno));
         src_val =
             IR::U32{ir.Select(cond, ir.GetVectorReg<IR::U32>(IR::VectorReg::V0 + i), src_val)};
@@ -2037,7 +2099,7 @@ IR::U32 Translator::VMovRelSHelper(u32 src_vgprno, const IR::U32 m0) {
 }
 
 void Translator::VMovRelDHelper(u32 dst_vgprno, const IR::U32 src_val, const IR::U32 m0) {
-    for (u32 i = dst_vgprno; i < runtime_info.props.num_allocated_vgprs; i++) {
+    for (u32 i = dst_vgprno; i < MovRelEnd(dst_vgprno); i++) {
         const IR::U1 cond = ir.IEqual(m0, ir.Imm32(i - dst_vgprno));
         const IR::U32 dst_val =
             IR::U32{ir.Select(cond, src_val, ir.GetVectorReg<IR::U32>(IR::VectorReg::V0 + i))};
