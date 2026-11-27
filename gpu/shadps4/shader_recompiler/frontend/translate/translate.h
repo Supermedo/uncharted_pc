@@ -381,6 +381,8 @@ private:
     void SetCarryOut(const GcnInst& inst, const IR::U1& carry);
     IR::U32 VMovRelSHelper(u32 src_vgprno, const IR::U32 m0);
     void VMovRelDHelper(u32 dst_vgprno, const IR::U32 src_val, const IR::U32 m0);
+    /// One past the last VGPR a V_MOVREL* from `base_vgprno` may reach (BB_MOVREL_WINDOW).
+    [[nodiscard]] u32 MovRelEnd(u32 base_vgprno) const;
 
     IR::F32 SelectCubeResult(const IR::F32& x, const IR::F32& y, const IR::F32& z,
                              const IR::F32& x_res, const IR::F32& y_res, const IR::F32& z_res);
